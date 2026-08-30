@@ -27,7 +27,7 @@ someone's phone drawing differently.
 |---|---|---|
 | language | ES5 JavaScript | Kotlin |
 | renderer | Three.js r128 (WebGL) | OpenGL ES 3.0, direct |
-| tests | 584 in-browser checks | 20 JVM unit tests |
+| tests | 584 in-browser checks | 19 JVM unit tests |
 | ships as | a URL | an APK |
 
 ## Modules
@@ -69,7 +69,7 @@ echo "sdk.dir=/path/to/Android/sdk" > local.properties
 
 ## What actually works
 
-Verified by `./gradlew :core:test` — 20 tests, all passing:
+Verified by `./gradlew :core:test` — 19 tests, all passing:
 
 - **Rotation-minimising frames** by double reflection (Wang et al. 2008), the
   same algorithm as the web build. Orthonormal along a helix to 1e-9, finite and
