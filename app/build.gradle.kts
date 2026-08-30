@@ -11,6 +11,10 @@ android {
     compileSdk = 34
 
     defaultConfig {
+        /* PERMANENT once published: on the Play Store an applicationId can
+           never be changed — a new one is a new listing, with no upgrade path
+           for anyone who installed the old one. Worth being sure of before the
+           first release. */
         applicationId = "art.plume.anvil"
         minSdk = 26            // GL ES 3.1 is universal from here, and 26 is >99% of devices
         targetSdk = 34

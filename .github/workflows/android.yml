@@ -1,0 +1,43 @@
+name: Build
+
+# Every push builds two things: the core's tests, which need only a JDK, and a
+# debug APK you can install on a phone. The APK is attached to the run as an
+# artifact, so there is nothing to build locally just to try the app — the same
+# reason the web build deploys itself to Pages on every push.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  core:
+    name: Core tests (no Android SDK)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+      # proves the split holds: core must build and test with no SDK anywhere
+      - run: ./gradlew :core:test --no-daemon
+
+  apk:
+    name: Debug APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+      - run: ./gradlew :app:assembleDebug --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: anvil-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
