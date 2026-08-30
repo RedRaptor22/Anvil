@@ -2,8 +2,11 @@ package art.plume.anvil
 
 import android.opengl.GLES30
 import android.opengl.GLSurfaceView
-import android.opengl.Matrix
+import art.plume.core.Camera
+import art.plume.core.Grid
+import art.plume.core.LiveStroke
 import art.plume.core.MeshData
+import art.plume.core.Rgba
 import art.plume.core.Stroke
 import art.plume.core.StrokeGeometry
 import java.nio.ByteBuffer
@@ -12,57 +15,86 @@ import java.nio.FloatBuffer
 import java.nio.IntBuffer
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
-import kotlin.math.cos
-import kotlin.math.sin
 
 /**
  * The GL ES 3.0 renderer.
  *
  * This is the half that could not be shared with the web build: everything
- * above it — the frames, the geometry, the snap query — lives in `:core` and is
- * the same code the JVM tests exercise. What is here is buffer management and
- * one shader pair, ported from `js/strokes.js`'s VERT/FRAG.
+ * above it — the frames, the geometry, the camera, the snap query — lives in
+ * `:core` and is the same code the JVM tests exercise. What is here is buffer
+ * management and two shader pairs.
  *
- * One VBO per stroke, uploaded once on commit and never touched again. The web
- * build learned this the hard way: rebuilding a material per frame cost a full
- * shader link per pointermove, which a desktop driver hides and a phone GPU
- * turns into a multi-second stall. Here the program is compiled once, in
- * [onSurfaceCreated], and the only per-frame work is uniforms and draw calls.
+ * Two rules hold this together, and both were learned the hard way in the web
+ * build:
+ *
+ *  - **The program is compiled once.** Rebuilding a material per frame cost a
+ *    full shader link per pointermove there, which a desktop driver hides and a
+ *    phone GPU turns into a multi-second stall.
+ *  - **A committed stroke is uploaded once and never touched again.** The
+ *    stroke being drawn goes into a separate DYNAMIC buffer that is re-uploaded
+ *    only over the range [LiveStroke] says has changed — a couple of rings,
+ *    not the whole tube. Without that, drawing is quadratic in stroke length.
+ *
+ * Threading: the camera and the live buffer are written on the UI thread and
+ * read here on the GL thread, so both cross a lock. The committed stroke list
+ * has always done so.
  */
 class SketchRenderer : GLSurfaceView.Renderer {
 
     private val strokes = ArrayList<Stroke>()
     private val uploaded = HashMap<Stroke, Buffers>()
-    private var live: Stroke? = null
 
-    /** Camera, in the same terms as the web build's `P.VIEW`. */
-    var theta = 0.6f
-    var phi = 1.1f
-    var radius = 4.0f
-    var roll = 0.0f
-    val pivot = floatArrayOf(0f, 0f, 0f)
+    private var live: LiveStroke? = null
+    private var liveBuffers: LiveBuffers? = null
+
+    /** Environment, in the same terms as the web build's `P.ENV`. */
+    var background = Rgba(0.925, 0.918, 0.953)      // the web build's --bg
+    var showGrid = true
+    /** FACT: the Global Axis is off by default. */
+    var showAxis = false
+
+    private val matrixLock = Any()
+    private val mvp = FloatArray(16)
 
     private var program = 0
     private var aPos = 0; private var aNor = 0; private var aCol = 0
-    private var uMvp = 0; private var uModel = 0
+    private var uMvp = 0
     private var uLightDir = 0; private var uLightCol = 0
     private var uAmbient = 0; private var uIntensity = 0
 
-    private val model = FloatArray(16)
-    private val view = FloatArray(16)
-    private val proj = FloatArray(16)
-    private val mvp = FloatArray(16)
-    private val tmp = FloatArray(16)
+    private var lineProgram = 0
+    private var lPos = 0; private var lCol = 0; private var lMvp = 0
 
-    private var width = 1
-    private var height = 1
+    private var gridBuffers: LineBuffers? = null
+    private var axisBuffers: LineBuffers? = null
+    private var gridSignature = ""
+
+    /**
+     * Buffer names whose stroke has gone, waiting for a GL thread to delete
+     * them. `glDeleteBuffers` is only legal with a current context, and every
+     * caller that drops a stroke — undo, redo, clear — is the UI thread. Doing
+     * it there deletes nothing and leaks the buffer on a good driver, and takes
+     * out whatever else owns that name on a bad one.
+     */
+    private val pendingDelete = ArrayList<Int>()
 
     private class Buffers(val vbo: Int, val nbo: Int, val cbo: Int, val ibo: Int, val count: Int)
+    private class LineBuffers(val vbo: Int, val cbo: Int, val count: Int)
+
+    /** The dynamic buffers behind the stroke currently being drawn. */
+    private class LiveBuffers(
+        val vbo: Int, val nbo: Int, val cbo: Int, val ibo: Int,
+    ) {
+        var vertexCapacity = 0
+        var indexCapacity = 0
+    }
 
     // ---- lifecycle ------------------------------------------------------
 
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
-        GLES30.glClearColor(0.925f, 0.918f, 0.953f, 1f)   // the web build's --bg
+        GLES30.glClearColor(
+            background.r.toFloat(), background.g.toFloat(), background.b.toFloat(), 1f,
+        )
         GLES30.glEnable(GLES30.GL_DEPTH_TEST)
         GLES30.glEnable(GLES30.GL_CULL_FACE)
         GLES30.glCullFace(GLES30.GL_BACK)
@@ -72,29 +104,53 @@ class SketchRenderer : GLSurfaceView.Renderer {
         aNor = GLES30.glGetAttribLocation(program, "aNor")
         aCol = GLES30.glGetAttribLocation(program, "aCol")
         uMvp = GLES30.glGetUniformLocation(program, "uMvp")
-        uModel = GLES30.glGetUniformLocation(program, "uModel")
         uLightDir = GLES30.glGetUniformLocation(program, "uLightDir")
         uLightCol = GLES30.glGetUniformLocation(program, "uLightCol")
         uAmbient = GLES30.glGetUniformLocation(program, "uAmbient")
         uIntensity = GLES30.glGetUniformLocation(program, "uIntensity")
 
-        // anything already drawn has to be re-uploaded onto the new context
+        lineProgram = link(LINE_VERT, LINE_FRAG)
+        lPos = GLES30.glGetAttribLocation(lineProgram, "aPos")
+        lCol = GLES30.glGetAttribLocation(lineProgram, "aCol")
+        lMvp = GLES30.glGetUniformLocation(lineProgram, "uMvp")
+
+        /*
+         * Every buffer name belonged to the context that just went away. Drop
+         * the bookkeeping rather than deleting: the names are already invalid,
+         * and glDeleteBuffers on a fresh context would be deleting whatever now
+         * holds those numbers.
+         */
         uploaded.clear()
+        liveBuffers = null
+        gridBuffers = null; axisBuffers = null; gridSignature = ""
     }
 
     override fun onSurfaceChanged(gl: GL10?, w: Int, h: Int) {
-        width = w; height = h
         GLES30.glViewport(0, 0, w, h)
     }
 
+    /** Copy the camera's matrix across the thread boundary. */
+    fun setCamera(camera: Camera) {
+        synchronized(matrixLock) {
+            camera.viewProjection.into(mvp)
+        }
+    }
+
     override fun onDrawFrame(gl: GL10?) {
+        GLES30.glClearColor(
+            background.r.toFloat(), background.g.toFloat(), background.b.toFloat(), 1f,
+        )
         GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT or GLES30.GL_DEPTH_BUFFER_BIT)
-        buildCamera()
+
+        drainDeletions()
+
+        val m = FloatArray(16)
+        synchronized(matrixLock) { mvp.copyInto(m) }
+
+        drawEnvironment(m)
 
         GLES30.glUseProgram(program)
-        Matrix.setIdentityM(model, 0)
-        GLES30.glUniformMatrix4fv(uModel, 1, false, model, 0)
-        GLES30.glUniformMatrix4fv(uMvp, 1, false, mvp, 0)
+        GLES30.glUniformMatrix4fv(uMvp, 1, false, m, 0)
         // one key light plus soft ambient, the same model as the web build
         GLES30.glUniform3f(uLightDir, 0.40f, 0.62f, 0.68f)
         GLES30.glUniform3f(uLightCol, 1f, 1f, 1f)
@@ -103,107 +159,233 @@ class SketchRenderer : GLSurfaceView.Renderer {
 
         synchronized(strokes) {
             for (s in strokes) draw(s)
-            live?.let { draw(it) }
         }
+        drawLive()
+    }
+
+    // ---- environment ----------------------------------------------------
+
+    private fun drawEnvironment(m: FloatArray) {
+        if (!showGrid && !showAxis) return
+        val signature = "${background.r},${background.g},${background.b}"
+        if (gridBuffers == null || signature != gridSignature) {
+            gridBuffers?.let { GLES30.glDeleteBuffers(2, intArrayOf(it.vbo, it.cbo), 0) }
+            gridBuffers = uploadLines(Grid.build(background))
+            gridSignature = signature
+        }
+        if (axisBuffers == null) axisBuffers = uploadLines(Grid.axis())
+
+        GLES30.glUseProgram(lineProgram)
+        GLES30.glUniformMatrix4fv(lMvp, 1, false, m, 0)
+        /*
+         * The grid is scaffolding, not ink: it blends and does NOT write depth,
+         * so a stroke lying on the ground plane is never z-fought into stripes
+         * by the line it is resting on.
+         */
+        GLES30.glEnable(GLES30.GL_BLEND)
+        GLES30.glBlendFunc(GLES30.GL_SRC_ALPHA, GLES30.GL_ONE_MINUS_SRC_ALPHA)
+        GLES30.glDepthMask(false)
+        if (showGrid) gridBuffers?.let { drawLines(it) }
+        if (showAxis) axisBuffers?.let { drawLines(it) }
+        GLES30.glDepthMask(true)
+        GLES30.glDisable(GLES30.GL_BLEND)
+    }
+
+    private fun uploadLines(lines: Grid.Lines): LineBuffers {
+        val ids = IntArray(2)
+        GLES30.glGenBuffers(2, ids, 0)
+        arrayBuffer(ids[0], lines.positions, GLES30.GL_STATIC_DRAW)
+        arrayBuffer(ids[1], lines.colors, GLES30.GL_STATIC_DRAW)
+        return LineBuffers(ids[0], ids[1], lines.vertexCount)
+    }
+
+    private fun drawLines(b: LineBuffers) {
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, b.vbo)
+        GLES30.glEnableVertexAttribArray(lPos)
+        GLES30.glVertexAttribPointer(lPos, 3, GLES30.GL_FLOAT, false, 0, 0)
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, b.cbo)
+        GLES30.glEnableVertexAttribArray(lCol)
+        GLES30.glVertexAttribPointer(lCol, 4, GLES30.GL_FLOAT, false, 0, 0)
+        GLES30.glDrawArrays(GLES30.GL_LINES, 0, b.count)
+        /*
+         * Leave the attribute arrays as we found them. An enabled array the
+         * next program does not declare is harmless by the spec, but the two
+         * programs here get their locations assigned by the driver and nothing
+         * says they agree — turning them off is one call and removes a class of
+         * bug that would only ever appear on someone else's phone.
+         */
+        GLES30.glDisableVertexAttribArray(lPos)
+        GLES30.glDisableVertexAttribArray(lCol)
+    }
+
+    // ---- committed strokes ----------------------------------------------
+
+    fun addStroke(s: Stroke): Unit = synchronized(strokes) { strokes.add(s); release(s) }
+
+    fun removeStroke(s: Stroke): Unit = synchronized(strokes) { strokes.remove(s); release(s) }
+
+    fun setStrokes(list: List<Stroke>): Unit = synchronized(strokes) {
+        for (s in strokes) release(s)
+        strokes.clear()
+        strokes.addAll(list)
+    }
+
+    fun clear(): Unit = synchronized(strokes) {
+        for (s in strokes) release(s)
+        strokes.clear()
+    }
+
+    /** Drop the cached buffers so the next frame re-uploads. */
+    fun invalidate(s: Stroke): Unit = synchronized(strokes) { release(s) }
+
+    private fun release(s: Stroke) {
+        uploaded.remove(s)?.let {
+            pendingDelete.add(it.vbo); pendingDelete.add(it.nbo)
+            pendingDelete.add(it.cbo); pendingDelete.add(it.ibo)
+        }
+    }
+
+    /** Called on the GL thread, where deleting a buffer is actually legal. */
+    private fun drainDeletions() {
+        val ids = synchronized(strokes) {
+            if (pendingDelete.isEmpty()) return
+            pendingDelete.toIntArray().also { pendingDelete.clear() }
+        }
+        GLES30.glDeleteBuffers(ids.size, ids, 0)
     }
 
     private fun draw(s: Stroke) {
         val b = uploaded[s] ?: upload(s) ?: return
-        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, b.vbo)
+        bindAndDraw(b.vbo, b.nbo, b.cbo, b.ibo, b.count)
+    }
+
+    private fun bindAndDraw(vbo: Int, nbo: Int, cbo: Int, ibo: Int, count: Int) {
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, vbo)
         GLES30.glEnableVertexAttribArray(aPos)
         GLES30.glVertexAttribPointer(aPos, 3, GLES30.GL_FLOAT, false, 0, 0)
-        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, b.nbo)
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, nbo)
         GLES30.glEnableVertexAttribArray(aNor)
         GLES30.glVertexAttribPointer(aNor, 3, GLES30.GL_FLOAT, false, 0, 0)
-        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, b.cbo)
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, cbo)
         GLES30.glEnableVertexAttribArray(aCol)
         GLES30.glVertexAttribPointer(aCol, 4, GLES30.GL_FLOAT, false, 0, 0)
-        GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, b.ibo)
-        GLES30.glDrawElements(GLES30.GL_TRIANGLES, b.count, GLES30.GL_UNSIGNED_INT, 0)
-    }
-
-    // ---- geometry in and out -------------------------------------------
-
-    fun addStroke(s: Stroke) = synchronized(strokes) { strokes.add(s); invalidate(s) }
-    fun setLive(s: Stroke?) = synchronized(strokes) { live?.let { release(it) }; live = s }
-    fun clear() = synchronized(strokes) {
-        for (s in strokes) release(s)
-        strokes.clear(); live?.let { release(it) }; live = null
-    }
-
-    /** Drop the cached buffers so the next frame re-uploads. */
-    fun invalidate(s: Stroke) { release(s) }
-
-    private fun release(s: Stroke) {
-        uploaded.remove(s)?.let {
-            GLES30.glDeleteBuffers(4, intArrayOf(it.vbo, it.nbo, it.cbo, it.ibo), 0)
-        }
+        GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, ibo)
+        GLES30.glDrawElements(GLES30.GL_TRIANGLES, count, GLES30.GL_UNSIGNED_INT, 0)
     }
 
     private fun upload(s: Stroke): Buffers? {
         val m: MeshData = StrokeGeometry.build(s) ?: return null
         val ids = IntArray(4)
         GLES30.glGenBuffers(4, ids, 0)
-        arrayBuffer(ids[0], m.positions)
-        arrayBuffer(ids[1], m.normals)
-        arrayBuffer(ids[2], m.colors)
+        arrayBuffer(ids[0], m.positions, GLES30.GL_STATIC_DRAW)
+        arrayBuffer(ids[1], m.normals, GLES30.GL_STATIC_DRAW)
+        arrayBuffer(ids[2], m.colors, GLES30.GL_STATIC_DRAW)
         GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, ids[3])
-        val ib: IntBuffer = ByteBuffer.allocateDirect(m.indices.size * 4)
-            .order(ByteOrder.nativeOrder()).asIntBuffer().put(m.indices).also { it.position(0) }
         GLES30.glBufferData(
-            GLES30.GL_ELEMENT_ARRAY_BUFFER, m.indices.size * 4, ib, GLES30.GL_STATIC_DRAW
+            GLES30.GL_ELEMENT_ARRAY_BUFFER, m.indices.size * 4,
+            intBuffer(m.indices, m.indices.size), GLES30.GL_STATIC_DRAW,
         )
         val b = Buffers(ids[0], ids[1], ids[2], ids[3], m.indices.size)
         uploaded[s] = b
         return b
     }
 
-    private fun arrayBuffer(id: Int, data: FloatArray) {
-        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, id)
-        val fb: FloatBuffer = ByteBuffer.allocateDirect(data.size * 4)
-            .order(ByteOrder.nativeOrder()).asFloatBuffer().put(data).also { it.position(0) }
-        GLES30.glBufferData(GLES30.GL_ARRAY_BUFFER, data.size * 4, fb, GLES30.GL_STATIC_DRAW)
+    // ---- the stroke being drawn -----------------------------------------
+
+    /** Hand over the live buffer; null ends the preview. */
+    fun setLive(buffer: LiveStroke?) {
+        synchronized(strokes) { live = buffer }
     }
 
-    // ---- camera ---------------------------------------------------------
-
-    private fun buildCamera() {
-        val ex = pivot[0] + radius * sin(phi) * sin(theta)
-        val ey = pivot[1] + radius * cos(phi)
-        val ez = pivot[2] + radius * sin(phi) * cos(theta)
-        Matrix.setLookAtM(
-            view, 0, ex, ey, ez, pivot[0], pivot[1], pivot[2],
-            0f, 1f, 0f
-        )
-        if (roll != 0f) {
-            Matrix.setRotateM(tmp, 0, Math.toDegrees(roll.toDouble()).toFloat(), 0f, 0f, 1f)
-            Matrix.multiplyMM(view, 0, tmp.copyOf(), 0, view.copyOf(), 0)
+    private fun drawLive() {
+        val buffer = synchronized(strokes) { live } ?: return
+        // the UI thread appends to this while we read it
+        synchronized(buffer) {
+            if (buffer.pointCount < 2 || buffer.indexCount == 0) return
+            val b = liveBuffers ?: newLiveBuffers().also { liveBuffers = it }
+            syncLive(b, buffer)
+            buffer.clearDirty()
+            bindAndDraw(b.vbo, b.nbo, b.cbo, b.ibo, buffer.indexCount)
         }
-        val aspect = width.toFloat() / height.toFloat().coerceAtLeast(1f)
-        // near/far chosen for a sketch measured in metres; the web build runs
-        // 0.02 to 8000 and never needed more depth precision than that
-        Matrix.perspectiveM(proj, 0, 50f, aspect, 0.02f, 8000f)
-        Matrix.multiplyMM(mvp, 0, proj, 0, view, 0)
     }
 
-    /** Screen pixels to a world ray, for projecting a stroke onto a guide. */
-    fun screenToRay(x: Float, y: Float, origin: FloatArray, dir: FloatArray) {
-        val nx = 2f * x / width - 1f
-        val ny = 1f - 2f * y / height
-        val inv = FloatArray(16)
-        Matrix.invertM(inv, 0, mvp, 0)
-        val near = floatArrayOf(nx, ny, -1f, 1f)
-        val far = floatArrayOf(nx, ny, 1f, 1f)
-        val a = FloatArray(4); val b = FloatArray(4)
-        Matrix.multiplyMV(a, 0, inv, 0, near, 0)
-        Matrix.multiplyMV(b, 0, inv, 0, far, 0)
-        for (i in 0..2) { a[i] /= a[3]; b[i] /= b[3] }
-        origin[0] = a[0]; origin[1] = a[1]; origin[2] = a[2]
-        var lx = b[0] - a[0]; var ly = b[1] - a[1]; var lz = b[2] - a[2]
-        val len = kotlin.math.sqrt(lx * lx + ly * ly + lz * lz)
-        if (len > 0) { lx /= len; ly /= len; lz /= len }
-        dir[0] = lx; dir[1] = ly; dir[2] = lz
+    private fun newLiveBuffers(): LiveBuffers {
+        val ids = IntArray(4)
+        GLES30.glGenBuffers(4, ids, 0)
+        return LiveBuffers(ids[0], ids[1], ids[2], ids[3])
     }
+
+    /**
+     * Push only what changed.
+     *
+     * When the core arrays have grown, the whole thing is re-uploaded because
+     * the GL buffer is the wrong size — that happens O(log n) times over a
+     * stroke. Otherwise this is two ring's worth of vertices, two cap centres
+     * and a band of indices, whatever the length of the stroke.
+     */
+    private fun syncLive(b: LiveBuffers, s: LiveStroke) {
+        val verts = s.vertexCount
+        if (verts > b.vertexCapacity) {
+            arrayBuffer(b.vbo, s.positions, GLES30.GL_DYNAMIC_DRAW)
+            arrayBuffer(b.nbo, s.normals, GLES30.GL_DYNAMIC_DRAW)
+            arrayBuffer(b.cbo, s.colors, GLES30.GL_DYNAMIC_DRAW)
+            b.vertexCapacity = s.positions.size / 3
+        } else {
+            if (s.capsDirty) {
+                subVertices(b.vbo, s.positions, 0, 2, 3)
+                subVertices(b.nbo, s.normals, 0, 2, 3)
+                subVertices(b.cbo, s.colors, 0, 2, 4)
+            }
+            if (s.dirtyTo > s.dirtyFrom) {
+                subVertices(b.vbo, s.positions, s.dirtyFrom, s.dirtyTo, 3)
+                subVertices(b.nbo, s.normals, s.dirtyFrom, s.dirtyTo, 3)
+                subVertices(b.cbo, s.colors, s.dirtyFrom, s.dirtyTo, 4)
+            }
+        }
+
+        GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, b.ibo)
+        if (s.indices.size > b.indexCapacity) {
+            GLES30.glBufferData(
+                GLES30.GL_ELEMENT_ARRAY_BUFFER, s.indices.size * 4,
+                intBuffer(s.indices, s.indices.size), GLES30.GL_DYNAMIC_DRAW,
+            )
+            b.indexCapacity = s.indices.size
+        } else if (s.indexDirtyTo > s.indexDirtyFrom) {
+            val from = s.indexDirtyFrom
+            val count = s.indexDirtyTo - from
+            GLES30.glBufferSubData(
+                GLES30.GL_ELEMENT_ARRAY_BUFFER, from * 4, count * 4,
+                intBuffer(s.indices, count, from),
+            )
+        }
+    }
+
+    private fun subVertices(id: Int, data: FloatArray, from: Int, to: Int, stride: Int) {
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, id)
+        val offset = from * stride
+        val count = (to - from) * stride
+        if (count <= 0 || offset + count > data.size) return
+        GLES30.glBufferSubData(
+            GLES30.GL_ARRAY_BUFFER, offset * 4, count * 4, floatBuffer(data, count, offset),
+        )
+    }
+
+    // ---- buffer plumbing ------------------------------------------------
+
+    private fun arrayBuffer(id: Int, data: FloatArray, usage: Int) {
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, id)
+        GLES30.glBufferData(
+            GLES30.GL_ARRAY_BUFFER, data.size * 4, floatBuffer(data, data.size), usage,
+        )
+    }
+
+    private fun floatBuffer(data: FloatArray, count: Int, offset: Int = 0): FloatBuffer =
+        ByteBuffer.allocateDirect(count * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
+            .put(data, offset, count).also { it.position(0) }
+
+    private fun intBuffer(data: IntArray, count: Int, offset: Int = 0): IntBuffer =
+        ByteBuffer.allocateDirect(count * 4).order(ByteOrder.nativeOrder()).asIntBuffer()
+            .put(data, offset, count).also { it.position(0) }
 
     // ---- shaders --------------------------------------------------------
 
@@ -236,11 +418,10 @@ class SketchRenderer : GLSurfaceView.Renderer {
             in vec3 aNor;
             in vec4 aCol;
             uniform mat4 uMvp;
-            uniform mat4 uModel;
             out vec3 vNor;
             out vec4 vCol;
             void main(){
-              vNor = mat3(uModel) * aNor;
+              vNor = aNor;
               vCol = aCol;
               gl_Position = uMvp * vec4(aPos, 1.0);
             }"""
@@ -263,5 +444,22 @@ class SketchRenderer : GLSurfaceView.Renderer {
               float lit = uAmbient + (1.0 - uAmbient) * d * uIntensity;
               fragColor = vec4(vCol.rgb * uLightCol * lit, vCol.a);
             }"""
+
+        const val LINE_VERT = """#version 300 es
+            precision highp float;
+            in vec3 aPos;
+            in vec4 aCol;
+            uniform mat4 uMvp;
+            out vec4 vCol;
+            void main(){
+              vCol = aCol;
+              gl_Position = uMvp * vec4(aPos, 1.0);
+            }"""
+
+        const val LINE_FRAG = """#version 300 es
+            precision highp float;
+            in vec4 vCol;
+            out vec4 fragColor;
+            void main(){ fragColor = vCol; }"""
     }
 }

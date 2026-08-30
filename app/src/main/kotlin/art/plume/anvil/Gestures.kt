@@ -27,8 +27,18 @@ class Gestures(private val listener: Listener) {
         fun onDrawMove(x: Float, y: Float, pressure: Float, tiltAz: Float, tiltAlt: Float)
         fun onDrawEnd()
         fun onDrawCancel()
-        /** dx/dy in pixels, dScale as a multiplier, dRotate in radians */
-        fun onCamera(dx: Float, dy: Float, dScale: Float, dRotate: Float)
+        /**
+         * dx/dy in pixels, dScale as a multiplier, dRotate in radians.
+         *
+         * [fingers] is how many are on the glass, because the number of fingers
+         * IS the mode here: two orbit, three pan. There are no modifier keys to
+         * hang that off, and putting pan on the same gesture as orbit would mean
+         * guessing which one was meant.
+         */
+        fun onCamera(dx: Float, dy: Float, dScale: Float, dRotate: Float, fingers: Int)
+
+        /** The fingers left the glass; [dx]/[dy] were the last per-move deltas. */
+        fun onCameraEnd(dx: Float, dy: Float)
         fun onHover(x: Float, y: Float, pressure: Float)
         fun onHoverExit()
     }
@@ -43,6 +53,10 @@ class Gestures(private val listener: Listener) {
     private var lastCy = 0f
     private var lastSpan = 0f
     private var lastAngle = 0f
+
+    /** The last per-move deltas, so a flick can hand on its momentum. */
+    private var lastDx = 0f
+    private var lastDy = 0f
 
     private fun isStylus(ev: MotionEvent, index: Int): Boolean =
         ev.getToolType(index) == MotionEvent.TOOL_TYPE_STYLUS ||
@@ -162,11 +176,16 @@ class Gestures(private val listener: Listener) {
 
     private fun beginGesture(ev: MotionEvent) {
         gesturing = true
+        lastDx = 0f; lastDy = 0f
         val (cx, cy, span, angle) = measure(ev)
         lastCx = cx; lastCy = cy; lastSpan = span; lastAngle = angle
     }
 
-    private fun endGesture() { gesturing = false }
+    private fun endGesture() {
+        if (gesturing) listener.onCameraEnd(lastDx, lastDy)
+        gesturing = false
+        lastDx = 0f; lastDy = 0f
+    }
 
     private fun stepGesture(ev: MotionEvent) {
         val (cx, cy, span, angle) = measure(ev)
@@ -177,8 +196,16 @@ class Gestures(private val listener: Listener) {
         while (dAngle > Math.PI) dAngle -= (2 * Math.PI).toFloat()
         while (dAngle < -Math.PI) dAngle += (2 * Math.PI).toFloat()
 
-        listener.onCamera(cx - lastCx, cy - lastCy, span / lastSpan, dAngle)
+        lastDx = cx - lastCx; lastDy = cy - lastCy
+        listener.onCamera(lastDx, lastDy, span / lastSpan, dAngle, fingerCount(ev))
         lastCx = cx; lastCy = cy; lastSpan = span; lastAngle = angle
+    }
+
+    /** Pointers taking part in the camera gesture — the pen is not one of them. */
+    private fun fingerCount(ev: MotionEvent): Int {
+        var n = 0
+        for (i in 0 until ev.pointerCount) if (ev.getPointerId(i) != drawingPointer) n++
+        return n
     }
 
     private data class Measure(val cx: Float, val cy: Float, val span: Float, val angle: Float)

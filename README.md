@@ -27,7 +27,7 @@ someone's phone drawing differently.
 |---|---|---|
 | language | ES5 JavaScript | Kotlin |
 | renderer | Three.js r128 (WebGL) | OpenGL ES 3.0, direct |
-| tests | 584 in-browser checks | 19 JVM unit tests |
+| tests | 584 in-browser checks | 58 JVM unit tests |
 | ships as | a URL | an APK |
 
 ## Modules
@@ -69,7 +69,7 @@ echo "sdk.dir=/path/to/Android/sdk" > local.properties
 
 ## What actually works
 
-Verified by `./gradlew :core:test` — 19 tests, all passing:
+Verified by `./gradlew :core:test` — 58 tests, all passing:
 
 - **Rotation-minimising frames** by double reflection (Wang et al. 2008), the
   same algorithm as the web build. Orthonormal along a helix to 1e-9, finite and
@@ -85,16 +85,56 @@ Verified by `./gradlew :core:test` — 19 tests, all passing:
 - **Reprojection**, which puts a stroke shoved off a surface back onto it.
 - **Spur removal**, which drops a folded sample before it can reverse a tangent,
   while keeping a deliberate sharp corner.
+- **The camera and its projection.** A lens focal length in millimetres becomes a
+  field of view the way Feather expresses it; a pixel unprojected onto the draw
+  plane projects back to the same pixel to 1e-6; a pan moves the sketch by
+  exactly the pixels the fingers moved; the orthographic toggle does not shift
+  the framing. None of this was testable while the matrices lived in
+  `android.opengl.Matrix`, which is why they no longer do.
+- **The live stroke buffer.** The geometry you see while the pen is down is
+  compared float-for-float against the geometry the commit builds, for all eight
+  brushes, including after the buffer has had to grow. An append touches a
+  bounded tail rather than the whole tube — which is the difference between
+  drawing being linear and being quadratic in stroke length.
+- **Undo with a memory budget.** Steps declare what they retain in stroke points,
+  so three 200k-point strokes are evicted where two hundred dots would not be,
+  and a single step larger than the whole budget is still undoable.
+- **Stable Stroke**, which smooths the input before it is projected, and drops
+  the jitter of a pen resting on glass without swallowing a slow drift.
+
+Three bugs turned up while porting this, all of which the tests now pin:
+
+- **Roll rotated the canvas backwards.** A view matrix is the camera object's
+  inverse, so rolling the camera by +a rotates the view by −a; the renderer had
+  it as +a. Invisible until two fingers twist — which had never happened,
+  because nothing had ever run.
+- **A tapered stroke's preview froze rings at the wrong radius.** Uneven sample
+  spacing lets the rewrite window step over a ring, which then keeps the taper
+  factor it had on the way past: measured at 0.758 of its radius where the
+  answer was 1.0. The web build has the same gap, hidden there because it
+  rebuilds exactly on commit.
+- **The bounded rewrite window was bounded in name only.** The cap centres live
+  at vertex 0 and move on every sample, so a single dirty range covering them
+  and the rings spanned the entire stroke — the compute stayed cheap while the
+  upload quietly went back to being the length of the stroke.
 
 **Compiles, but has never been run:**
 
-- the GL ES 3.0 renderer (`app/SketchRenderer.kt`)
+- the GL ES 3.0 renderer (`app/SketchRenderer.kt`) — buffer management, the two
+  shader pairs, the incremental upload of the stroke being drawn
 - the gesture layer (`app/Gestures.kt`)
-- the activity shell (`app/MainActivity.kt`)
+- the activity shell and its controls (`app/MainActivity.kt`)
 
 CI builds a debug APK on every push, so these are known to compile against the
 real SDK. Nothing has run them on a device or an emulator — no frame has ever
 been drawn. Treat `:app` as compiling, reviewed design, not as working software.
+
+This is the line the tests cannot cross, and it is worth being exact about where
+it falls. `core` decides *where a point goes*; `app/` decides *whether anything
+appears on screen*. A JVM test can prove the first to 1e-9 and says nothing at
+all about the second — a mistyped uniform name, a buffer bound to the wrong
+target, a shader that fails to compile on one vendor's driver would all pass
+every test in this repository and show a blank screen on a phone.
 
 ## Installing it on a phone
 
@@ -108,21 +148,31 @@ There is nothing to build. Every push produces an APK:
    installs from this source; that is expected for an app not from the Play
    Store.
 
-**What you will see:** a near-empty pale screen. Drag one finger or a stylus to
-draw a black tube; two fingers orbit, pinch and rotate. There is no interface —
-no brush picker, no undo button, no guides. That is the current state, not a
-fault. Artifacts expire after 90 days.
+**What you will see:** a pale screen with a ground grid, and a control bar along
+the bottom. Drag one finger or a stylus to draw; two fingers orbit, pinch and
+twist, and three fingers pan. The bar carries brush size, seven ink colours,
+undo, redo and clear; Back is undo until there is nothing left to undo. There
+are no guides, no brush picker and no file handling yet — that is the current
+state, not a fault. Artifacts expire after 90 days.
+
+**Nobody has seen this.** The paragraph above describes what the code should do,
+not what anyone has watched it do — see below.
 
 ## Not yet ported
 
 Roughly in the order they matter:
 
-1. **Guides** — the guide-as-sweep surface, projection of strokes onto it, bend,
+1. **A first run on real hardware.** Everything in `app/` is still unverified,
+   and it is the cheapest remaining check by a wide margin.
+2. **Guides** — the guide-as-sweep surface, projection of strokes onto it, bend,
    loft, primitives. This is the largest remaining piece and belongs in `core`.
-2. **The interface.** Deliberately not transliterated: a phone wants a bottom
-   sheet and a radial menu, not the desktop's 58px vertical rail.
-3. Document save/load, undo beyond a flat stroke list, export (OBJ/STL/glTF),
-   lighting controls, the post pass, symmetry, selection and the editing tools.
+3. **The interface.** The bottom bar is a floor, not a design. Deliberately not
+   transliterated: a phone wants a bottom sheet and a radial menu, not the
+   desktop's 58px vertical rail.
+4. Document save/load, export (OBJ/STL/glTF), lighting controls, the post pass,
+   symmetry, selection and the editing tools.
+
+[docs/ROADMAP.md](docs/ROADMAP.md) orders all of it into eight phases.
 
 ## Licence
 

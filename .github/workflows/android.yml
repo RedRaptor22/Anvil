@@ -6,7 +6,11 @@ name: Build
 # reason the web build deploys itself to Pages on every push.
 on:
   push:
-    branches: [main]
+    # Work branches build too. There is no Android SDK on a development
+    # machine here, so CI is the ONLY place :app is compiled at all — limiting
+    # the APK job to main meant every change to the Android half went unbuilt
+    # until it merged, which is exactly backwards.
+    branches: [main, 'claude/**']
   pull_request:
   workflow_dispatch:
 

@@ -5,7 +5,7 @@ genuinely depends on what. Each phase ends with something you can hold in your
 hand — not a milestone on paper — and each one's logic goes into the tested
 core before anything draws it.
 
-**62 items · 7 complete · ~10,800 lines of web build to port · ~65% of it is
+**62 items · 15 complete · ~10,800 lines of web build to port · ~65% of it is
 pure logic that transfers with tests.**
 
 ---
@@ -42,22 +42,44 @@ device — that is the first thing Phase 1 changes.
 
 ---
 
-## Phase 01 — Draw and orbit, for real `NEXT`
+## Phase 01 — Draw and orbit, for real `CODE COMPLETE, UNVERIFIED`
 
 *Prove the engine on hardware, and make the app usable at its floor.*
 
 - [ ] **Run it on a device — first frame, first stroke (blocking)**
-- [ ] Camera controller into core — from `camera.js` orbit/pan/zoom
-- [ ] Screen↔world: project, unproject, worldToScreen — from `app.js`
-- [ ] Camera-facing draw plane — `refreshDrawPlane`
-- [ ] Incremental live stroke buffer — `S.Live`
-- [ ] History with a memory budget — `P.History`
-- [ ] Grid and axis in the renderer
-- [ ] Minimum UI: size, colour, undo, redo, clear
-- [ ] Stable-stroke smoothing on input — `TOOL.stable`
+- [x] Camera controller into core — from `camera.js` orbit/pan/zoom
+- [x] Screen↔world: project, unproject, worldToScreen — from `app.js`
+- [x] Camera-facing draw plane — `refreshDrawPlane`
+- [x] Incremental live stroke buffer — `S.Live`
+- [x] History with a memory budget — `P.History`
+- [x] Grid and axis in the renderer
+- [x] Minimum UI: size, colour, undo, redo, clear
+- [x] Stable-stroke smoothing on input — `TOOL.stable`
 
 **Done when:** you can draw, orbit, undo and clear on a phone without a
 keyboard — and the frame budget holds at 120 Hz with a 300 mm brush.
+
+**Where it actually stands.** Eight of the nine are written and tested: 58 core
+tests, up from 19. The ninth is the one that needs a phone, and it is still
+open — it cannot be closed from a development machine, and nothing else in this
+phase can close it. Until someone installs the APK and touches the screen,
+"draw and orbit" is a claim about code, not about an app.
+
+Three things came out of doing the rest, and all three are the reason the logic
+went into `core` first:
+
+- **Roll turned the canvas backwards.** A view matrix is the camera object's
+  inverse, so rolling the camera by +a rotates the view by −a; the renderer
+  built it as +a. Invisible at rest, which is how it survived never having run.
+- **A tapered stroke's preview froze rings at the wrong radius.** The rewrite
+  window can step over a ring when samples are unevenly spaced, and the ring
+  keeps whatever taper factor it had on the way past — measured at 0.758 of its
+  radius where the answer was 1.0. **The web build has the same gap**, hidden
+  there because it rebuilds exactly on commit.
+- **The bounded rewrite window was bounded in name only.** The cap centres sit
+  at vertex 0 and move on every sample, so one dirty range covering both them
+  and the rings spans the whole stroke — the compute stayed cheap and the
+  upload quietly went back to being the length of the stroke.
 
 ---
 
@@ -186,6 +208,11 @@ activity compile, but no frame has ever been drawn. Until someone installs the
 APK and touches the screen, everything in `app/` is unverified — and bugs there
 will be discovered all at once rather than one at a time. That run is the single
 highest-value thing to do next, and it takes minutes.
+
+Phase 1's logic has since been written and tested, which narrows what that run
+is risking but does not replace it: every line in `core` is checked on a JVM,
+and every line in `app/` — buffer management, the shaders, the gesture
+plumbing, the controls — still is not.
 
 **Phase 2 is roughly half the remaining work.** `guides.js` is 1,702 lines and
 everything downstream leans on it: tools edit curves that live on guides, files

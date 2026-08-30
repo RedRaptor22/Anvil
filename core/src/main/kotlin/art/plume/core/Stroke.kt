@@ -146,7 +146,7 @@ object StrokeGeometry {
     }
 
     /** Taper factor at arc position [s] of [total], in nib radii from each end. */
-    private fun taperAt(stroke: Stroke, s: Double, total: Double): Double {
+    internal fun taperAt(stroke: Stroke, s: Double, total: Double): Double {
         val cfg = stroke.cfg
         if (cfg.taper <= 0.0) return 1.0
         val len = cfg.taper * stroke.baseRadius
@@ -188,50 +188,9 @@ object StrokeGeometry {
         val nor = FloatArray(vCount * 3)
         val col = FloatArray(vCount * 4)
 
-        val u = Vec3(); val v = Vec3(); val b = Vec3()
-        val world = Vec3(); val normal = Vec3()
-
+        val scratch = RingScratch()
         for (i in 0 until rings) {
-            val pt = stroke.pts[i]
-            val k = taperAt(stroke, arc[i], total)
-            val rx = max(halfWidth(stroke, stroke.baseRadius * k), 1e-5)
-            val ry = max(halfThick(stroke, stroke.baseRadius * k), 1e-5)
-
-            // roll the reference frame, then build an orthonormal section basis
-            val ca = cos(pt.roll); val sa = sin(pt.roll)
-            b.set(t[i] cross r[i])
-            u.set(r[i]) ; u.x = r[i].x * ca + b.x * sa
-            u.y = r[i].y * ca + b.y * sa
-            u.z = r[i].z * ca + b.z * sa
-            v.set(t[i] cross u)
-
-            /*
-             * A RISEN SECTION STANDS ON THE SURFACE rather than straddling it:
-             * shifting the centre by -ry along v puts the section's near face
-             * on the stroke and its far face one full height out along the
-             * normal, which is what makes the cube brush an extrusion FROM the
-             * surface instead of a rod half sunk into it.
-             */
-            val riseShift = if (cfg.rise) -ry else 0.0
-
-            for (j in 0 until seg) {
-                val ang = j.toDouble() / seg * 2.0 * PI
-                val (sx, sy) = sectionPoint(ang, cfg.square)
-                world.set(pt.p)
-                world.addScaled(u, sx * rx)
-                world.addScaled(v, sy * ry + riseShift)
-
-                normal.set(0.0, 0.0, 0.0)
-                normal.addScaled(u, sx / rx)
-                normal.addScaled(v, sy / ry)
-                if (normal.lengthSq() < Vec3.EPS) normal.set(u) else normal.normalize()
-
-                val o = (2 + i * seg + j)
-                pos[o * 3] = world.x.toFloat(); pos[o * 3 + 1] = world.y.toFloat(); pos[o * 3 + 2] = world.z.toFloat()
-                nor[o * 3] = normal.x.toFloat(); nor[o * 3 + 1] = normal.y.toFloat(); nor[o * 3 + 2] = normal.z.toFloat()
-                col[o * 4] = stroke.color.r.toFloat(); col[o * 4 + 1] = stroke.color.g.toFloat()
-                col[o * 4 + 2] = stroke.color.b.toFloat(); col[o * 4 + 3] = stroke.opacity.toFloat()
-            }
+            writeRing(stroke, i, i, t[i], r[i], arc[i], total, pos, nor, col, seg, scratch)
         }
 
         if (caps) {
@@ -250,7 +209,84 @@ object StrokeGeometry {
         return MeshData(pos, nor, col, idx)
     }
 
-    private fun writeCapCentre(
+    /**
+     * Scratch vectors for one ring write, owned by the caller.
+     *
+     * Held rather than allocated per ring because both callers write rings in a
+     * loop — the batch build over a whole stroke, the live buffer over a tail —
+     * and because the live path runs on every pointer sample. Caller-owned
+     * rather than shared: the UI thread appends while the GL thread draws.
+     */
+    internal class RingScratch {
+        val u = Vec3(); val v = Vec3(); val b = Vec3()
+        val world = Vec3(); val normal = Vec3()
+    }
+
+    /**
+     * Write one cross-section into the vertex arrays.
+     *
+     * Split out of [build] so that the incremental path in [LiveStroke] and the
+     * batch path here cannot drift apart. They did not have to be one function
+     * — the web build keeps two — but two copies of this arithmetic is exactly
+     * the shape of bug that shows as "the preview looks right and the committed
+     * stroke does not", and it is cheap to make impossible.
+     *
+     * [ptIndex] selects the sample; [ringSlot] selects where it lands in the
+     * buffer. They are the same for every stroke we build today and are kept
+     * separate because a closed loop's last ring is its first.
+     */
+    internal fun writeRing(
+        stroke: Stroke, ptIndex: Int, ringSlot: Int,
+        t: Vec3, r: Vec3, arcS: Double, total: Double,
+        pos: FloatArray, nor: FloatArray, col: FloatArray, seg: Int,
+        s: RingScratch,
+    ) {
+        val cfg = stroke.cfg
+        val pt = stroke.pts[ptIndex]
+        val k = taperAt(stroke, arcS, total)
+        val rx = max(halfWidth(stroke, stroke.baseRadius * k), 1e-5)
+        val ry = max(halfThick(stroke, stroke.baseRadius * k), 1e-5)
+
+        // roll the reference frame, then build an orthonormal section basis
+        val ca = cos(pt.roll); val sa = sin(pt.roll)
+        s.b.set(t cross r)
+        s.u.set(
+            r.x * ca + s.b.x * sa,
+            r.y * ca + s.b.y * sa,
+            r.z * ca + s.b.z * sa,
+        )
+        s.v.set(t cross s.u)
+
+        /*
+         * A RISEN SECTION STANDS ON THE SURFACE rather than straddling it:
+         * shifting the centre by -ry along v puts the section's near face on the
+         * stroke and its far face one full height out along the normal, which is
+         * what makes the cube brush an extrusion FROM the surface instead of a
+         * rod half sunk into it.
+         */
+        val riseShift = if (cfg.rise) -ry else 0.0
+
+        for (j in 0 until seg) {
+            val ang = j.toDouble() / seg * 2.0 * PI
+            val (sx, sy) = sectionPoint(ang, cfg.square)
+            s.world.set(pt.p)
+            s.world.addScaled(s.u, sx * rx)
+            s.world.addScaled(s.v, sy * ry + riseShift)
+
+            s.normal.set(0.0, 0.0, 0.0)
+            s.normal.addScaled(s.u, sx / rx)
+            s.normal.addScaled(s.v, sy / ry)
+            if (s.normal.lengthSq() < Vec3.EPS) s.normal.set(s.u) else s.normal.normalize()
+
+            val o = (2 + ringSlot * seg + j)
+            pos[o * 3] = s.world.x.toFloat(); pos[o * 3 + 1] = s.world.y.toFloat(); pos[o * 3 + 2] = s.world.z.toFloat()
+            nor[o * 3] = s.normal.x.toFloat(); nor[o * 3 + 1] = s.normal.y.toFloat(); nor[o * 3 + 2] = s.normal.z.toFloat()
+            col[o * 4] = stroke.color.r.toFloat(); col[o * 4 + 1] = stroke.color.g.toFloat()
+            col[o * 4 + 2] = stroke.color.b.toFloat(); col[o * 4 + 3] = stroke.opacity.toFloat()
+        }
+    }
+
+    internal fun writeCapCentre(
         stroke: Stroke, i: Int, t: Vec3, sign: Double,
         pos: FloatArray, nor: FloatArray, col: FloatArray,
     ) {
@@ -265,7 +301,7 @@ object StrokeGeometry {
     }
 
     /** One band of quads between two rings; a closed loop wraps its last onto 0. */
-    private fun band(idx: IntArray, at0: Int, i: Int, j: Int, seg: Int): Int {
+    internal fun band(idx: IntArray, at0: Int, i: Int, j: Int, seg: Int): Int {
         var at = at0
         for (k in 0 until seg) {
             val a = 2 + i * seg + k
@@ -278,13 +314,13 @@ object StrokeGeometry {
         return at
     }
 
-    private fun startFan(idx: IntArray, at0: Int, seg: Int): Int {
+    internal fun startFan(idx: IntArray, at0: Int, seg: Int): Int {
         var at = at0
         for (k in 0 until seg) { idx[at++] = 0; idx[at++] = 2 + (k + 1) % seg; idx[at++] = 2 + k }
         return at
     }
 
-    private fun endFan(idx: IntArray, at0: Int, lastRing: Int, seg: Int): Int {
+    internal fun endFan(idx: IntArray, at0: Int, lastRing: Int, seg: Int): Int {
         var at = at0
         val base = 2 + lastRing * seg
         for (k in 0 until seg) { idx[at++] = 1; idx[at++] = base + k; idx[at++] = base + (k + 1) % seg }
