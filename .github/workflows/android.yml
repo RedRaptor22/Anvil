@@ -21,8 +21,10 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: gradle/actions/setup-gradle@v4
-      # proves the split holds: core must build and test with no SDK anywhere
-      - run: ./gradlew :core:test --no-daemon
+      # -PcoreOnly excludes :app outright. A runner has ANDROID_HOME set
+      # whether or not you want it, so without this the job that is meant to
+      # prove core needs no SDK quietly configures the Android module too.
+      - run: ./gradlew :core:test -PcoreOnly --no-daemon
 
   apk:
     name: Debug APK

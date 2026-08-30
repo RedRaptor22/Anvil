@@ -1,9 +1,8 @@
-/* AGP's version is declared here rather than in the root build, because this
-   module is only included when an Android SDK is present — see settings.gradle.
-   That keeps `./gradlew :core:test` working on a machine with no SDK. */
+/* Versions come from pluginManagement in settings.gradle.kts. This module is
+   only included when an SDK is present and -PcoreOnly was not asked for. */
 plugins {
-    id("com.android.application") version "8.5.2"
-    id("org.jetbrains.kotlin.android") version "2.0.21"
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
 }
 
 android {

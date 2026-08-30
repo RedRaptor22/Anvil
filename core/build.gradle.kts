@@ -1,6 +1,6 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
-plugins { kotlin("jvm") }
+plugins { id("org.jetbrains.kotlin.jvm") }
 
 /* Target 17 bytecode, which is what Android's toolchain accepts, but do not
    demand a 17 toolchain to produce it — this module has to build on whatever
