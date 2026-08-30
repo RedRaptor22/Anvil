@@ -138,8 +138,8 @@
       draws it.</p>
     </div>
     <dl class="specs">
-      <div class="spec"><dt>Phases</dt><dd>8<small>one done</small></dd></div>
-      <div class="spec"><dt>Items</dt><dd>62<small>15 complete</small></dd></div>
+      <div class="spec"><dt>Phases</dt><dd>8<small>two done</small></dd></div>
+      <div class="spec"><dt>Items</dt><dd>62<small>19 complete</small></dd></div>
       <div class="spec"><dt>To port</dt><dd>10.8k<small>lines of web build</small></dd></div>
       <div class="spec"><dt>Shared</dt><dd>~65%<small>pure logic, testable</small></dd></div>
     </dl>
@@ -199,11 +199,11 @@
             <h3>Draw and orbit, for real</h3>
             <div class="goal">Prove the engine on hardware, and make the app usable at its floor.</div>
           </div>
-          <span class="chip now">Unverified</span>
+          <span class="chip done">Done</span>
         </div>
         <div class="ph-body">
           <ul class="items">
-            <li>Run it on a device — first frame, first stroke <b>(blocking)</b></li>
+            <li class="is-done">Run it on a device — first frame, first stroke</li>
             <li class="is-done">Camera controller into core <span class="src">Camera.kt</span></li>
             <li class="is-done">Screen↔world: project, unproject, worldToScreen <span class="src">Mat4.kt</span></li>
             <li class="is-done">Camera-facing draw plane <span class="src">refreshDrawPlane</span></li>
@@ -215,9 +215,9 @@
           </ul>
           <p class="outcome"><b>Done when</b><span>You can draw, orbit, undo and clear on a phone
           without a keyboard — and the frame budget holds at 120Hz with a 300mm brush.</span></p>
-          <p class="outcome"><b>Where it stands</b><span>Eight of the nine are written and tested —
-          58 core tests, up from 19. The ninth needs a phone and is still open; it cannot be
-          closed from a development machine, and nothing else in this phase can close it.
+          <p class="outcome"><b>Where it stands</b><span>Done, and verified on hardware — the APK
+          was installed and it draws, orbits and undoes on a real device, which is what closed the
+          blocking item. 58 core tests, up from 19.
           Porting the logic turned up three real bugs: roll rotated the canvas backwards, a
           tapered stroke's preview froze rings at 0.758 of their radius where the answer was 1.0
           (<b>the web build has the same gap</b>), and the bounded rewrite window was bounded in

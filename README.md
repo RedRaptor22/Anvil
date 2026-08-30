@@ -27,7 +27,7 @@ someone's phone drawing differently.
 |---|---|---|
 | language | ES5 JavaScript | Kotlin |
 | renderer | Three.js r128 (WebGL) | OpenGL ES 3.0, direct |
-| tests | 584 in-browser checks | 58 JVM unit tests |
+| tests | 584 in-browser checks | 75 JVM unit tests |
 | ships as | a URL | an APK |
 
 ## Modules
@@ -69,7 +69,7 @@ echo "sdk.dir=/path/to/Android/sdk" > local.properties
 
 ## What actually works
 
-Verified by `./gradlew :core:test` — 58 tests, all passing:
+Verified by `./gradlew :core:test` — 75 tests, all passing:
 
 - **Rotation-minimising frames** by double reflection (Wang et al. 2008), the
   same algorithm as the web build. Orthonormal along a helix to 1e-9, finite and
@@ -101,6 +101,11 @@ Verified by `./gradlew :core:test` — 58 tests, all passing:
   and a single step larger than the whole budget is still undoable.
 - **Stable Stroke**, which smooths the input before it is projected, and drops
   the jitter of a pen resting on glass without swallowing a slow drift.
+- **Guide surfaces.** A stroke extruded along the view into a swept surface,
+  whose anchor row comes back out as *exactly* the stroke that made it; a flat
+  guide triangulated to the outline you drew rather than a grid clipped to it,
+  with the triangle areas summing to the polygon's own; and the five primitives
+  at the dimensions the web build gives them.
 
 Three bugs turned up while porting this, all of which the tests now pin:
 
@@ -118,23 +123,16 @@ Three bugs turned up while porting this, all of which the tests now pin:
   and the rings spanned the entire stroke — the compute stayed cheap while the
   upload quietly went back to being the length of the stroke.
 
-**Compiles, but has never been run:**
+**Runs on a device.** The APK has been installed and used: it draws, orbits and
+undoes on real hardware. Everything in `app/` had only ever been compiled before
+that, so this is the check that mattered most and it has now been made.
 
-- the GL ES 3.0 renderer (`app/SketchRenderer.kt`) — buffer management, the two
-  shader pairs, the incremental upload of the stroke being drawn
-- the gesture layer (`app/Gestures.kt`)
-- the activity shell and its controls (`app/MainActivity.kt`)
-
-CI builds a debug APK on every push, so these are known to compile against the
-real SDK. Nothing has run them on a device or an emulator — no frame has ever
-been drawn. Treat `:app` as compiling, reviewed design, not as working software.
-
-This is the line the tests cannot cross, and it is worth being exact about where
-it falls. `core` decides *where a point goes*; `app/` decides *whether anything
-appears on screen*. A JVM test can prove the first to 1e-9 and says nothing at
-all about the second — a mistyped uniform name, a buffer bound to the wrong
-target, a shader that fails to compile on one vendor's driver would all pass
-every test in this repository and show a blank screen on a phone.
+It is still worth being exact about what the tests do and do not cover. `core`
+decides *where a point goes*; `app/` decides *whether anything appears on
+screen*. A JVM test proves the first to 1e-9 and says nothing at all about the
+second — a mistyped uniform, a buffer bound to the wrong target or a shader
+that fails on one vendor's driver would pass every test here and still show a
+blank screen. `app/` is checked by running it, which is why that run matters.
 
 ## Installing it on a phone
 
@@ -155,21 +153,17 @@ undo, redo and clear; Back is undo until there is nothing left to undo. There
 are no guides, no brush picker and no file handling yet — that is the current
 state, not a fault. Artifacts expire after 90 days.
 
-**Nobody has seen this.** The paragraph above describes what the code should do,
-not what anyone has watched it do — see below.
-
 ## Not yet ported
 
 Roughly in the order they matter:
 
-1. **A first run on real hardware.** Everything in `app/` is still unverified,
-   and it is the cheapest remaining check by a wide margin.
-2. **Guides** — the guide-as-sweep surface, projection of strokes onto it, bend,
-   loft, primitives. This is the largest remaining piece and belongs in `core`.
-3. **The interface.** The bottom bar is a floor, not a design. Deliberately not
+1. **Guides, the rest of the way** — the surfaces are built and tested; what is
+   still missing is projecting strokes onto them, the edge behaviour, bend and
+   loft. This is the largest remaining piece and it belongs in `core`.
+2. **The interface.** The bottom bar is a floor, not a design. Deliberately not
    transliterated: a phone wants a bottom sheet and a radial menu, not the
    desktop's 58px vertical rail.
-4. Document save/load, export (OBJ/STL/glTF), lighting controls, the post pass,
+3. Document save/load, export (OBJ/STL/glTF), lighting controls, the post pass,
    symmetry, selection and the editing tools.
 
 [docs/ROADMAP.md](docs/ROADMAP.md) orders all of it into eight phases.

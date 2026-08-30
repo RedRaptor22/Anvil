@@ -65,6 +65,35 @@ object Tune {
     const val STABLE_DEFAULT = 0.45
     const val STABLE_MAX = 0.95
 
+    // ---- guides ---------------------------------------------------------
+
+    /** GUESS: extrusion half-depth = 1.5x the profile's extent. */
+    const val GUIDE_DEPTH_FACTOR = 1.5
+
+    /** GUESS: world units. */
+    const val GUIDE_DEPTH_MIN = 0.6
+    const val GUIDE_DEPTH_MAX = 40.0
+
+    /** GUESS: ...but at least this fraction of the orbit radius. */
+    const val GUIDE_DEPTH_OF_VIEW = 0.35
+
+    /**
+     * GUESS: the fraction of the depth extruded TOWARD the camera, so the
+     * orange starting edge sits at one side of the surface, as documented.
+     */
+    const val GUIDE_DEPTH_FRONT = 0.12
+
+    /** GUESS: a section line every 250 mm. */
+    const val GUIDE_GRID_STEP = 0.25
+
+    /** FACT: a guide "cannot be made completely opaque". */
+    const val GUIDE_OPACITY_MAX = 0.92
+    const val GUIDE_OPACITY_INIT = 0.42
+
+    /** Profile resampling for the surface mesh, and the sweep path. */
+    const val GUIDE_PROFILE_SEG = 96
+    const val GUIDE_PATH_SEG = 64
+
     /** One grid unit is 1000 mm (FACT); the helper spans 40 of them. */
     const val GRID_EXTENT = 40.0
     const val GRID_DIVISIONS = 40

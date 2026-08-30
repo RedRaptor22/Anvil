@@ -5,7 +5,7 @@ genuinely depends on what. Each phase ends with something you can hold in your
 hand — not a milestone on paper — and each one's logic goes into the tested
 core before anything draws it.
 
-**62 items · 15 complete · ~10,800 lines of web build to port · ~65% of it is
+**62 items · 19 complete · ~10,800 lines of web build to port · ~65% of it is
 pure logic that transfers with tests.**
 
 ---
@@ -42,11 +42,11 @@ device — that is the first thing Phase 1 changes.
 
 ---
 
-## Phase 01 — Draw and orbit, for real `CODE COMPLETE, UNVERIFIED`
+## Phase 01 — Draw and orbit, for real `DONE`
 
 *Prove the engine on hardware, and make the app usable at its floor.*
 
-- [ ] **Run it on a device — first frame, first stroke (blocking)**
+- [x] **Run it on a device — first frame, first stroke (blocking)**
 - [x] Camera controller into core — from `camera.js` orbit/pan/zoom
 - [x] Screen↔world: project, unproject, worldToScreen — from `app.js`
 - [x] Camera-facing draw plane — `refreshDrawPlane`
@@ -59,11 +59,9 @@ device — that is the first thing Phase 1 changes.
 **Done when:** you can draw, orbit, undo and clear on a phone without a
 keyboard — and the frame budget holds at 120 Hz with a 300 mm brush.
 
-**Where it actually stands.** Eight of the nine are written and tested: 58 core
-tests, up from 19. The ninth is the one that needs a phone, and it is still
-open — it cannot be closed from a development machine, and nothing else in this
-phase can close it. Until someone installs the APK and touches the screen,
-"draw and orbit" is a claim about code, not about an app.
+**Verified on hardware.** The APK was installed and the app draws, orbits and
+undoes on a real device — which is what closed the blocking item and, with it,
+the phase. Everything in `app/` had only ever been compiled until that run.
 
 Three things came out of doing the rest, and all three are the reason the logic
 went into `core` first:
@@ -83,18 +81,18 @@ went into `core` first:
 
 ---
 
-## Phase 02 — Guides `LARGEST`
+## Phase 02 — Guides `IN PROGRESS, LARGEST`
 
 *The Feather premise: draw a surface, then draw on it.*
 
-- [ ] Sweep surface from a stroke — `createFromStroke`, `rebuildSweep`
+- [x] Sweep surface from a stroke — `createFromStroke`, `rebuildSweep`
 - [ ] Surface sampling and spans — `sampleSurface`, `surfaceSpan`
 - [ ] Project strokes onto a guide — `G.project`
 - [ ] Edge behaviour: reach, outline, clamp — `reachAlong`, `insideOutline`
 - [ ] Isolation masking — `isMasked`, `invalidateMask`
 - [ ] Translucent grid-lined guide shader
-- [ ] Flat shape guide — `createFlatFromStroke`
-- [ ] Five primitives — cube, pyramid, sphere, torus, tube
+- [x] Flat shape guide — `createFlatFromStroke`
+- [x] Five primitives — cube, pyramid, sphere, torus, tube
 - [ ] Bend — `G.bend`, `bendMesh`
 - [ ] Loft from selected curves — `loftFromCurves`
 - [ ] Guide lifecycle: active, close, save, reuse, opacity
@@ -203,16 +201,10 @@ yours does.
 
 ## Two things worth deciding early
 
-**Phase 1 has a blocker nothing else can clear.** The renderer, gestures and
-activity compile, but no frame has ever been drawn. Until someone installs the
-APK and touches the screen, everything in `app/` is unverified — and bugs there
-will be discovered all at once rather than one at a time. That run is the single
-highest-value thing to do next, and it takes minutes.
-
-Phase 1's logic has since been written and tested, which narrows what that run
-is risking but does not replace it: every line in `core` is checked on a JVM,
-and every line in `app/` — buffer management, the shaders, the gesture
-plumbing, the controls — still is not.
+**Phase 1's blocker is cleared.** The renderer, gestures and activity had only
+ever been compiled; the APK has now been run on a device and it draws. That was
+the single highest-value thing to do, it took minutes, and it is the reason the
+phase can be called done rather than written.
 
 **Phase 2 is roughly half the remaining work.** `guides.js` is 1,702 lines and
 everything downstream leans on it: tools edit curves that live on guides, files
