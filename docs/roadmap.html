@@ -1,0 +1,413 @@
+<title>Anvil Port Roadmap</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+  :root{
+    --ground:#eceaf3;
+    --surface:#ffffff;
+    --surface2:#f5f4f9;
+    --ink:#1b1c21;
+    --dim:#5f606c;
+    --dim2:#8a8b96;
+    --rule:rgba(18,18,34,.13);
+    --rule-soft:rgba(18,18,34,.07);
+    --accent:#e87326;
+    --done:#2f8f66;
+    --now:#2f6fd0;
+    --later:#8a8b96;
+    --chip-done:rgba(47,143,102,.13);
+    --chip-now:rgba(47,111,208,.13);
+    --chip-later:rgba(138,139,150,.14);
+    --shadow:0 1px 2px rgba(22,22,48,.05), 0 8px 24px rgba(22,22,48,.06);
+    --f-display:"IBM Plex Sans Condensed","Helvetica Neue",Arial,sans-serif;
+    --f-body:"IBM Plex Sans","Helvetica Neue",Arial,sans-serif;
+    --f-mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --ground:#15161b; --surface:#212227; --surface2:#292a31;
+      --ink:#f0f0f5; --dim:#a6a8b4; --dim2:#7b7d88;
+      --rule:rgba(255,255,255,.14); --rule-soft:rgba(255,255,255,.07);
+      --accent:#ff9b4d; --done:#57c795; --now:#7fb0ec; --later:#7b7d88;
+      --chip-done:rgba(87,199,149,.16); --chip-now:rgba(127,176,236,.16);
+      --chip-later:rgba(123,125,136,.18);
+      --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.32);
+    }
+  }
+  :root[data-theme="dark"]{
+    --ground:#15161b; --surface:#212227; --surface2:#292a31;
+    --ink:#f0f0f5; --dim:#a6a8b4; --dim2:#7b7d88;
+    --rule:rgba(255,255,255,.14); --rule-soft:rgba(255,255,255,.07);
+    --accent:#ff9b4d; --done:#57c795; --now:#7fb0ec; --later:#7b7d88;
+    --chip-done:rgba(87,199,149,.16); --chip-now:rgba(127,176,236,.16);
+    --chip-later:rgba(123,125,136,.18);
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.32);
+  }
+
+  *{box-sizing:border-box;}
+  body{background:var(--ground);color:var(--ink);font-family:var(--f-body);
+       font-size:15px;line-height:1.62;-webkit-font-smoothing:antialiased;}
+  .wrap{max-width:940px;margin:0 auto;padding:40px 22px 90px;
+        display:flex;flex-direction:column;gap:34px;}
+
+  .head{background:var(--surface);border:1px solid var(--rule);border-radius:3px;
+        box-shadow:var(--shadow);overflow:hidden;}
+  .head .band{padding:26px 26px 22px;border-bottom:1px solid var(--rule);}
+  .eyebrow{font-family:var(--f-mono);font-size:11px;font-weight:500;letter-spacing:.14em;
+           text-transform:uppercase;color:var(--dim2);margin:0 0 10px;}
+  h1{font-family:var(--f-display);font-weight:700;font-size:clamp(30px,5.2vw,42px);
+     line-height:1.1;letter-spacing:-.015em;margin:0 0 12px;text-wrap:balance;}
+  .standfirst{margin:0;color:var(--dim);max-width:66ch;font-size:16px;}
+  .specs{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));}
+  .spec{padding:15px 26px;border-right:1px solid var(--rule-soft);}
+  .spec:last-child{border-right:0;}
+  .spec dt{font-family:var(--f-mono);font-size:10px;font-weight:500;letter-spacing:.13em;
+           text-transform:uppercase;color:var(--dim2);margin:0 0 4px;}
+  .spec dd{margin:0;font-family:var(--f-mono);font-size:19px;font-weight:600;
+           font-variant-numeric:tabular-nums;letter-spacing:-.01em;}
+  .spec dd small{font-family:var(--f-body);font-size:12px;font-weight:400;color:var(--dim);
+                 display:block;letter-spacing:0;margin-top:1px;}
+
+  h2{font-family:var(--f-display);font-weight:600;font-size:23px;letter-spacing:-.01em;
+     margin:0 0 14px;padding-bottom:9px;border-bottom:1px solid var(--rule);}
+  p{margin:0;max-width:68ch;}
+  .lede{margin:0 0 6px;color:var(--dim);max-width:70ch;}
+  code{font-family:var(--f-mono);font-size:.87em;background:var(--surface2);
+       padding:1px 5px;border-radius:2px;border:1px solid var(--rule-soft);}
+
+  /* ---- the spine: phases are numbered because they are a real dependency
+          order, not decoration — each one needs the one before it ---- */
+  .spine{display:flex;flex-direction:column;gap:14px;}
+  .phase{background:var(--surface);border:1px solid var(--rule);border-radius:3px;
+         box-shadow:var(--shadow);overflow:hidden;}
+  .ph-head{display:flex;align-items:flex-start;gap:15px;padding:17px 20px;
+           border-bottom:1px solid var(--rule-soft);flex-wrap:wrap;}
+  .num{font-family:var(--f-mono);font-size:23px;font-weight:600;color:var(--accent);
+       line-height:1;padding-top:3px;font-variant-numeric:tabular-nums;flex:0 0 auto;}
+  .ph-title{flex:1 1 240px;min-width:0;}
+  .ph-title h3{font-family:var(--f-display);font-weight:600;font-size:20px;margin:0 0 3px;
+               letter-spacing:-.005em;}
+  .ph-title .goal{color:var(--dim);font-size:14px;}
+  .chip{font-family:var(--f-mono);font-size:10px;font-weight:600;letter-spacing:.11em;
+        text-transform:uppercase;padding:4px 9px;border-radius:2px;white-space:nowrap;
+        flex:0 0 auto;margin-top:3px;}
+  .chip.done{background:var(--chip-done);color:var(--done);}
+  .chip.now{background:var(--chip-now);color:var(--now);}
+  .chip.later{background:var(--chip-later);color:var(--later);}
+
+  .ph-body{padding:16px 20px 18px;display:flex;flex-direction:column;gap:13px;}
+  ul.items{margin:0;padding:0;list-style:none;display:grid;
+           grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:2px 22px;}
+  ul.items li{font-size:14px;padding:4px 0 4px 17px;position:relative;line-height:1.5;}
+  ul.items li::before{content:"";position:absolute;left:2px;top:12px;width:5px;height:5px;
+                      border-radius:50%;background:var(--dim2);}
+  ul.items li.is-done::before{background:var(--done);}
+  ul.items li b{font-weight:600;}
+  .src{font-family:var(--f-mono);font-size:11px;color:var(--dim2);}
+
+  .outcome{background:var(--surface2);border:1px solid var(--rule-soft);border-radius:2px;
+           padding:11px 14px;font-size:14px;display:flex;gap:11px;align-items:flex-start;}
+  .outcome b{font-family:var(--f-mono);font-size:10px;font-weight:600;letter-spacing:.11em;
+             text-transform:uppercase;color:var(--dim2);white-space:nowrap;padding-top:3px;}
+
+  .note{background:var(--surface);border:1px solid var(--rule);border-left:3px solid var(--accent);
+        border-radius:3px;padding:16px 19px;display:flex;flex-direction:column;gap:9px;}
+  .note h3{font-family:var(--f-display);font-weight:600;font-size:17px;margin:0;}
+  .note p{font-size:14.5px;}
+
+  ul.plain{margin:0;padding-left:19px;display:flex;flex-direction:column;gap:7px;}
+  ul.plain li{font-size:14.5px;max-width:68ch;}
+  ul.plain li::marker{color:var(--dim2);}
+
+  .foot{border-top:1px solid var(--rule);padding-top:16px;color:var(--dim2);
+        font-family:var(--f-mono);font-size:11.5px;display:flex;flex-wrap:wrap;gap:6px 20px;}
+  a{color:var(--accent);text-underline-offset:2px;}
+  a:focus-visible{outline:2px solid var(--accent);outline-offset:3px;}
+  @media (max-width:560px){ .spec{border-right:0;border-bottom:1px solid var(--rule-soft);} }
+  @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;}}
+</style>
+
+<div class="wrap">
+
+  <div class="head">
+    <div class="band">
+      <p class="eyebrow">Plume → Anvil · port plan</p>
+      <h1>Anvil Port Roadmap</h1>
+      <p class="standfirst">Every feature in the web build, ordered into eight phases by what
+      genuinely depends on what. Each phase ends with something you can hold in your hand — not
+      a milestone on paper — and each one's logic goes into the tested core before anything
+      draws it.</p>
+    </div>
+    <dl class="specs">
+      <div class="spec"><dt>Phases</dt><dd>8<small>one done</small></dd></div>
+      <div class="spec"><dt>Items</dt><dd>62<small>7 complete</small></dd></div>
+      <div class="spec"><dt>To port</dt><dd>10.8k<small>lines of web build</small></dd></div>
+      <div class="spec"><dt>Shared</dt><dd>~65%<small>pure logic, testable</small></dd></div>
+    </dl>
+  </div>
+
+  <section>
+    <h2>How I'd tackle it</h2>
+    <p class="lede">Four rules, and they are the reason the estimate is worth anything.</p>
+    <ul class="plain">
+      <li><b>Logic into <code>core</code> first, with tests, before any pixel depends on it.</b>
+      That is not process for its own sake — porting with tests already caught two real bugs in
+      the <em>shipped</em> web app that nobody had noticed.</li>
+      <li><b>Every phase ends installable.</b> CI builds an APK on each push, so the end of a
+      phase is something you can put on a phone and judge, not a green tick.</li>
+      <li><b>Port the algorithms, redesign the interface.</b> The maths must give identical
+      answers on both builds. The UI must not — a phone is not a desktop with a smaller window.</li>
+      <li><b>Fix the web build whenever the port exposes something.</b> Both repos benefit, and
+      the shared tests keep them honest.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>The phases</h2>
+
+    <div class="spine">
+
+      <!-- 0 -->
+      <div class="phase">
+        <div class="ph-head">
+          <div class="num">00</div>
+          <div class="ph-title">
+            <h3>Foundation</h3>
+            <div class="goal">A tested engine core and a build that produces an APK.</div>
+          </div>
+          <span class="chip done">Done</span>
+        </div>
+        <div class="ph-body">
+          <ul class="items">
+            <li class="is-done">Two-module split, <code>core</code> with zero Android imports <span class="src">core/</span></li>
+            <li class="is-done">Rotation-minimising frames, closed loops <span class="src">Frames.kt</span></li>
+            <li class="is-done">Stroke geometry, all 8 brushes, welded rings <span class="src">Stroke.kt</span></li>
+            <li class="is-done">Nearest-surface query + reprojection <span class="src">Surface.kt</span></li>
+            <li class="is-done">Spur removal <span class="src">Dedupe.kt</span></li>
+            <li class="is-done">GL ES 3.0 renderer + gesture layer <span class="src">app/ — compiles, never run</span></li>
+            <li class="is-done">CI: core tests without an SDK, APK on every push</li>
+          </ul>
+          <p class="outcome"><b>Reality</b><span>19 tests green. The APK builds but has never
+          drawn a frame on a device — that is the first thing Phase 1 changes.</span></p>
+        </div>
+      </div>
+
+      <!-- 1 -->
+      <div class="phase">
+        <div class="ph-head">
+          <div class="num">01</div>
+          <div class="ph-title">
+            <h3>Draw and orbit, for real</h3>
+            <div class="goal">Prove the engine on hardware, and make the app usable at its floor.</div>
+          </div>
+          <span class="chip now">Next</span>
+        </div>
+        <div class="ph-body">
+          <ul class="items">
+            <li>Run it on a device — first frame, first stroke <b>(blocking)</b></li>
+            <li>Camera controller into core <span class="src">camera.js orbit/pan/zoom</span></li>
+            <li>Screen↔world: project, unproject, worldToScreen <span class="src">app.js</span></li>
+            <li>Camera-facing draw plane <span class="src">refreshDrawPlane</span></li>
+            <li>Incremental live stroke buffer <span class="src">S.Live</span></li>
+            <li>History with a memory budget <span class="src">P.History</span></li>
+            <li>Grid and axis in the renderer</li>
+            <li>Minimum UI: size, colour, undo, redo, clear</li>
+            <li>Stable-stroke smoothing on input <span class="src">TOOL.stable</span></li>
+          </ul>
+          <p class="outcome"><b>Done when</b><span>You can draw, orbit, undo and clear on a phone
+          without a keyboard — and the frame budget holds at 120Hz with a 300mm brush.</span></p>
+        </div>
+      </div>
+
+      <!-- 2 -->
+      <div class="phase">
+        <div class="ph-head">
+          <div class="num">02</div>
+          <div class="ph-title">
+            <h3>Guides</h3>
+            <div class="goal">The Feather premise: draw a surface, then draw on it.</div>
+          </div>
+          <span class="chip later">Largest</span>
+        </div>
+        <div class="ph-body">
+          <ul class="items">
+            <li>Sweep surface from a stroke <span class="src">createFromStroke, rebuildSweep</span></li>
+            <li>Surface sampling and spans <span class="src">sampleSurface, surfaceSpan</span></li>
+            <li>Project strokes onto a guide <span class="src">G.project</span></li>
+            <li>Edge behaviour: reach, outline, clamp <span class="src">reachAlong, insideOutline</span></li>
+            <li>Isolation masking <span class="src">isMasked, invalidateMask</span></li>
+            <li>Translucent grid-lined guide shader <span class="src">guides.js VERT/FRAG</span></li>
+            <li>Flat shape guide <span class="src">createFlatFromStroke</span></li>
+            <li>Five primitives <span class="src">cube, pyramid, sphere, torus, tube</span></li>
+            <li>Bend <span class="src">G.bend, bendMesh</span></li>
+            <li>Loft from selected curves <span class="src">loftFromCurves</span></li>
+            <li>Guide lifecycle: active, close, save, reuse, opacity</li>
+          </ul>
+          <p class="outcome"><b>Done when</b><span>A stroke lands exactly on a curved guide, stays
+          there under every tool, and the same sketch measures identically in both builds.</span></p>
+        </div>
+      </div>
+
+      <!-- 3 -->
+      <div class="phase">
+        <div class="ph-head">
+          <div class="num">03</div>
+          <div class="ph-title">
+            <h3>Editing tools</h3>
+            <div class="goal">Everything that changes a curve after it is drawn.</div>
+          </div>
+          <span class="chip later">Later</span>
+        </div>
+        <div class="ph-body">
+          <ul class="items">
+            <li>Erase, with splitting <span class="src">eraseScreen, eraseSphere</span></li>
+            <li>Vacuum <span class="src">vacuumAt</span></li>
+            <li>Smooth <span class="src">stepSmooth + reprojection</span></li>
+            <li>Liquify: push, pinch, comb <span class="src">liquifyApply</span></li>
+            <li>Select: tap, sweep, long-press <span class="src">tapSelect, sweepSelect</span></li>
+            <li>Lasso, with a visible boundary <span class="src">stepLasso</span></li>
+            <li>Transform — needs a touch gizmo, not the joystick</li>
+            <li>Duplicate, mirrored duplicate <span class="src">duplicateSelection</span></li>
+            <li>Groups: create, delete, rename, hide, assign</li>
+            <li>Restyle a selection from the brush panel <span class="src">S.restyle</span></li>
+            <li>Fill a whole guide <span class="src">fillGuide</span></li>
+            <li>Shape snapping: line, curve, circle; hold-to-adjust; press-hold circle</li>
+            <li>Symmetry: mirror X/Z, radial n-fold, fold indicator</li>
+          </ul>
+          <p class="outcome"><b>Done when</b><span>Every tool in the web toolbar has a touch
+          equivalent, and each one is undoable in a single step.</span></p>
+        </div>
+      </div>
+
+      <!-- 4 -->
+      <div class="phase">
+        <div class="ph-head">
+          <div class="num">04</div>
+          <div class="ph-title">
+            <h3>Files and interchange</h3>
+            <div class="goal">Sketches that survive, and open in both builds.</div>
+          </div>
+          <span class="chip later">Later</span>
+        </div>
+        <div class="ph-body">
+          <ul class="items">
+            <li><code>.plume.json</code> serialize and restore — <b>the same format</b> <span class="src">doc.js</span></li>
+            <li>Autosave to device storage <span class="src">IndexedDB → Room or files</span></li>
+            <li>Storage Access Framework: open and save</li>
+            <li>Export OBJ + MTL <span class="src">objSource</span></li>
+            <li>Export STL, binary and ASCII <span class="src">stlBuffer</span></li>
+            <li>Export glTF 2.0, embedded buffer <span class="src">gltfSource</span></li>
+            <li>Export PNG snapshot</li>
+            <li>Import OBJ and STL as model guides <span class="src">parseOBJ, parseSTL</span></li>
+            <li>Image references, each with its own layer <span class="src">addReference</span></li>
+          </ul>
+          <p class="outcome"><b>Done when</b><span>A sketch made on the phone opens in the browser
+          and back again, with geometry matching to the format's own precision.</span></p>
+        </div>
+      </div>
+
+      <!-- 5 -->
+      <div class="phase">
+        <div class="ph-head">
+          <div class="num">05</div>
+          <div class="ph-title">
+            <h3>How it looks</h3>
+            <div class="goal">Lighting and the render pass. Mostly shader work, and GL ES helps.</div>
+          </div>
+          <span class="chip later">Later</span>
+        </div>
+        <div class="ph-body">
+          <ul class="items">
+            <li>Key light: direction, colour, intensity, ambient <span class="src">P.LIGHT</span></li>
+            <li>Toon banding <span class="src">uToon, uToonStep</span></li>
+            <li>Render mode split — fast while drawing, full on demand</li>
+            <li>Ground shadow <span class="src">projected silhouette pass</span></li>
+            <li>Depth of field <span class="src">real depth textures here, not packed RGBA</span></li>
+            <li>Film grain and pixelate</li>
+            <li>Background colour and fog</li>
+          </ul>
+          <p class="outcome"><b>Done when</b><span>The same sketch under the same light reads the
+          same on both builds. This phase gets <em>easier</em> than the web original: GL ES 3.0
+          gives real depth textures.</span></p>
+        </div>
+      </div>
+
+      <!-- 6 -->
+      <div class="phase">
+        <div class="ph-head">
+          <div class="num">06</div>
+          <div class="ph-title">
+            <h3>An interface built for a phone</h3>
+            <div class="goal">The part that must NOT be ported.</div>
+          </div>
+          <span class="chip later">Later</span>
+        </div>
+        <div class="ph-body">
+          <ul class="items">
+            <li>Bottom sheets replacing the side rails</li>
+            <li>Radial menu on long-press — a rail costs a thumb reach</li>
+            <li>Brush panel: type, size, opacity, colour, pressure</li>
+            <li>Stylus hover preview of the actual nib</li>
+            <li>Scene, groups and references panels</li>
+            <li>Back gesture steps out; it does not exit</li>
+            <li>Orientation, display cutouts, window insets</li>
+            <li>Onboarding — the web build's six-step walkthrough</li>
+            <li>Finger-drawing toggle and palm rejection settings</li>
+          </ul>
+          <p class="outcome"><b>Done when</b><span>Someone who has never seen the web build can
+          draw on a guide without being told how.</span></p>
+        </div>
+      </div>
+
+      <!-- 7 -->
+      <div class="phase">
+        <div class="ph-head">
+          <div class="num">07</div>
+          <div class="ph-title">
+            <h3>Ship it</h3>
+            <div class="goal">Play Store, and the things that only matter once real people install it.</div>
+          </div>
+          <span class="chip later">Later</span>
+        </div>
+        <div class="ph-body">
+          <ul class="items">
+            <li>Release signing and a keystore you cannot lose</li>
+            <li>Confirm the <code>applicationId</code> — permanent once published</li>
+            <li>Play Console listing, screenshots, privacy policy</li>
+            <li>Internal testing track — the closest thing to your Pages URL</li>
+            <li>Crash and ANR reporting</li>
+            <li>Performance on mid-range hardware, not just flagships</li>
+            <li>Memory ceiling: a big sketch on a 4GB phone</li>
+            <li>Target SDK and 16KB page-size compliance</li>
+          </ul>
+          <p class="outcome"><b>Done when</b><span>It is on the Play Store and a stranger's phone
+          renders what yours does.</span></p>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <section>
+    <h2>Two things worth deciding early</h2>
+    <div class="note">
+      <h3>Phase 1 has a blocker nothing else can clear</h3>
+      <p>The renderer, gestures and activity <em>compile</em>, but no frame has ever been drawn.
+      Until someone installs the APK and touches the screen, everything in <code>app/</code> is
+      unverified — and bugs there will be discovered all at once rather than one at a time. That
+      run is the single highest-value thing to do next, and it takes minutes.</p>
+    </div>
+    <div class="note">
+      <h3>Phase 2 is roughly half the remaining work</h3>
+      <p><code>guides.js</code> is 1,702 lines and everything downstream leans on it: tools edit
+      curves that live on guides, files store guides, the render pass draws them. It is pure logic,
+      so it is testable without a device — but it is worth not underestimating, and worth doing
+      before the interface, so the UI is designed around a workflow that actually exists.</p>
+    </div>
+  </section>
+
+  <div class="foot">
+    <span>Pl — 584 checks passing</span>
+    <span>Anvil — 19 tests passing</span>
+    <span>Phases ordered by dependency, not preference</span>
+  </div>
+</div>
