@@ -86,15 +86,32 @@ Verified by `./gradlew :core:test` — 19 tests, all passing:
 - **Spur removal**, which drops a folded sample before it can reverse a tangent,
   while keeping a deliberate sharp corner.
 
-Written but **not** verified here, because it needs a device:
+**Compiles, but has never been run:**
 
 - the GL ES 3.0 renderer (`app/SketchRenderer.kt`)
 - the gesture layer (`app/Gestures.kt`)
 - the activity shell (`app/MainActivity.kt`)
 
-There is no Android SDK in the environment these were written in, so **the APK
-has never been built or run.** Treat `:app` as a reviewed design, not as
-working software.
+CI builds a debug APK on every push, so these are known to compile against the
+real SDK. Nothing has run them on a device or an emulator — no frame has ever
+been drawn. Treat `:app` as compiling, reviewed design, not as working software.
+
+## Installing it on a phone
+
+There is nothing to build. Every push produces an APK:
+
+1. Open the [Actions tab](https://github.com/RedRaptor22/Anvil/actions) and click
+   the newest green run.
+2. Scroll to **Artifacts** and download **anvil-debug-apk** (a zip).
+3. Unzip it — inside is `app-debug.apk`.
+4. Put it on the phone (email, Drive, USB) and tap it. Android will ask to allow
+   installs from this source; that is expected for an app not from the Play
+   Store.
+
+**What you will see:** a near-empty pale screen. Drag one finger or a stylus to
+draw a black tube; two fingers orbit, pinch and rotate. There is no interface —
+no brush picker, no undo button, no guides. That is the current state, not a
+fault. Artifacts expire after 90 days.
 
 ## Not yet ported
 
