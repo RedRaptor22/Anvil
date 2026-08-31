@@ -8,6 +8,7 @@ import art.plume.core.Guide
 import art.plume.core.GuideKind
 import art.plume.core.GuideSurface
 import art.plume.core.LiveStroke
+import art.plume.core.Mat4
 import art.plume.core.MeshData
 import art.plume.core.Rgba
 import art.plume.core.Stroke
@@ -83,6 +84,13 @@ class SketchRenderer : GLSurfaceView.Renderer {
     private var axisBuffers: LineBuffers? = null
     private var gridSignature = ""
 
+    /** A screen-space polyline drawn over everything: the lasso boundary. */
+    private var overlay: FloatArray? = null
+    private var overlayBuffers: LineBuffers? = null
+    private var overlayCapacity = 0
+    private var viewW = 1
+    private var viewH = 1
+
     /**
      * Buffer names whose stroke has gone, waiting for a GL thread to delete
      * them. `glDeleteBuffers` is only legal with a current context, and every
@@ -152,12 +160,15 @@ class SketchRenderer : GLSurfaceView.Renderer {
          */
         uploaded.clear()
         liveBuffers = null
+        overlayBuffers = null
+        overlayCapacity = 0
         guideUploaded.clear()
         gridBuffers = null; axisBuffers = null; gridSignature = ""
     }
 
     override fun onSurfaceChanged(gl: GL10?, w: Int, h: Int) {
         GLES30.glViewport(0, 0, w, h)
+        viewW = w; viewH = h
     }
 
     /** Copy the camera's matrix across the thread boundary. */
@@ -199,6 +210,84 @@ class SketchRenderer : GLSurfaceView.Renderer {
 
         // guides last: they are translucent scaffolding and belong over the ink
         drawGuides(m, e)
+
+        // ...and the overlay over everything, because it is a cursor
+        drawOverlay()
+    }
+
+    // ---- screen-space overlay -------------------------------------------
+
+    /**
+     * A polyline in VIEW PIXELS, drawn flat over the scene.
+     *
+     * The lasso needs this: a loop you cannot see is a loop you cannot aim.
+     * Points arrive as x, y pairs and are drawn through an orthographic matrix
+     * built from the viewport, so they land exactly where the finger was rather
+     * than being unprojected into the world and back.
+     */
+    fun setOverlay(points: FloatArray?): Unit = synchronized(strokes) { overlay = points }
+
+    private fun drawOverlay() {
+        val pts = synchronized(strokes) { overlay } ?: return
+        if (pts.size < 4) return
+        val n = pts.size / 2
+
+        val b = overlayBuffers ?: newOverlayBuffers().also { overlayBuffers = it }
+        val pos = FloatArray(n * 3)
+        val col = FloatArray(n * 4)
+        for (i in 0 until n) {
+            pos[i * 3] = pts[i * 2]
+            pos[i * 3 + 1] = pts[i * 2 + 1]
+            pos[i * 3 + 2] = 0f
+            col[i * 4] = 0.12f; col[i * 4 + 1] = 0.45f; col[i * 4 + 2] = 0.95f
+            col[i * 4 + 3] = 0.9f
+        }
+        if (n > overlayCapacity) {
+            arrayBuffer(b.vbo, pos, GLES30.GL_DYNAMIC_DRAW)
+            arrayBuffer(b.cbo, col, GLES30.GL_DYNAMIC_DRAW)
+            overlayCapacity = n
+        } else {
+            GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, b.vbo)
+            GLES30.glBufferSubData(
+                GLES30.GL_ARRAY_BUFFER, 0, pos.size * 4, floatBuffer(pos, pos.size),
+            )
+            GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, b.cbo)
+            GLES30.glBufferSubData(
+                GLES30.GL_ARRAY_BUFFER, 0, col.size * 4, floatBuffer(col, col.size),
+            )
+        }
+
+        // pixels straight to clip space, y down as the touch events report it
+        val o = FloatArray(16)
+        Mat4.orthographic(0.0, viewW.toDouble(), viewH.toDouble(), 0.0, -1.0, 1.0, orthoM)
+        orthoM.into(o)
+
+        GLES30.glUseProgram(lineProgram)
+        GLES30.glUniformMatrix4fv(lMvp, 1, false, o, 0)
+        GLES30.glEnable(GLES30.GL_BLEND)
+        GLES30.glBlendFunc(GLES30.GL_SRC_ALPHA, GLES30.GL_ONE_MINUS_SRC_ALPHA)
+        GLES30.glDisable(GLES30.GL_DEPTH_TEST)
+
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, b.vbo)
+        GLES30.glEnableVertexAttribArray(lPos)
+        GLES30.glVertexAttribPointer(lPos, 3, GLES30.GL_FLOAT, false, 0, 0)
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, b.cbo)
+        GLES30.glEnableVertexAttribArray(lCol)
+        GLES30.glVertexAttribPointer(lCol, 4, GLES30.GL_FLOAT, false, 0, 0)
+        GLES30.glDrawArrays(GLES30.GL_LINE_STRIP, 0, n)
+        GLES30.glDisableVertexAttribArray(lPos)
+        GLES30.glDisableVertexAttribArray(lCol)
+
+        GLES30.glEnable(GLES30.GL_DEPTH_TEST)
+        GLES30.glDisable(GLES30.GL_BLEND)
+    }
+
+    private val orthoM = Mat4()
+
+    private fun newOverlayBuffers(): LineBuffers {
+        val ids = IntArray(2)
+        GLES30.glGenBuffers(2, ids, 0)
+        return LineBuffers(ids[0], ids[1], 0)
     }
 
     // ---- guides ---------------------------------------------------------
@@ -352,8 +441,19 @@ class SketchRenderer : GLSurfaceView.Renderer {
 
     fun removeStroke(s: Stroke): Unit = synchronized(strokes) { strokes.remove(s); release(s) }
 
+    /**
+     * Replace the stroke list, keeping the buffers of everything that stayed.
+     *
+     * Releasing all of them and re-uploading was fine when this was only called
+     * by undo. The eraser calls it on every pointer sample, and a drag across a
+     * drawing of two hundred curves was re-uploading all two hundred at 120Hz —
+     * the exact shape of the shader-relink bug the web build hit, in a
+     * different place. Only what actually left is released.
+     */
     fun setStrokes(list: List<Stroke>): Unit = synchronized(strokes) {
-        for (s in strokes) release(s)
+        val keep = java.util.IdentityHashMap<Stroke, Boolean>(list.size)
+        for (s in list) keep[s] = true
+        for (s in strokes) if (!keep.containsKey(s)) release(s)
         strokes.clear()
         strokes.addAll(list)
     }

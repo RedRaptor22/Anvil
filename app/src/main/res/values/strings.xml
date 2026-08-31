@@ -3,9 +3,22 @@
     <string name="app_name">Anvil</string>
     <string name="undo">Undo</string>
     <string name="redo">Redo</string>
-    <string name="clear">Clear sketch</string>
-    <string name="mode_draw">Draw</string>
-    <string name="mode_guide">Guide</string>
-    <string name="mode_flat">Flat guide</string>
+    <string name="clear">Clear</string>
+
+    <!-- tools, in the order the row shows them -->
+    <string name="tool_draw">Draw</string>
+    <string name="tool_erase">Erase</string>
+    <string name="tool_vacuum">Vacuum</string>
+    <string name="tool_smooth">Smooth</string>
+    <string name="tool_select">Select</string>
+    <string name="tool_lasso">Lasso</string>
+    <string name="tool_liquify">Liquify</string>
+    <string name="tool_guide">Guide</string>
+    <string name="tool_flat">Flat</string>
+
+    <string name="fill">Fill</string>
+    <string name="duplicate">Duplicate</string>
+    <string name="delete">Delete</string>
     <string name="close_guide">Close guide</string>
+    <string name="mirror">Mirror</string>
 </resources>

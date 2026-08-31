@@ -13,23 +13,32 @@ import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.Button
 import android.widget.FrameLayout
+import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.TextView
+import android.widget.Toast
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import art.plume.core.Camera
 import art.plume.core.Dedupe
+import art.plume.core.Editing
+import art.plume.core.Fill
 import art.plume.core.GuidePainting
 import art.plume.core.GuideScene
 import art.plume.core.Guides
 import art.plume.core.History
+import art.plume.core.Liquify
 import art.plume.core.LiveStroke
 import art.plume.core.MM
+import art.plume.core.Px
 import art.plume.core.Ray
 import art.plume.core.Rgba
+import art.plume.core.Selection
+import art.plume.core.Sketch
 import art.plume.core.Stabilizer
 import art.plume.core.Step
+import art.plume.core.StyleChange
 import art.plume.core.Stroke
 import art.plume.core.StrokePoint
 import art.plume.core.Tune
@@ -37,18 +46,18 @@ import art.plume.core.Vec3
 import art.plume.core.clamp
 
 /**
- * The shell: one GL surface, the gesture layer, and just enough chrome to draw
- * without a keyboard.
+ * The shell: one GL surface, the gesture layer, and a tool row.
  *
- * The controls here are deliberately the FLOOR, not the interface. A phone
- * wants bottom sheets and a radial menu rather than the desktop build's 58px
- * vertical rail, and designing that properly is its own piece of work — but a
- * build you cannot change brush size or undo in is a build nobody can judge, so
- * these five things exist now and will be replaced whole later.
+ * The chrome here is still the FLOOR, not the interface — a phone wants bottom
+ * sheets and a radial menu rather than a row of buttons, and that is Phase 6.
+ * What it does have to be is COMPLETE: every tool needs a way to reach it, or
+ * the tool may as well not be ported.
  *
- * Everything with an opinion in it — where a pixel lands in the world, how the
- * camera moves, what undo costs, how much the stabiliser lags — is in `:core`
- * and under test. This file is wiring.
+ * Everything with an opinion in it — where a pixel lands, how far an eraser
+ * reaches, what a pinch does to a curve — lives in `:core` and is under test.
+ * This file is wiring, and the one thing it is careful about is that each
+ * gesture becomes exactly ONE history step. A minute of pushing with Liquify
+ * should undo at once rather than a hundred times.
  */
 class MainActivity : Activity(), Gestures.Listener {
 
@@ -60,20 +69,18 @@ class MainActivity : Activity(), Gestures.Listener {
     private val history = History()
     private val stabilizer = Stabilizer()
     private val guides = GuideScene()
+    private val sketch = Sketch()
 
-    /** What the next stroke does. */
-    private enum class Mode { DRAW, GUIDE, FLAT }
-    private var mode = Mode.DRAW
+    private enum class Tool { DRAW, ERASE, VACUUM, SMOOTH, SELECT, LASSO, LIQUIFY, GUIDE, FLAT }
+    private var tool = Tool.DRAW
 
     /**
      * FACT (C.1, inferred): with no guide, the first stroke makes one. Kept as
-     * a flag because it is an inference rather than documented behaviour, and
-     * is the first thing to turn off if it proves wrong.
+     * a flag because it is an inference rather than documented behaviour.
      */
     private var autoGuide = true
 
-    /** The document: committed strokes, in draw order. */
-    private val doc = ArrayList<Stroke>()
+    private val liquifyCfg = Liquify.Settings()
 
     private val liveBuffer = LiveStroke()
     private var live: Stroke? = null
@@ -86,15 +93,25 @@ class MainActivity : Activity(), Gestures.Listener {
     private lateinit var undoButton: Button
     private lateinit var redoButton: Button
     private lateinit var sizeLabel: TextView
-    private lateinit var modeButton: Button
     private lateinit var guideButton: Button
+    private val toolButtons = HashMap<Tool, Button>()
 
     private val scratch = Vec3()
     private val penRay = Ray()
     private var spinning = false
-
-    /** Whether the gesture that just ended was an orbit; only an orbit coasts. */
     private var lastGestureOrbited = false
+
+    // ---- what a drag is doing --------------------------------------------
+
+    /** The document as it was when this drag began, for a one-step undo. */
+    private var dragStrokes: List<Stroke>? = null
+    private var dragPositions: List<List<Vec3>>? = null
+    private var dragTargets: List<Stroke>? = null
+    private var dragSelection: List<Stroke>? = null
+    private var sweep: Selection.Sweep? = null
+    private val lasso = ArrayList<Px>()
+    private var lastPen = Px(0.0, 0.0)
+    private var dragMoved = false
 
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
@@ -108,11 +125,11 @@ class MainActivity : Activity(), Gestures.Listener {
             override fun onHoverEvent(ev: MotionEvent): Boolean = gestures.onHoverEvent(ev)
 
             /*
-             * The camera's viewport has to be set from the UI thread, not from
-             * the renderer's onSurfaceChanged: this thread is the one that
+             * The camera's viewport is set from the UI thread, not from the
+             * renderer's onSurfaceChanged: this thread is the one that
              * unprojects pen samples, and a camera still holding the previous
-             * size puts every point of the first stroke after a rotation in the
-             * wrong place.
+             * size puts every point of the first stroke after a rotation in
+             * the wrong place.
              */
             override fun onSizeChanged(w: Int, h: Int, oldW: Int, oldH: Int) {
                 super.onSizeChanged(w, h, oldW, oldH)
@@ -122,12 +139,6 @@ class MainActivity : Activity(), Gestures.Listener {
         }.apply {
             setEGLContextClientVersion(3)
             setRenderer(renderer)
-            /*
-             * Render on demand. A sketchbook is still most of the time, and a
-             * continuous loop is the fastest way to flatten a phone battery —
-             * the one thing that needs frames of its own is release momentum,
-             * which drives them from a Choreographer callback while it decays.
-             */
             renderMode = GLSurfaceView.RENDERMODE_WHEN_DIRTY
         }
 
@@ -166,65 +177,27 @@ class MainActivity : Activity(), Gestures.Listener {
     }
 
     /**
-     * Android's Back is not a browser Back. It steps out of whatever is open —
-     * a sheet, then a selection — and only leaves the app when there is nothing
-     * left to close, which is what a person expects from the gesture.
+     * Android's Back steps OUT of whatever is open rather than leaving: a
+     * selection first, then an undo, and only then the app.
      */
     @Deprecated("Activity.onBackPressed")
     override fun onBackPressed() {
-        if (history.canUndo()) { history.undo(); surface.requestRender(); return }
+        if (sketch.selection.isNotEmpty()) { deselectAll(); return }
+        if (history.canUndo()) { history.undo(); refreshScene(); return }
         super.onBackPressed()
     }
 
-    // ---- the floor of an interface --------------------------------------
+    // ---- the floor of an interface ---------------------------------------
 
     private fun buildControls(): View {
         val bar = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.argb(210, 22, 22, 26))
-            setPadding(dp(10), dp(8), dp(10), dp(8))
+            setBackgroundColor(Color.argb(215, 20, 20, 24))
+            setPadding(dp(8), dp(6), dp(8), dp(6))
         }
 
-        val row = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        undoButton = Button(this).apply {
-            text = getString(R.string.undo)
-            setOnClickListener { history.undo(); surface.requestRender() }
-        }
-        redoButton = Button(this).apply {
-            text = getString(R.string.redo)
-            setOnClickListener { history.redo(); surface.requestRender() }
-        }
-        val clear = Button(this).apply {
-            text = getString(R.string.clear)
-            setOnClickListener { clearSketch() }
-        }
-        row.addView(undoButton); row.addView(redoButton); row.addView(clear)
-        bar.addView(row)
-
-        val guideRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        modeButton = Button(this).apply {
-            text = modeLabel()
-            setOnClickListener {
-                mode = when (mode) {
-                    Mode.DRAW -> Mode.GUIDE
-                    Mode.GUIDE -> Mode.FLAT
-                    Mode.FLAT -> Mode.DRAW
-                }
-                text = modeLabel()
-            }
-        }
-        guideButton = Button(this).apply {
-            text = getString(R.string.close_guide)
-            setOnClickListener { closeActiveGuide() }
-        }
-        guideRow.addView(modeButton); guideRow.addView(guideButton)
-        bar.addView(guideRow)
+        bar.addView(buildToolRow())
+        bar.addView(buildActionRow())
 
         sizeLabel = TextView(this).apply {
             setTextColor(Color.WHITE)
@@ -239,6 +212,9 @@ class MainActivity : Activity(), Gestures.Listener {
                     sizeMM = clamp(
                         Tune.BRUSH_MIN_MM + value, Tune.BRUSH_MIN_MM, Tune.BRUSH_MAX_MM,
                     )
+                    // Liquify's disc is set in pixels, and follows the brush so
+                    // there is only one size to think about
+                    liquifyCfg.size = camera.worldToPx(sizeMM * MM * 0.5) * 4
                     sizeLabel.text = sizeText()
                 }
                 override fun onStartTrackingTouch(sb: SeekBar?) {}
@@ -249,18 +225,98 @@ class MainActivity : Activity(), Gestures.Listener {
         bar.addView(size)
         bar.addView(buildSwatches())
 
-        val lp = FrameLayout.LayoutParams(
+        bar.layoutParams = FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
         ).apply { gravity = Gravity.BOTTOM }
-        bar.layoutParams = lp
 
         // keep the bar clear of the gesture pill and any display cutout
         ViewCompat.setOnApplyWindowInsetsListener(bar) { v, insets ->
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-            v.setPadding(dp(10) + bars.left, dp(8), dp(10) + bars.right, dp(8) + bars.bottom)
+            v.setPadding(dp(8) + bars.left, dp(6), dp(8) + bars.right, dp(6) + bars.bottom)
             insets
         }
         return bar
+    }
+
+    /** Nine tools do not fit across a phone, so the row scrolls. */
+    private fun buildToolRow(): View {
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val labels = listOf(
+            Tool.DRAW to R.string.tool_draw,
+            Tool.ERASE to R.string.tool_erase,
+            Tool.VACUUM to R.string.tool_vacuum,
+            Tool.SMOOTH to R.string.tool_smooth,
+            Tool.SELECT to R.string.tool_select,
+            Tool.LASSO to R.string.tool_lasso,
+            Tool.LIQUIFY to R.string.tool_liquify,
+            Tool.GUIDE to R.string.tool_guide,
+            Tool.FLAT to R.string.tool_flat,
+        )
+        for ((t, res) in labels) {
+            val b = Button(this).apply {
+                text = getString(res)
+                setOnClickListener { setTool(t) }
+            }
+            toolButtons[t] = b
+            row.addView(b)
+        }
+        return HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            addView(row)
+        }
+    }
+
+    private fun buildActionRow(): View {
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        undoButton = Button(this).apply {
+            text = getString(R.string.undo)
+            setOnClickListener { history.undo(); refreshScene() }
+        }
+        redoButton = Button(this).apply {
+            text = getString(R.string.redo)
+            setOnClickListener { history.redo(); refreshScene() }
+        }
+        guideButton = Button(this).apply {
+            text = getString(R.string.close_guide)
+            setOnClickListener { closeActiveGuide() }
+        }
+        row.addView(undoButton)
+        row.addView(redoButton)
+        row.addView(guideButton)
+        row.addView(
+            Button(this).apply {
+                text = getString(R.string.fill)
+                setOnClickListener { fillActiveGuide() }
+            },
+        )
+        row.addView(
+            Button(this).apply {
+                text = getString(R.string.duplicate)
+                setOnClickListener { duplicateSelection() }
+            },
+        )
+        row.addView(
+            Button(this).apply {
+                text = getString(R.string.mirror)
+                setOnClickListener { mirrorSelection() }
+            },
+        )
+        row.addView(
+            Button(this).apply {
+                text = getString(R.string.delete)
+                setOnClickListener { deleteSelection() }
+            },
+        )
+        row.addView(
+            Button(this).apply {
+                text = getString(R.string.clear)
+                setOnClickListener { clearSketch() }
+            },
+        )
+        return HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            addView(row)
+        }
     }
 
     private fun buildSwatches(): View {
@@ -275,46 +331,166 @@ class MainActivity : Activity(), Gestures.Listener {
             Rgba(0.55, 0.35, 0.75),
         )
         for (ink in inks) {
-            val swatch = View(this).apply {
-                background = GradientDrawable().apply {
-                    shape = GradientDrawable.OVAL
-                    setColor(
-                        Color.rgb(
-                            (ink.r * 255).toInt(), (ink.g * 255).toInt(), (ink.b * 255).toInt(),
-                        ),
-                    )
-                    setStroke(dp(1), Color.argb(120, 255, 255, 255))
-                }
-                layoutParams = LinearLayout.LayoutParams(dp(34), dp(34)).apply {
-                    marginEnd = dp(8)
-                }
-                setOnClickListener { color = ink }
-            }
-            row.addView(swatch)
+            row.addView(
+                View(this).apply {
+                    background = GradientDrawable().apply {
+                        shape = GradientDrawable.OVAL
+                        setColor(
+                            Color.rgb(
+                                (ink.r * 255).toInt(), (ink.g * 255).toInt(), (ink.b * 255).toInt(),
+                            ),
+                        )
+                        setStroke(dp(1), Color.argb(120, 255, 255, 255))
+                    }
+                    layoutParams = LinearLayout.LayoutParams(dp(30), dp(30)).apply {
+                        marginEnd = dp(8)
+                    }
+                    setOnClickListener { applyColorToSelectionOrBrush(ink) }
+                },
+            )
         }
         return row
     }
 
-    private fun sizeText(): String = "Brush ${sizeMM.toInt()} mm"
-
-    private fun modeLabel(): String = when (mode) {
-        Mode.DRAW -> getString(R.string.mode_draw)
-        Mode.GUIDE -> getString(R.string.mode_guide)
-        Mode.FLAT -> getString(R.string.mode_flat)
+    private fun setTool(t: Tool) {
+        tool = t
+        refreshControls()
     }
+
+    private fun sizeText(): String = "Brush ${sizeMM.toInt()} mm"
 
     private fun refreshControls() {
         undoButton.isEnabled = history.canUndo()
         redoButton.isEnabled = history.canRedo()
         guideButton.isEnabled = guides.active != null
+        for ((t, b) in toolButtons) {
+            b.alpha = if (t == tool) 1f else 0.55f
+        }
     }
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
 
-    // ---- drawing --------------------------------------------------------
+    private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+
+    // ---- the guide mask, which every tool honours -------------------------
+
+    /**
+     * FACT (A.9): a point the active guide hides from where you are standing is
+     * protected from the eraser and from selection alike.
+     */
+    private fun mask(): (Vec3) -> Boolean {
+        val g = guides.active ?: return Editing.NO_MASK
+        val eye = camera.eye.copy()
+        return { p -> GuidePainting.isMasked(g, eye, p) }
+    }
+
+    // ---- one gesture, one history step ------------------------------------
 
     override fun onDrawBegin(x: Float, y: Float, pressure: Float, tiltAz: Float, tiltAlt: Float) {
         camera.killSpin()
+        dragMoved = false
+        lastPen = Px(x.toDouble(), y.toDouble())
+
+        when (tool) {
+            Tool.DRAW, Tool.GUIDE, Tool.FLAT -> beginStroke(x, y, pressure, tiltAz)
+
+            Tool.ERASE, Tool.VACUUM -> {
+                dragStrokes = ArrayList(sketch.strokes)
+                stepDestructive(x.toDouble(), y.toDouble())
+            }
+
+            Tool.SMOOTH -> {
+                dragTargets = ArrayList(sketch.strokes)
+                dragPositions = Editing.snapshot(dragTargets!!)
+                stepSmooth(x.toDouble(), y.toDouble())
+            }
+
+            Tool.LIQUIFY -> {
+                val sel = sketch.selection
+                if (sel.isEmpty()) { toast("Select the curves to liquify first"); return }
+                dragTargets = sel
+                dragPositions = Editing.snapshot(sel)
+            }
+
+            Tool.SELECT -> {
+                dragSelection = sketch.selection
+                sweep = Selection.beginSweep(Px(x.toDouble(), y.toDouble()))
+            }
+
+            Tool.LASSO -> {
+                dragSelection = sketch.selection
+                lasso.clear()
+                Selection.appendLasso(lasso, x.toDouble(), y.toDouble())
+                pushLasso()
+            }
+        }
+        surface.requestRender()
+    }
+
+    override fun onDrawMove(x: Float, y: Float, pressure: Float, tiltAz: Float, tiltAlt: Float) {
+        dragMoved = true
+        when (tool) {
+            Tool.DRAW, Tool.GUIDE, Tool.FLAT -> moveStroke(x, y, pressure, tiltAz)
+            Tool.ERASE, Tool.VACUUM -> stepDestructive(x.toDouble(), y.toDouble())
+            Tool.SMOOTH -> stepSmooth(x.toDouble(), y.toDouble())
+            Tool.LIQUIFY -> {
+                dragTargets?.let {
+                    Liquify.step(
+                        it, camera, liquifyCfg,
+                        lastPen.x, lastPen.y, x.toDouble(), y.toDouble(), mask(),
+                    )
+                    refreshStrokeMeshes(it)
+                }
+            }
+            Tool.SELECT -> sweep?.step(sketch, camera, x.toDouble(), y.toDouble(), mask())
+            Tool.LASSO -> {
+                if (Selection.appendLasso(lasso, x.toDouble(), y.toDouble())) pushLasso()
+            }
+        }
+        lastPen = Px(x.toDouble(), y.toDouble())
+        surface.requestRender()
+    }
+
+    override fun onDrawEnd() {
+        when (tool) {
+            Tool.DRAW, Tool.GUIDE, Tool.FLAT -> endStroke()
+            Tool.ERASE, Tool.VACUUM -> commitDocumentChange(
+                if (tool == Tool.ERASE) "Erase" else "Vacuum",
+            )
+            Tool.SMOOTH, Tool.LIQUIFY -> commitPointChange(
+                if (tool == Tool.SMOOTH) "Smooth" else "Liquify",
+            )
+            Tool.SELECT -> endSelect()
+            Tool.LASSO -> endLasso()
+        }
+        clearDrag()
+        surface.requestRender()
+    }
+
+    override fun onDrawCancel() {
+        // put back anything the drag had already changed
+        dragPositions?.let { snap -> dragTargets?.let { Editing.restore(it, snap) } }
+        dragStrokes?.let { setDocument(it) }
+        dragSelection?.let { sketch.selectOnly(it) }
+        synchronized(liveBuffer) { live = null }
+        renderer.setLive(null)
+        clearDrag()
+        refreshScene()
+    }
+
+    private fun clearDrag() {
+        dragStrokes = null
+        dragPositions = null
+        dragTargets = null
+        dragSelection = null
+        sweep = null
+        lasso.clear()
+        renderer.setOverlay(null)
+    }
+
+    // ---- drawing -----------------------------------------------------------
+
+    private fun beginStroke(x: Float, y: Float, pressure: Float, tiltAz: Float) {
         val s = Stroke(brush = brush, color = color, baseRadius = sizeMM * MM * 0.5)
         stabilizer.reset()
         stabilizer.next(x.toDouble(), y.toDouble())
@@ -324,70 +500,271 @@ class MainActivity : Activity(), Gestures.Listener {
             if (appendAt(s, stabilizer.x, stabilizer.y, pressure, tiltAz)) liveBuffer.append(s)
         }
         renderer.setLive(liveBuffer)
-        surface.requestRender()
     }
 
-    override fun onDrawMove(x: Float, y: Float, pressure: Float, tiltAz: Float, tiltAlt: Float) {
+    private fun moveStroke(x: Float, y: Float, pressure: Float, tiltAz: Float) {
         val s = live ?: return
-        // FACT (C.2): Stable Stroke smooths the INPUT, before it is projected,
-        // so the amount means the same thing at every zoom level
+        // FACT (C.2): Stable Stroke smooths the INPUT, before it is projected
         if (!stabilizer.next(x.toDouble(), y.toDouble())) return
         synchronized(liveBuffer) {
             if (appendAt(s, stabilizer.x, stabilizer.y, pressure, tiltAz)) liveBuffer.append(s)
         }
-        surface.requestRender()
     }
 
-    override fun onDrawEnd() {
+    private fun endStroke() {
         val s = synchronized(liveBuffer) { live.also { live = null } } ?: return
         renderer.setLive(null)
-
-        // the same order the web build commits in: clean the samples, then build
         Dedupe.clean(s)
-        if (s.pts.size < 2) { surface.requestRender(); return }
+        if (s.pts.size < 2) return
 
-        /*
-         * A guide is built from the stroke's WORLD points, which for a stroke
-         * drawn with no guide active lie on the camera-facing draw plane — so
-         * the profile is the shape as drawn, in the plane it was drawn on.
-         */
-        val wantsGuide = mode != Mode.DRAW ||
-            (autoGuide && guides.active == null && doc.isEmpty())
-        if (wantsGuide) makeGuideFrom(s) else commit(s)
+        val wantsGuide = tool != Tool.DRAW ||
+            (autoGuide && guides.active == null && sketch.strokes.isEmpty())
+        if (wantsGuide) makeGuideFrom(s) else commitStroke(s)
     }
-
-    override fun onDrawCancel() {
-        synchronized(liveBuffer) { live = null }
-        renderer.setLive(null)
-        surface.requestRender()
-    }
-
-    // ---- guides ---------------------------------------------------------
 
     /**
-     * Turn the stroke just drawn into a guide.
-     *
-     * FACT (C.1, inferred): with nothing on the page and no guide, the first
-     * stroke makes one — which is how Feather gets you onto a surface without
-     * a mode switch. An explicit Guide mode does the same thing on demand.
+     * Screen to world. With a guide active the pen paints ONTO it; otherwise
+     * the point lands on a camera-facing plane through the pivot, which is the
+     * web build's `refreshDrawPlane()` with no argument.
      */
+    private fun appendAt(
+        s: Stroke, px: Double, py: Double, pressure: Float, az: Float,
+    ): Boolean {
+        val active = guides.active
+        if (active != null && tool == Tool.DRAW) {
+            camera.rayFrom(px, py, penRay)
+            val hit = GuidePainting.project(active, penRay, clampOffSurface = true) ?: return false
+            s.pts.lastOrNull()?.let { if (it.p.distanceTo(hit.point) < 0.0005) return false }
+            s.pts.add(
+                StrokePoint(
+                    hit.point.copy(), pressure = pressure.toDouble(), roll = az.toDouble(),
+                    nrm = hit.normal.copy(),
+                ),
+            )
+            s.guideId = active.id
+            return true
+        }
+
+        val p = camera.planePoint(px, py, scratch) ?: return false
+        s.pts.lastOrNull()?.let { if (it.p.distanceTo(p) < 0.0005) return false }
+        s.pts.add(StrokePoint(p.copy(), pressure = pressure.toDouble(), roll = az.toDouble()))
+        return true
+    }
+
+    private fun commitStroke(s: Stroke) {
+        history.run(
+            Step(
+                "Draw", cost = s.pts.size,
+                onRedo = { sketch.add(s); refreshScene() },
+                onUndo = { sketch.remove(s); refreshScene() },
+            ),
+        )
+    }
+
+    // ---- the destructive tools ---------------------------------------------
+
+    private fun stepDestructive(x: Double, y: Double) {
+        val m = mask()
+        if (tool == Tool.ERASE) {
+            Editing.eraseScreen(sketch, camera, x, y, camera.worldToPx(sizeMM * MM * 0.5), m)
+        } else {
+            Editing.vacuumAt(sketch, camera, x, y, m)
+        }
+        renderer.setStrokes(sketch.strokes)
+    }
+
+    private fun stepSmooth(x: Double, y: Double) {
+        val rPx = maxOf(12.0, camera.worldToPx(sizeMM * MM * 0.5) * 3)
+        val touched = Editing.smoothStep(
+            sketch, camera, x, y, rPx, mask(),
+            reprojectOnto = { st -> guides.byId(st.guideId ?: -1)?.surface?.mesh },
+        )
+        refreshStrokeMeshes(touched)
+    }
+
+    /**
+     * A whole drag becomes one step, by swapping the document between what it
+     * was and what it became. Erasing a line in one sweep should undo in one
+     * tap, not in fifty.
+     */
+    private fun commitDocumentChange(label: String) {
+        val before = dragStrokes ?: return
+        val after = ArrayList(sketch.strokes)
+        if (before.size == after.size && before == after) return
+        history.push(
+            Step(
+                label, cost = before.sumOf { it.pts.size },
+                onRedo = { setDocument(after) },
+                onUndo = { setDocument(before) },
+            ),
+        )
+        refreshScene()
+    }
+
+    /** The same, for a tool that nudges points rather than adding or removing. */
+    private fun commitPointChange(label: String) {
+        val targets = dragTargets ?: return
+        val before = dragPositions ?: return
+        if (!dragMoved) return
+        val after = Editing.snapshot(targets)
+        history.push(
+            Step(
+                label, cost = targets.sumOf { it.pts.size },
+                onRedo = { Editing.restore(targets, after); refreshScene() },
+                onUndo = { Editing.restore(targets, before); refreshScene() },
+            ),
+        )
+        refreshScene()
+    }
+
+    // ---- selection ----------------------------------------------------------
+
+    private fun endSelect() {
+        val before = dragSelection ?: return
+        // a press that never moved is a tap; anything else was a sweep
+        if (!dragMoved) Selection.tapSelect(sketch, camera, lastPen.x, lastPen.y, true, mask())
+        commitSelectionChange(if (dragMoved) "Sweep select" else "Select", before)
+    }
+
+    private fun endLasso() {
+        val before = dragSelection ?: return
+        renderer.setOverlay(null)
+        if (lasso.size < 3) return
+        val hits = Selection.lassoSelect(sketch, camera, lasso, mask())
+        toast(if (hits.isEmpty()) "Nothing inside the loop" else "${hits.size} selected")
+        commitSelectionChange("Lasso select", before)
+    }
+
+    private fun commitSelectionChange(label: String, before: List<Stroke>) {
+        val after = sketch.selection
+        if (after == before) return
+        history.push(
+            Step(
+                label,
+                onRedo = { sketch.selectOnly(after); refreshScene() },
+                onUndo = { sketch.selectOnly(before); refreshScene() },
+            ),
+        )
+        refreshControls()
+    }
+
+    private fun deselectAll() {
+        val before = sketch.selection
+        if (before.isEmpty()) return
+        history.run(
+            Step(
+                "Deselect",
+                onRedo = { sketch.clearSelection(); refreshScene() },
+                onUndo = { sketch.selectOnly(before); refreshScene() },
+            ),
+        )
+    }
+
+    private fun pushLasso() {
+        val f = FloatArray(lasso.size * 2)
+        for (i in lasso.indices) { f[i * 2] = lasso[i].x.toFloat(); f[i * 2 + 1] = lasso[i].y.toFloat() }
+        renderer.setOverlay(f)
+    }
+
+    // ---- actions on a selection ---------------------------------------------
+
+    private fun duplicateSelection() {
+        val before = sketch.selection
+        if (before.isEmpty()) { toast("Nothing selected"); return }
+        val copies = Selection.duplicate(sketch, camera)
+        pushReversible("Duplicate", copies, before)
+    }
+
+    private fun mirrorSelection() {
+        val before = sketch.selection
+        if (before.isEmpty()) { toast("Nothing selected"); return }
+        val copies = Selection.mirroredDuplicate(sketch, "x")
+        pushReversible("Mirrored duplicate", copies, before)
+    }
+
+    private fun pushReversible(label: String, copies: List<Stroke>, before: List<Stroke>) {
+        history.push(
+            Step(
+                label, cost = copies.sumOf { it.pts.size },
+                onRedo = {
+                    for (c in copies) sketch.add(c)
+                    sketch.selectOnly(copies); refreshScene()
+                },
+                onUndo = {
+                    for (c in copies) sketch.remove(c)
+                    sketch.selectOnly(before); refreshScene()
+                },
+            ),
+        )
+        toast("${copies.size} duplicated")
+        refreshScene()
+    }
+
+    private fun deleteSelection() {
+        val doomed = sketch.selection
+        if (doomed.isEmpty()) { toast("Nothing selected"); return }
+        val before = ArrayList(sketch.strokes)
+        history.run(
+            Step(
+                "Delete", cost = doomed.sumOf { it.pts.size },
+                onRedo = {
+                    for (s in doomed) sketch.remove(s)
+                    sketch.clearSelection(); refreshScene()
+                },
+                onUndo = { setDocument(before); sketch.selectOnly(doomed); refreshScene() },
+            ),
+        )
+    }
+
+    private fun applyColorToSelectionOrBrush(ink: Rgba) {
+        color = ink
+        val sel = sketch.selection
+        if (sel.isEmpty()) return
+        // FACT: the brush panel restyles a live selection rather than only
+        // setting what the next stroke will be
+        val was = sel.map { it.color }
+        history.run(
+            Step(
+                "Recolour",
+                onRedo = {
+                    Selection.restyle(sel, StyleChange(color = ink))
+                    refreshScene()
+                },
+                onUndo = {
+                    for (i in sel.indices) sel[i].color = was[i]
+                    refreshScene()
+                },
+            ),
+        )
+    }
+
+    private fun clearSketch() {
+        if (sketch.strokes.isEmpty()) return
+        val before = ArrayList(sketch.strokes)
+        history.run(
+            Step(
+                "Clear", cost = before.sumOf { it.pts.size },
+                onRedo = { setDocument(emptyList()); refreshScene() },
+                onUndo = { setDocument(before); refreshScene() },
+            ),
+        )
+    }
+
+    // ---- guides --------------------------------------------------------------
+
     private fun makeGuideFrom(s: Stroke) {
         val pts = s.pts.map { it.p.copy() }
         val fwd = Vec3()
         camera.forward(fwd)
-        // only `right` matters here: it fixes which way the guide's u axis
-        // runs, so "across the guide" matches across the glass
+        // only `right` matters: it fixes which way the guide's u axis runs, so
+        // "across the guide" matches across the glass
         val right = Vec3(); val up = Vec3(); val back = Vec3()
         camera.basis(right, up, back)
 
-        val g = when (mode) {
-            Mode.FLAT -> Guides.createFlatFromStroke(pts, fwd, right)
+        val g = when (tool) {
+            Tool.FLAT -> Guides.createFlatFromStroke(pts, fwd, right)
             else -> Guides.createFromStroke(pts, fwd, right, camera.radius)
-        } ?: run {
-            // nothing usable — keep the stroke rather than losing the gesture
-            commit(s)
-            return
-        }
+        } ?: run { commitStroke(s); return }
 
         val previous = guides.active
         history.run(
@@ -397,7 +774,7 @@ class MainActivity : Activity(), Gestures.Listener {
                 onUndo = { guides.setActive(previous); pushGuides() },
             ),
         )
-        if (mode != Mode.DRAW) { mode = Mode.DRAW; modeButton.text = modeLabel() }
+        if (tool != Tool.DRAW) setTool(Tool.DRAW)
     }
 
     private fun closeActiveGuide() {
@@ -411,107 +788,66 @@ class MainActivity : Activity(), Gestures.Listener {
         )
     }
 
+    private fun fillActiveGuide() {
+        val g = guides.active ?: run { toast("Select a guide to fill"); return }
+        val proto = Stroke(brush = brush, color = color, baseRadius = sizeMM * MM * 0.5)
+        when (val r = Fill.fillGuide(g, proto)) {
+            is Fill.Result.Refused -> toast(r.reason)
+            is Fill.Result.Filled -> {
+                history.run(
+                    Step(
+                        "Fill", cost = r.strokes.sumOf { it.pts.size },
+                        onRedo = { for (s in r.strokes) sketch.add(s); refreshScene() },
+                        onUndo = { for (s in r.strokes) sketch.remove(s); refreshScene() },
+                    ),
+                )
+                toast("Filled with ${r.strokes.size} strokes")
+            }
+        }
+    }
+
     private fun pushGuides() {
         renderer.setGuides(guides.drawList())
         refreshControls()
         surface.requestRender()
     }
 
-    /**
-     * Screen to world.
-     *
-     * With no guide active this drops the point on a camera-facing plane
-     * through the pivot — the web build's `refreshDrawPlane()` with no
-     * argument. Projecting onto an actual guide surface is Phase 2, and belongs
-     * in `:core` so both builds share it.
-     */
-    private fun appendAt(
-        s: Stroke, px: Double, py: Double, pressure: Float, az: Float,
-    ): Boolean {
-        /*
-         * With a guide active the pen paints ONTO it: the sample is a ray from
-         * the eye through the pixel, met with the surface. Off the edge it
-         * clamps back to the guide's nearest point, which is what the Clamp
-         * setting already promises.
-         */
-        val active = guides.active
-        if (active != null && mode == Mode.DRAW) {
-            camera.rayFrom(px, py, penRay)
-            val hit = GuidePainting.project(active, penRay, clampOffSurface = true)
-            if (hit != null) {
-                s.pts.lastOrNull()?.let { if (it.p.distanceTo(hit.point) < 0.0005) return false }
-                s.pts.add(
-                    StrokePoint(
-                        hit.point.copy(), pressure = pressure.toDouble(), roll = az.toDouble(),
-                        nrm = hit.normal.copy(),
-                    ),
-                )
-                s.guideId = active.id
-                return true
-            }
-            return false
-        }
+    // ---- keeping the screen in step -------------------------------------------
 
-        val p = camera.planePoint(px, py, scratch) ?: return false
-        // a second gate in WORLD units: two samples the tube could not show
-        // apart are one sample, however far apart they were on screen
-        s.pts.lastOrNull()?.let { if (it.p.distanceTo(p) < 0.0005) return false }
-        s.pts.add(StrokePoint(p.copy(), pressure = pressure.toDouble(), roll = az.toDouble()))
-        return true
+    private fun setDocument(list: List<Stroke>) {
+        sketch.clear()
+        for (s in list) sketch.add(s)
     }
 
-    private fun commit(s: Stroke) {
-        history.run(
-            Step(
-                "Draw", cost = s.pts.size,
-                onRedo = { doc.add(s); renderer.addStroke(s); surface.requestRender() },
-                onUndo = { doc.remove(s); renderer.removeStroke(s); surface.requestRender() },
-            ),
-        )
+    private fun refreshScene() {
+        renderer.setStrokes(sketch.strokes)
+        refreshControls()
+        surface.requestRender()
     }
 
-    private fun clearSketch() {
-        if (doc.isEmpty()) return
-        val removed = ArrayList(doc)
-        history.run(
-            Step(
-                "Clear", cost = removed.sumOf { it.pts.size },
-                onRedo = {
-                    doc.clear(); renderer.setStrokes(doc); surface.requestRender()
-                },
-                onUndo = {
-                    doc.clear(); doc.addAll(removed)
-                    renderer.setStrokes(doc); surface.requestRender()
-                },
-            ),
-        )
+    /** Points moved in place, so the meshes built from them are stale. */
+    private fun refreshStrokeMeshes(list: List<Stroke>) {
+        for (s in list) renderer.invalidate(s)
+        surface.requestRender()
     }
 
-    // ---- camera ---------------------------------------------------------
+    // ---- camera ---------------------------------------------------------------
 
     override fun onCamera(dx: Float, dy: Float, dScale: Float, dRotate: Float, fingers: Int) {
         camera.killSpin()
         lastGestureOrbited = fingers < 3
-        if (lastGestureOrbited) {
-            camera.orbitBy(dx.toDouble(), dy.toDouble())
-        } else {
-            camera.panBy(dx.toDouble(), dy.toDouble())
-        }
-        // zoom and twist ride along with either, which is how every map and
-        // photo viewer on the platform behaves
+        if (lastGestureOrbited) camera.orbitBy(dx.toDouble(), dy.toDouble())
+        else camera.panBy(dx.toDouble(), dy.toDouble())
         if (dScale > 0f) camera.zoomBy(1.0 / dScale)
         if (dRotate != 0f) camera.rollBy(dRotate.toDouble())
         pushCamera()
     }
 
     override fun onCameraEnd(dx: Float, dy: Float) {
-        // a flick keeps turning after the fingers leave, then decays. Only an
-        // orbit coasts: a pan that kept sliding after release would drift the
-        // pivot away from whatever you had just lined up
+        // only an orbit coasts: a pan that kept sliding would drift the pivot
+        // away from whatever you had just lined up
         if (!lastGestureOrbited) return
-        camera.addSpin(
-            -dx.toDouble() * Tune.ORBIT_PER_PX, -dy.toDouble() * Tune.ORBIT_PER_PX,
-        )
+        camera.addSpin(-dx.toDouble() * Tune.ORBIT_PER_PX, -dy.toDouble() * Tune.ORBIT_PER_PX)
         if (camera.spinning) startSpin()
     }
 
