@@ -27,7 +27,7 @@ someone's phone drawing differently.
 |---|---|---|
 | language | ES5 JavaScript | Kotlin |
 | renderer | Three.js r128 (WebGL) | OpenGL ES 3.0, direct |
-| tests | 584 in-browser checks | 165 JVM unit tests |
+| tests | 584 in-browser checks | 200 JVM unit tests |
 | ships as | a URL | an APK |
 
 ## Modules
@@ -69,7 +69,7 @@ echo "sdk.dir=/path/to/Android/sdk" > local.properties
 
 ## What actually works
 
-Verified by `./gradlew :core:test` — 165 tests, all passing:
+Verified by `./gradlew :core:test` — 200 tests, all passing:
 
 - **Rotation-minimising frames** by double reflection (Wang et al. 2008), the
   same algorithm as the web build. Orthonormal along a helix to 1e-9, finite and
@@ -120,6 +120,15 @@ Verified by `./gradlew :core:test` — 165 tests, all passing:
   row count UP, because rounding down leaves a groove down every seam, and
   breaks a row into separate strokes where it leaves the shape and comes back.
   Draw Shape refuses to close an arc into the circle it happens to fit.
+- **The document format**, transcribed field for field from the web build's so a
+  sketch opens in both. A missing tangent writes nulls rather than zeros, a v1
+  file with no group list still opens, and the sections this build does not
+  model yet — the light, the post effects — travel through untouched rather than
+  being silently dropped.
+- **Export and import.** OBJ and STL in millimetres because neither format
+  declares a unit; glTF in metres because it does. The binary STL header
+  deliberately avoids starting with "solid", or a sniffing reader takes it for
+  ASCII. glTF colour is converted to linear, because `baseColorFactor` is.
 - **Bend and Loft.** A bent guide follows the stroke whichever way it was drawn
   — four primitives are bent along three directions each and checked to lean the
   way the pen went, because the web build's version deformed along local +X
@@ -178,21 +187,27 @@ rather than onto the screen plane, clamping back to the nearest point if you
 run off the edge.
 
 A scrolling tool row reaches draw, erase, vacuum, smooth, select, lasso,
-liquify and the two guide kinds; beside it, fill, duplicate, mirror and delete.
-Every gesture undoes in one step. There is no brush picker, no transform gizmo
-and no file handling yet — that is the current state, not a fault. Artifacts
-expire after 90 days.
+liquify and the two guide kinds; beside it, fill, duplicate, mirror, delete,
+save, open and export. Every gesture undoes in one step, and the sketch
+autosaves — close the app and it comes back.
+
+There is no brush picker and no transform gizmo yet — that is the current
+state, not a fault. Artifacts expire after 90 days.
 
 ## Not yet ported
 
 Roughly in the order they matter:
 
-1. **Files** — save and load, and the same format the web build reads. Until a
-   sketch can move between the two, "measures identically in both builds" is
-   untested.
-2. **A transform gizmo**, which is the one editing tool with no touch
+1. **Opening an Anvil file in the browser, and a Pl file on the phone.** The
+   format is written to match and the tests round-trip it, but nothing has yet
+   carried a sketch between the two builds. That is the check the whole format
+   exists for.
+2. **Lighting and the render pass** — the key light, toon banding, depth of
+   field, and with them the PNG snapshot and image references that Phase 4
+   could not finish.
+3. **A transform gizmo**, which is the one editing tool with no touch
    equivalent yet.
-3. **The interface.** The bottom bar is a floor, not a design. Deliberately not
+4. **The interface.** The bottom bar is a floor, not a design. Deliberately not
    transliterated: a phone wants a bottom sheet and a radial menu, not the
    desktop's 58px vertical rail.
 3. Document save/load, export (OBJ/STL/glTF), lighting controls, the post pass,

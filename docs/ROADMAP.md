@@ -5,7 +5,7 @@ genuinely depends on what. Each phase ends with something you can hold in your
 hand — not a milestone on paper — and each one's logic goes into the tested
 core before anything draws it.
 
-**62 items · 38 complete · ~10,800 lines of web build to port · ~65% of it is
+**62 items · 45 complete · ~10,800 lines of web build to port · ~65% of it is
 pure logic that transfers with tests.**
 
 ---
@@ -181,22 +181,43 @@ Three things the tests turned up:
 
 ---
 
-## Phase 04 — Files and interchange
+## Phase 04 — Files and interchange `7 OF 9`
 
 *Sketches that survive, and open in both builds.*
 
-- [ ] `.plume.json` serialize and restore — **the same format** as `doc.js`
-- [ ] Autosave to device storage (IndexedDB → Room or files)
-- [ ] Storage Access Framework: open and save
-- [ ] Export OBJ + MTL — `objSource`
-- [ ] Export STL, binary and ASCII — `stlBuffer`
-- [ ] Export glTF 2.0, embedded buffer — `gltfSource`
-- [ ] Export PNG snapshot
-- [ ] Import OBJ and STL as model guides — `parseOBJ`, `parseSTL`
-- [ ] Image references, each with its own layer — `addReference`
+- [x] `.plume.json` serialize and restore — **the same format** as `doc.js`
+- [x] Autosave to device storage — debounced, and forced on pause
+- [x] Storage Access Framework: open and save
+- [x] Export OBJ + MTL — `objSource`
+- [x] Export STL, binary and ASCII — `stlBuffer`
+- [x] Export glTF 2.0, embedded buffer — `gltfSource`
+- [ ] Export PNG snapshot — needs a framebuffer read, which is Phase 5's territory
+- [x] Import OBJ and STL as model guides — `parseOBJ`, `parseSTL`
+- [ ] Image references, each with its own layer — `addReference` (needs texturing, Phase 5)
 
 **Done when:** a sketch made on the phone opens in the browser and back again,
 with geometry matching to the format's own precision.
+
+**Where it stands.** Seven of nine. The format is transcribed field for field
+from `doc.js` rather than invented, which is the whole point of it — until a
+sketch can move between the builds, "the same sketch measures identically in
+both" has been an unchecked claim since Phase 2. 200 core tests, up from 165.
+
+The **done when** is still not proven, and this is the honest limit: every test
+here round-trips through *this* build's own reader. Nothing has yet opened an
+Anvil file in the browser or a Pl file on the phone. The format is transcribed
+carefully and the tests cover the traps — null tangents rather than zeros, a v1
+file with no group list, the sections this build does not model — but a
+cross-build check needs someone to do it with both in front of them.
+
+The two open items both want a render pass rather than logic: a PNG snapshot
+needs a framebuffer read, and image references need texturing. Both belong with
+Phase 5.
+
+What the units taught: **OBJ and STL are millimetres, glTF is metres**, and
+getting it backwards hands Blender a sketch a thousand times too big with
+nothing in the file to say so. There is a test that measures a 100 mm line
+coming out as 100 in one path and 0.1 in the other.
 
 ---
 
