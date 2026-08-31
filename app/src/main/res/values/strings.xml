@@ -44,10 +44,6 @@
 
     <!-- tools whose behaviour is not ported yet: the button exists and says
          so rather than doing nothing. -->
-    <string name="not_yet_shape">Shape snapping is not wired to the pen yet</string>
-    <string name="not_yet_bend">Bend needs a guide redraw pass — not wired yet</string>
-    <string name="not_yet_loft">Loft needs two or more selected curves — not wired yet</string>
-    <string name="not_yet_prim">Primitives picker not wired yet</string>
     <string name="not_yet_pressure">Pressure curve settings not wired yet</string>
     <string name="not_yet_help">Walkthrough not ported yet</string>
     <string name="not_yet_colour_wheel">The colour wheel is not built yet</string>
@@ -76,6 +72,29 @@
     <string name="opt_pixel">Pixel</string>
     <string name="not_yet_groups">The groups panel is not built yet. Grouping, hiding and reordering all work in the engine and are under test; only the list is missing.</string>
     <string name="not_yet_import">Importing a photo or a model to trace over is not wired up yet. OBJ and STL both read, and an imported mesh becomes a guide you can paint on.</string>
+
+    <!-- the staging bar -->
+    <string name="done">Done</string>
+    <string name="cancel">Cancel</string>
+    <string name="tension">Tension</string>
+    <string name="taper">Taper</string>
+    <string name="segments">Segments</string>
+    <string name="prim_cube">Cube</string>
+    <string name="prim_pyramid">Pyr</string>
+    <string name="prim_sphere">Sph</string>
+    <string name="prim_torus">Torus</string>
+    <string name="prim_tube">Tube</string>
+
+    <!-- the four tools -->
+    <string name="bend_needs_guide">Bend needs an active guide</string>
+    <string name="loft_needs_two">Select two or more curves to loft</string>
+    <string name="loft_made">Loft guide created</string>
+    <string name="prim_made">Primitive guide created</string>
+    <string name="shape_profile"> profile</string>
+    <string name="shape_sweep"> sweep</string>
+    <string name="shape_circle">Circle%1$s — drag to size it</string>
+    <string name="shape_line">Straight%1$s — drag the end</string>
+    <string name="shape_curve">Smoothed%1$s — drag to bend it</string>
 
     <string name="nothing_under_that">Nothing under that</string>
     <string name="nothing_to_export">Nothing to export</string>

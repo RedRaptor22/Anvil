@@ -99,6 +99,12 @@ class Chrome(private val act: Activity, val t: Tokens) {
     var onPickBackground: () -> Unit = {}
     var onPickLightColour: () -> Unit = {}
 
+    /** The staging bar: Loft's tension, a primitive's segments and taper. */
+    var onStageValue: (which: Int, value: Double) -> Unit = { _, _ -> }
+    var onPrimKind: (String) -> Unit = {}
+    var onStageDone: () -> Unit = {}
+    var onStageCancel: () -> Unit = {}
+
     val root = FrameLayout(act)
 
     // ---- state the chrome renders ----------------------------------------
@@ -113,6 +119,9 @@ class Chrome(private val act: Activity, val t: Tokens) {
     private var guideOpacity = 0.42
     private var selectionCount = 0
     private var compact = false
+
+    /** What the staging bar is showing, if anything. */
+    private var staging: Staging? = null
 
     /*
      * The Scene tab's model. Held here and pushed back by setEnvironment so a
@@ -171,6 +180,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
     private val brushTiles = HashMap<String, IcoButton>()
     private val icons = HashMap<String, IcoButton>()
     private val dockButtons = HashMap<String, TextButton>()
+    private val primButtons = HashMap<String, TextButton>()
 
     /* Declared up here, not beside sliderRow: init{} builds the popover, and a
        property initialiser that runs after init{} would still be null then. */
@@ -200,6 +210,15 @@ class Chrome(private val act: Activity, val t: Tokens) {
     private lateinit var pixelVal: DragValue
     private lateinit var bgSwatch: View
     private lateinit var lightSwatch: View
+    private lateinit var stageBar: LinearLayout
+    private lateinit var stageRow2: LinearLayout
+    private lateinit var primKinds: LinearLayout
+    private lateinit var stageLabel: TextView
+    private lateinit var stageLabel2: TextView
+    private lateinit var stageSlider: HSlider
+    private lateinit var stageSlider2: HSlider
+    private lateinit var stageValue: TextView
+    private lateinit var stageValue2: TextView
 
     /** `POPOVERS` in ui.js: only one of these is ever open. */
     private val popovers = ArrayList<View>()
@@ -438,6 +457,104 @@ class Chrome(private val act: Activity, val t: Tokens) {
         guideBar.addView(ico("eye", Action.GUIDE_SAVE, small = true))
         guideBar.addView(ico("close", Action.GUIDE_CLOSE, small = true))
         ctxBar.addView(guideBar)
+
+        /*
+         * `#ctxSlider` — the staging strip. Loft and Primitives both build a
+         * guide you are still adjusting, so the bar grows a slider or two and a
+         * Done/Cancel pair rather than committing on the first tap. The guide
+         * bar and this are mutually exclusive: you are either editing a live
+         * guide or staging a new one.
+         */
+        stageBar = LinearLayout(act).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            visibility = View.GONE
+        }
+        stageBar.addView(divider(act, t))
+        stageLabel = lab("")
+        stageBar.addView(stageLabel)
+        stageSlider = HSlider(act, t, 0.0, 1.0) { v -> onStageValue(0, v); refresh() }
+        stageSlider.layoutParams = LinearLayout.LayoutParams(t.dp(90f), t.dp(22f))
+            .apply { marginStart = t.dp(6f) }
+        stageBar.addView(stageSlider)
+        stageValue = valueText()
+        stageBar.addView(stageValue)
+
+        stageRow2 = LinearLayout(act).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            visibility = View.GONE
+        }
+        stageLabel2 = lab(act.getString(R.string.taper))
+        stageRow2.addView(stageLabel2)
+        stageSlider2 = HSlider(act, t, 0.0, 1.0) { v -> onStageValue(1, v); refresh() }
+        stageSlider2.layoutParams = LinearLayout.LayoutParams(t.dp(70f), t.dp(22f))
+            .apply { marginStart = t.dp(6f) }
+        stageRow2.addView(stageSlider2)
+        stageValue2 = valueText()
+        stageRow2.addView(stageValue2)
+        stageBar.addView(stageRow2)
+
+        primKinds = LinearLayout(act).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            visibility = View.GONE
+        }
+        for ((key, label) in listOf(
+            "cube" to R.string.prim_cube, "pyramid" to R.string.prim_pyramid,
+            "sphere" to R.string.prim_sphere, "torus" to R.string.prim_torus,
+            "tube" to R.string.prim_tube,
+        )) {
+            val b = TextButton(act, t, filled = true, small = true).apply {
+                text = act.getString(label)
+                setOnClickListener { onPrimKind(key) }
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { marginStart = t.dp(2f) }
+            }
+            primButtons[key] = b
+            primKinds.addView(b)
+        }
+        stageBar.addView(primKinds)
+
+        stageBar.addView(
+            TextButton(act, t, small = true).apply {
+                text = act.getString(R.string.done)
+                on = true
+                setOnClickListener { onStageDone() }
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { marginStart = t.dp(6f) }
+            },
+        )
+        stageBar.addView(
+            TextButton(act, t, filled = true, small = true).apply {
+                text = act.getString(R.string.cancel)
+                setOnClickListener { onStageCancel() }
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { marginStart = t.dp(2f) }
+            },
+        )
+        ctxBar.addView(stageBar)
+    }
+
+    /** `label.lab` — the small uppercase caption the bars use. */
+    private fun lab(text: String) = TextView(act).apply {
+        this.text = text
+        setTextColor(t.dim2)
+        textSize = 10f
+        letterSpacing = 0.08f
+        setTypeface(typeface, android.graphics.Typeface.BOLD)
+        setPadding(t.dp(6f), 0, 0, 0)
+    }
+
+    private fun valueText() = TextView(act).apply {
+        setTextColor(t.dim)
+        textSize = 11f
+        minWidth = t.dp(34f)
+        gravity = Gravity.END
+        setPadding(t.dp(4f), 0, 0, 0)
     }
 
     /**
@@ -1157,6 +1274,25 @@ class Chrome(private val act: Activity, val t: Tokens) {
 
     fun setSelection(count: Int) { selectionCount = count; refresh() }
 
+    /**
+     * What the staging bar shows while Loft or Primitives is building a guide.
+     *
+     * `value` and `value2` are 0..1 fractions of each slider's own range, so
+     * this class does not have to know that a primitive has 3..48 segments and
+     * a loft has a tension. The caller maps them and supplies the readouts.
+     */
+    class Staging(
+        val label: String,
+        val value: Double,
+        val readout: String,
+        val secondLabel: String? = null,
+        val value2: Double = 0.0,
+        val readout2: String = "",
+        val kind: String? = null,
+    )
+
+    fun setStaging(s: Staging?) { staging = s; refresh() }
+
     /** The whole Scene tab, from the document. */
     fun setEnvironment(env: DocumentEnv) {
         envGrid = env.grid
@@ -1220,13 +1356,31 @@ class Chrome(private val act: Activity, val t: Tokens) {
         sizePopVal.text = "${sizeMm.toInt()}mm"
         opacityPopVal.text = "${(opacity * 100).toInt()}%"
         for ((bar, get) in sliders) bar.value = get()
-        guideBar.visibility = if (guideActive) View.VISIBLE else View.GONE
+        val st = staging
+        stageBar.visibility = if (st != null) View.VISIBLE else View.GONE
+        if (st != null) {
+            stageLabel.text = st.label
+            stageSlider.value = st.value
+            stageValue.text = st.readout
+            stageRow2.visibility = if (st.secondLabel != null) View.VISIBLE else View.GONE
+            if (st.secondLabel != null) {
+                stageLabel2.text = st.secondLabel
+                stageSlider2.value = st.value2
+                stageValue2.text = st.readout2
+            }
+            primKinds.visibility = if (st.kind != null) View.VISIBLE else View.GONE
+            for ((k, b) in primButtons) b.on = k == st.kind
+        }
+
+        /* the guide bar and the staging bar are mutually exclusive: you are
+           either editing a live guide or building a new one */
+        guideBar.visibility = if (guideActive && st == null) View.VISIBLE else View.GONE
         guideNameLabel.text = guideName
         guideOpacityBar.value = guideOpacity
         ctxHint.text = act.getString(
             if (guideActive) R.string.hint_guide_active else R.string.hint_draw_a_stroke,
         )
-        ctxHint.visibility = if (guideActive) View.GONE else View.VISIBLE
+        ctxHint.visibility = if (guideActive || st != null) View.GONE else View.VISIBLE
         selBar.visibility = if (selectionCount > 0) View.VISIBLE else View.GONE
         icons["stage"]?.on =
             if (compact) isSheetOpen(stagePanel) else stagePanel.visibility == View.VISIBLE

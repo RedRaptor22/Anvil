@@ -26,6 +26,8 @@ import art.plume.core.DocumentTool
 import art.plume.core.Editing
 import art.plume.core.Export
 import art.plume.core.Fill
+import art.plume.core.Guide
+import art.plume.core.GuideEditing
 import art.plume.core.GuidePainting
 import art.plume.core.GuideScene
 import art.plume.core.Guides
@@ -33,16 +35,18 @@ import art.plume.core.History
 import art.plume.core.Liquify
 import art.plume.core.LiveStroke
 import art.plume.core.MM
+import art.plume.core.Primitives
 import art.plume.core.Px
 import art.plume.core.Ray
 import art.plume.core.Rgba
 import art.plume.core.Selection
+import art.plume.core.Shapes
 import art.plume.core.Sketch
 import art.plume.core.Stabilizer
 import art.plume.core.Step
-import art.plume.core.StyleChange
 import art.plume.core.Stroke
 import art.plume.core.StrokePoint
+import art.plume.core.StyleChange
 import art.plume.core.Tune
 import art.plume.core.Vec3
 import art.plume.core.clamp
@@ -81,6 +85,9 @@ class MainActivity : Activity(), Gestures.Listener {
      */
     private var autoGuide = true
 
+    /** `TOOL.shapeHold` — Hold shape, in the settings modal. */
+    private var shapeHoldOn = true
+
     private val liquifyCfg = Liquify.Settings()
 
     // ---- files ------------------------------------------------------------
@@ -111,6 +118,29 @@ class MainActivity : Activity(), Gestures.Listener {
     private var color = Rgba(0.106, 0.110, 0.129)
 
     private var opacity = 1.0
+
+    // ---- staging: a guide being built but not yet committed ---------------
+
+    /**
+     * Loft and Primitives both build a guide you keep adjusting before you
+     * accept it. It is drawn like any other guide but is not in [guides], so
+     * closing it, saving it or painting on it are all impossible until Done.
+     */
+    private var stagedGuide: Guide? = null
+    private val loftSel = ArrayList<Stroke>()
+    private var loftTension = 1.0
+    private var primKind = "cube"
+    private var primSeg = 24
+    private var primTaper = 1.0
+
+    // ---- hold-to-shape ----------------------------------------------------
+
+    /** The stroke's screen points, which is where a shape is fitted. */
+    private val liveScreen = ArrayList<Px>()
+    private var shapeHold: Runnable? = null
+    private var holdAnchor: Px? = null
+    private var adjusting: Shapes.Shape? = null
+    private var adjustAnchor = Px(0.0, 0.0)
 
     private lateinit var chrome: Chrome
 
@@ -276,6 +306,10 @@ class MainActivity : Activity(), Gestures.Listener {
         chrome.onOpacity = { o -> applyOpacityToSelectionOrBrush(o) }
         chrome.onBrush = { b -> brush = b }
         chrome.onColor = { argb -> applyColorToSelectionOrBrush(rgbaOf(argb)) }
+        chrome.onStageValue = { which, v -> stageValue(which, v) }
+        chrome.onPrimKind = { k -> primKind = k; previewPrimitive() }
+        chrome.onStageDone = { commitStaging() }
+        chrome.onStageCancel = { cancelStaging(); setTool(Tool.DRAW) }
         chrome.onEnv = { toggle -> flip(toggle) }
         chrome.onLight = { az, alt ->
             docEnv.light.az = az
@@ -368,7 +402,7 @@ class MainActivity : Activity(), Gestures.Listener {
         Action.REDO -> { history.redo(); refreshScene() }
         Action.MIRROR -> mirrorSelection()
         Action.STAGE -> chrome.toggleStage()
-        Action.GUIDE_BEND -> toast(getString(R.string.not_yet_bend))
+        Action.GUIDE_BEND -> setTool(Tool.BEND)
         Action.GUIDE_SAVE -> saveActiveGuide()
         Action.GUIDE_CLOSE -> closeActiveGuide()
         Action.DUPLICATE -> duplicateSelection()
@@ -389,16 +423,127 @@ class MainActivity : Activity(), Gestures.Listener {
      * and under test, but none of them has its interaction wired up here.
      */
     private fun setTool(t: Tool) {
+        /* leaving a staging tool throws away what it was building */
+        if (tool != t && (tool == Tool.LOFT || tool == Tool.PRIM)) cancelStaging()
+
         when (t) {
-            Tool.SHAPE -> { toast(getString(R.string.not_yet_shape)); return }
-            Tool.BEND -> { toast(getString(R.string.not_yet_bend)); return }
-            Tool.LOFT -> { toast(getString(R.string.not_yet_loft)); return }
-            Tool.PRIM -> { toast(getString(R.string.not_yet_prim)); return }
+            Tool.BEND -> if (guides.active == null) {
+                toast(getString(R.string.bend_needs_guide)); return
+            }
+            /*
+             * LOFT TAKES THE SELECTION YOU ALREADY MADE. It used to be the
+             * other way round in the web build — choose Loft, then pick curves
+             * with it — which meant the selection in hand was thrown away at
+             * the door and made again with a different tool.
+             */
+            Tool.LOFT -> {
+                loftSel.clear()
+                loftSel.addAll(sketch.selection)
+                if (loftSel.size < 2) {
+                    loftSel.clear()
+                    toast(getString(R.string.loft_needs_two)); return
+                }
+                previewLoft()
+            }
+            Tool.PRIM -> previewPrimitive()
             else -> {}
         }
         tool = t
         chrome.setTool(t)
         refreshControls()
+    }
+
+    // ---- staging ----------------------------------------------------------
+
+    private fun previewLoft() {
+        stagedGuide = GuideEditing.loft(loftSel, loftTension)
+        pushGuides()
+        showStaging()
+    }
+
+    private fun previewPrimitive() {
+        /*
+         * A primitive is rebuilt from scratch on every slider move rather than
+         * deformed, because segments and taper change its topology. The web
+         * build carries the staged object's matrix across; nothing here has
+         * moved it yet, so there is nothing to carry.
+         */
+        stagedGuide = Primitives.create(primKind, primSeg, primTaper)
+        pushGuides()
+        showStaging()
+    }
+
+    private fun showStaging() {
+        chrome.setStaging(
+            when (tool) {
+                Tool.LOFT -> Chrome.Staging(
+                    getString(R.string.tension),
+                    loftTension,
+                    String.format("%.1f", loftTension),
+                )
+                Tool.PRIM -> Chrome.Staging(
+                    getString(R.string.segments),
+                    (primSeg - 3) / 45.0,
+                    primSeg.toString(),
+                    /* only a tube tapers; the others have nothing to taper */
+                    secondLabel = if (primKind == "tube") getString(R.string.taper) else null,
+                    value2 = primTaper,
+                    readout2 = String.format("%.2f", primTaper),
+                    kind = primKind,
+                )
+                else -> null
+            },
+        )
+    }
+
+    private fun stageValue(which: Int, v: Double) {
+        when (tool) {
+            Tool.LOFT -> { loftTension = v; previewLoft() }
+            Tool.PRIM -> {
+                if (which == 0) primSeg = (3 + v * 45).toInt().coerceAtLeast(3)
+                else primTaper = v
+                previewPrimitive()
+            }
+            else -> {}
+        }
+    }
+
+    private fun cancelStaging() {
+        stagedGuide = null
+        for (st in loftSel) st.selected = false
+        loftSel.clear()
+        chrome.setStaging(null)
+        pushGuides()
+        refreshScene()
+    }
+
+    /** Done: the staged guide becomes the active one, in one history step. */
+    private fun commitStaging() {
+        val g = stagedGuide ?: return
+        val previous = guides.active
+        stagedGuide = null
+        for (st in loftSel) st.selected = false
+        loftSel.clear()
+        chrome.setStaging(null)
+        val label = if (tool == Tool.LOFT) "Loft" else "Primitive"
+        history.run(
+            Step(
+                label,
+                onRedo = { guides.setActive(g); pushGuides(); refreshScene() },
+                onUndo = { guides.setActive(previous); pushGuides(); refreshScene() },
+            ),
+        )
+        setTool(Tool.DRAW)
+        toast(getString(if (label == "Loft") R.string.loft_made else R.string.prim_made))
+    }
+
+    /** Tapping a curve under Loft adds or removes it from the set. */
+    private fun loftPick(x: Double, y: Double) {
+        val hit = Selection.hitTest(sketch, camera, x, y, mask()) ?: return
+        if (loftSel.remove(hit)) hit.selected = false
+        else { loftSel.add(hit); hit.selected = true }
+        if (loftSel.size >= 2) previewLoft() else { stagedGuide = null; pushGuides() }
+        refreshScene()
     }
 
     /** After a load the brush came from the file, so the rail has to follow. */
@@ -496,7 +641,22 @@ class MainActivity : Activity(), Gestures.Listener {
         lastPen = Px(x.toDouble(), y.toDouble())
 
         when (tool) {
-            Tool.DRAW, Tool.GUIDE, Tool.FLATGUIDE -> beginStroke(x, y, pressure, tiltAz)
+            Tool.DRAW, Tool.SHAPE, Tool.GUIDE, Tool.FLATGUIDE ->
+                beginStroke(x, y, pressure, tiltAz)
+
+            /*
+             * The plane a bend stroke is drawn on: camera-facing, through the
+             * ORANGE ANCHOR for a swept guide and through the centre of the
+             * mesh for a deform. Drawn on the default plane instead, the new
+             * path would land at the pivot's depth and the guide would jump
+             * away from where it was.
+             */
+            Tool.BEND -> {
+                val g = guides.active
+                if (g == null) { toast(getString(R.string.bend_needs_guide)); return }
+                camera.refreshDrawPlane(g.sweep?.anchor ?: centreOf(g))
+                beginStroke(x, y, pressure, tiltAz)
+            }
 
             Tool.ERASE, Tool.VACUUM -> {
                 dragStrokes = ArrayList(sketch.strokes)
@@ -540,6 +700,7 @@ class MainActivity : Activity(), Gestures.Listener {
                have no drag of their own. */
             Tool.FILL -> fillActiveGuide()
             Tool.INJECT -> sampleAt(x.toDouble(), y.toDouble())
+            Tool.LOFT -> loftPick(x.toDouble(), y.toDouble())
 
             else -> {}
         }
@@ -549,7 +710,8 @@ class MainActivity : Activity(), Gestures.Listener {
     override fun onDrawMove(x: Float, y: Float, pressure: Float, tiltAz: Float, tiltAlt: Float) {
         dragMoved = true
         when (tool) {
-            Tool.DRAW, Tool.GUIDE, Tool.FLATGUIDE -> moveStroke(x, y, pressure, tiltAz)
+            Tool.DRAW, Tool.SHAPE, Tool.GUIDE, Tool.FLATGUIDE, Tool.BEND ->
+                moveStroke(x, y, pressure, tiltAz)
             Tool.ERASE, Tool.VACUUM -> stepDestructive(x.toDouble(), y.toDouble())
             Tool.SMOOTH -> stepSmooth(x.toDouble(), y.toDouble())
             Tool.LIQUIFY -> {
@@ -573,7 +735,8 @@ class MainActivity : Activity(), Gestures.Listener {
 
     override fun onDrawEnd() {
         when (tool) {
-            Tool.DRAW, Tool.GUIDE, Tool.FLATGUIDE -> endStroke()
+            Tool.DRAW, Tool.SHAPE, Tool.GUIDE, Tool.FLATGUIDE -> endStroke()
+            Tool.BEND -> finishBend()
             Tool.ERASE, Tool.VACUUM -> commitDocumentChange(
                 if (tool == Tool.ERASE) "Erase" else "Vacuum",
             )
@@ -617,24 +780,247 @@ class MainActivity : Activity(), Gestures.Listener {
         )
         stabilizer.reset()
         stabilizer.next(x.toDouble(), y.toDouble())
+        liveScreen.clear()
+        adjusting = null
         synchronized(liveBuffer) {
             live = s
             liveBuffer.begin(s)
             if (appendAt(s, stabilizer.x, stabilizer.y, pressure, tiltAz)) liveBuffer.append(s)
         }
+        liveScreen.add(Px(stabilizer.x, stabilizer.y))
         renderer.setLive(liveBuffer)
+        armShapeHold()
     }
 
     private fun moveStroke(x: Float, y: Float, pressure: Float, tiltAz: Float) {
         val s = live ?: return
+
+        /*
+         * Once a shape has been fitted the pen stops adding samples and drives
+         * ONE parameter of it instead — the far end of a line, the radius of a
+         * circle, the bow of a curve.
+         */
+        adjusting?.let { shape ->
+            Shapes.adjust(shape, adjustAnchor, x.toDouble(), y.toDouble())
+            rebuildFromShape(s, shape, pressure, tiltAz)
+            return
+        }
+
         // FACT (C.2): Stable Stroke smooths the INPUT, before it is projected
         if (!stabilizer.next(x.toDouble(), y.toDouble())) return
         synchronized(liveBuffer) {
             if (appendAt(s, stabilizer.x, stabilizer.y, pressure, tiltAz)) liveBuffer.append(s)
         }
+        liveScreen.add(Px(stabilizer.x, stabilizer.y))
+        armShapeHold()
+    }
+
+    // ---- bend --------------------------------------------------------------
+
+    /**
+     * The stroke just drawn becomes the guide's new path.
+     *
+     * A SWEPT guide bends by replacing its path outright. Anything else — a
+     * loft, a primitive, an imported model — has no profile and path to
+     * replace, so it bends as a curve DEFORM of its mesh instead: same
+     * gesture, same "follow the line I drew" result, on any geometry.
+     */
+    private fun finishBend() {
+        disarmShapeHold()
+        adjusting = null
+        val s = synchronized(liveBuffer) { live.also { live = null } } ?: return
+        renderer.setLive(null)
+        Dedupe.clean(s)
+        val g = guides.active ?: return
+        if (s.pts.size < 2) return
+        val path = s.pts.map { it.p.copy() }
+
+        if (g.sweep == null) {
+            val wasBent = g.bendPath?.map { it.copy() }
+            /*
+             * A FLAT GUIDE STOPS BEING FLAT once it is bent. Drawing and
+             * trimming carry on working — both read the mesh's own
+             * parameterisation, which the deform moves but does not
+             * invalidate — but the analytic plane behind Fill would be
+             * describing a sheet that is no longer there, so it is given up
+             * rather than left to lie. Fill then declines on this guide, which
+             * is the honest answer until the sampler can walk a deformed sheet.
+             */
+            val wasPlane = g.plane
+            if (!GuideEditing.bendMesh(g, path)) return
+            g.plane = null
+            val nowBent = g.bendPath?.map { it.copy() } ?: return
+            history.run(
+                Step(
+                    "Bend guide",
+                    onRedo = {
+                        GuideEditing.bendMesh(g, nowBent); g.plane = null
+                        pushGuides(); refreshScene()
+                    },
+                    onUndo = {
+                        if (wasBent != null) GuideEditing.bendMesh(g, wasBent)
+                        else GuideEditing.unbendMesh(g)
+                        g.plane = wasPlane
+                        pushGuides(); refreshScene()
+                    },
+                ),
+            )
+            return
+        }
+
+        /*
+         * A Sweep is immutable in its shape — path and anchorIndex are both
+         * vals, and `bend` builds a new one rather than editing the old. So
+         * undo swaps the whole object back, which is also the only version
+         * that is correct: bending moves the anchor to the start of the new
+         * path, and putting the points back without the index would leave the
+         * profile transported from the wrong place.
+         */
+        val before = g.sweep ?: return
+        val beforeBend = g.bendPath?.map { it.copy() }
+        if (!GuideEditing.bend(g, path)) return
+        val after = g.sweep ?: return
+        val afterBend = g.bendPath?.map { it.copy() }
+        history.run(
+            Step(
+                "Bend guide",
+                onRedo = {
+                    g.sweep = after; g.bendPath = afterBend
+                    Guides.rebuildSweep(g); pushGuides(); refreshScene()
+                },
+                onUndo = {
+                    g.sweep = before; g.bendPath = beforeBend
+                    Guides.rebuildSweep(g); pushGuides(); refreshScene()
+                },
+            ),
+        )
+    }
+
+    /** The middle of a guide's mesh, for the plane a deform bend is drawn on. */
+    private fun centreOf(g: Guide): Vec3 {
+        val b = Bounds()
+        g.surface?.let { surf ->
+            var i = 0
+            while (i + 2 < surf.positions.size) {
+                b.add(
+                    Vec3(
+                        surf.positions[i].toDouble(),
+                        surf.positions[i + 1].toDouble(),
+                        surf.positions[i + 2].toDouble(),
+                    ),
+                )
+                i += 3
+            }
+        }
+        return if (b.empty) Vec3() else b.centre()
+    }
+
+    // ---- hold-to-shape (C.9) ---------------------------------------------
+
+    /**
+     * FACT (C.9): "Hold after drawing to adjust length/endpoint (lines) or
+     * curvature (curves); press-hold-drag to size a circle."
+     *
+     * A pen resting on glass wanders a pixel or two, and the resample gate
+     * admits anything past 2px as travel. Every such sample restarting the
+     * clock would mean "hold the pen still" only ever fired for a perfectly
+     * steady hand, so the clock survives jitter inside [STILL_PX] of wherever
+     * it started.
+     */
+    private fun armShapeHold() {
+        if (!shapeHoldOn) return
+        if (tool !in HOLD_TOOLS) return
+        val now = liveScreen.lastOrNull() ?: return
+        val anchor = holdAnchor
+        if (shapeHold != null && anchor != null &&
+            Math.hypot(now.x - anchor.x, now.y - anchor.y) <= STILL_PX
+        ) {
+            return          // still inside the slop: let the running clock run
+        }
+        disarmShapeHold()
+        holdAnchor = now
+        val r = Runnable { enterShapeAdjust() }
+        shapeHold = r
+        main.postDelayed(r, Shapes.HOLD_MS)
+    }
+
+    private fun disarmShapeHold() {
+        shapeHold?.let { main.removeCallbacks(it) }
+        shapeHold = null
+    }
+
+    private fun enterShapeAdjust() {
+        shapeHold = null
+        val s = live ?: return
+        if (adjusting != null || tool !in HOLD_TOOLS) return
+
+        /*
+         * A press that never went anywhere has no shape to fit, so under the
+         * Shape tool it seeds a circle on the spot and hands the drag straight
+         * to its radius. Only under Shape: pausing to steady your hand before
+         * an ordinary stroke is ordinary, and turning that into a circle would
+         * ruin it.
+         */
+        val travel = liveTravel()
+        val fitted = if (tool == Tool.SHAPE && travel <= STILL_PX) {
+            val a = liveScreen.firstOrNull() ?: return
+            Shapes.Shape.Circle(a.x, a.y, SEED_R_PX)
+        } else {
+            if (liveScreen.size < 3) return
+            Shapes.fitShape(liveScreen) ?: return
+        }
+
+        adjusting = fitted
+        adjustAnchor = liveScreen.lastOrNull() ?: Px(0.0, 0.0)
+        rebuildFromShape(s, fitted, 1f, 0f)
+
+        val what = when (tool) {
+            Tool.GUIDE -> getString(R.string.shape_profile)
+            Tool.BEND -> getString(R.string.shape_sweep)
+            else -> ""
+        }
+        toast(
+            when (fitted) {
+                is Shapes.Shape.Circle -> getString(R.string.shape_circle, what)
+                is Shapes.Shape.Line -> getString(R.string.shape_line, what)
+                else -> getString(R.string.shape_curve, what)
+            },
+        )
+    }
+
+    private fun liveTravel(): Double {
+        var t = 0.0
+        for (i in 1 until liveScreen.size) {
+            t += Math.hypot(
+                liveScreen[i].x - liveScreen[i - 1].x, liveScreen[i].y - liveScreen[i - 1].y,
+            )
+        }
+        return t
+    }
+
+    /**
+     * Throw the streaming buffer away and lay the whole stroke out again from
+     * the shape.
+     *
+     * The incremental buffer exists to avoid rebuilding a growing stroke every
+     * sample, and that is exactly the wrong shape here: an adjusted shape
+     * changes at BOTH ends and in the middle at once, so there is no window to
+     * rewrite. Rebuilding is also cheap — a shape is at most 65 points.
+     */
+    private fun rebuildFromShape(s: Stroke, shape: Shapes.Shape, pressure: Float, az: Float) {
+        synchronized(liveBuffer) {
+            s.pts.clear()
+            liveBuffer.begin(s)
+            for (p in shape.points) {
+                if (appendAt(s, p.x, p.y, pressure, az)) liveBuffer.append(s)
+            }
+        }
+        surface.requestRender()
     }
 
     private fun endStroke() {
+        disarmShapeHold()
+        adjusting = null
         val s = synchronized(liveBuffer) { live.also { live = null } } ?: return
         renderer.setLive(null)
         Dedupe.clean(s)
@@ -961,8 +1347,16 @@ class MainActivity : Activity(), Gestures.Listener {
         }
     }
 
+    /**
+     * The guides the renderer should draw: the scene's, plus the one being
+     * staged. The staged one is deliberately NOT in [guides] — it cannot be
+     * closed, saved or painted on until Done accepts it — so it is added here
+     * at the last moment rather than by pretending it is part of the scene.
+     */
     private fun pushGuides() {
-        renderer.setGuides(guides.drawList())
+        val list = guides.drawList()
+        val staged = stagedGuide
+        renderer.setGuides(if (staged == null) list else list + staged)
         refreshControls()
         surface.requestRender()
     }
@@ -1271,6 +1665,22 @@ class MainActivity : Activity(), Gestures.Listener {
     override fun onHoverExit() { }
 
     private companion object {
+        /**
+         * Hold-to-shape is armed for anything drawn AS a stroke — a curve, a
+         * guide profile, a bend path, a flat outline. FACT (C.9): Draw Shape
+         * "also works to create/bend guides", and holding is how you reach it
+         * without switching tools.
+         */
+        private val HOLD_TOOLS = setOf(
+            Tool.DRAW, Tool.SHAPE, Tool.GUIDE, Tool.FLATGUIDE, Tool.BEND,
+        )
+
+        /** How far the pen may wander and still count as held still. */
+        private const val STILL_PX = 6.0
+
+        /** The circle a bare press starts at, before the drag sizes it. */
+        private const val SEED_R_PX = 8.0
+
         /** --bg, light and dark: the same two values as the colour resources. */
         private val LIGHT_PAGE = Rgba(0.925, 0.918, 0.953)
         private val DARK_PAGE = Rgba(0.082, 0.086, 0.106)

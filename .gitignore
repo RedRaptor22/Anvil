@@ -4,3 +4,7 @@ local.properties
 *.iml
 .idea/
 .DS_Store
+
+# The framework jar appcheck compiles against is 137 MB and is fetched, not
+# authored: tools/appcheck.sh says where from.
+tools/lib/
