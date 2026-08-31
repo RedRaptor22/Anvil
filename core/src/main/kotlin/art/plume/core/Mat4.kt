@@ -200,9 +200,29 @@ class Mat4 {
     }
 }
 
-/** A ray, in world units. */
+/** A ray, in world units. [direction] is expected to be unit length. */
 class Ray(val origin: Vec3 = Vec3(), val direction: Vec3 = Vec3(0.0, 0.0, -1.0)) {
+
     fun at(t: Double, out: Vec3): Vec3 = out.set(origin).addScaled(direction, t)
+
+    /**
+     * The point on the ray nearest to [p].
+     *
+     * Clamped at the origin rather than run backwards: a ray from the eye has
+     * no meaningful negative half, and letting it go behind the camera makes a
+     * clamped stroke jump to the far side of the viewer.
+     */
+    fun closestPointTo(p: Vec3, out: Vec3): Vec3 {
+        var t = (p - origin) dot direction
+        if (t < 0.0) t = 0.0
+        return at(t, out)
+    }
+
+    fun distanceSqToPoint(p: Vec3): Double {
+        val q = Vec3()
+        closestPointTo(p, q)
+        return q.distanceToSq(p)
+    }
 }
 
 /**

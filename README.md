@@ -27,7 +27,7 @@ someone's phone drawing differently.
 |---|---|---|
 | language | ES5 JavaScript | Kotlin |
 | renderer | Three.js r128 (WebGL) | OpenGL ES 3.0, direct |
-| tests | 584 in-browser checks | 75 JVM unit tests |
+| tests | 584 in-browser checks | 90 JVM unit tests |
 | ships as | a URL | an APK |
 
 ## Modules
@@ -69,7 +69,7 @@ echo "sdk.dir=/path/to/Android/sdk" > local.properties
 
 ## What actually works
 
-Verified by `./gradlew :core:test` — 75 tests, all passing:
+Verified by `./gradlew :core:test` — 90 tests, all passing:
 
 - **Rotation-minimising frames** by double reflection (Wang et al. 2008), the
   same algorithm as the web build. Orthonormal along a helix to 1e-9, finite and
@@ -106,6 +106,12 @@ Verified by `./gradlew :core:test` — 75 tests, all passing:
   guide triangulated to the outline you drew rather than a grid clipped to it,
   with the triangle areas summing to the polygon's own; and the five primitives
   at the dimensions the web build gives them.
+- **Painting on a guide.** The ray query agrees with brute force over every
+  triangle across 400 probes; sampling a surface by arc length and projecting a
+  ray onto it land in the same place, so a filled row sits where a hand-drawn
+  one would; a stroke running off the edge clamps back and is lit the same way
+  a hit is; and on a flat guide the nib is trimmed against the outline you drew
+  rather than its bounding box.
 
 Three bugs turned up while porting this, all of which the tests now pin:
 

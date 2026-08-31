@@ -5,7 +5,7 @@ genuinely depends on what. Each phase ends with something you can hold in your
 hand — not a milestone on paper — and each one's logic goes into the tested
 core before anything draws it.
 
-**62 items · 19 complete · ~10,800 lines of web build to port · ~65% of it is
+**62 items · 23 complete · ~10,800 lines of web build to port · ~65% of it is
 pure logic that transfers with tests.**
 
 ---
@@ -86,10 +86,10 @@ went into `core` first:
 *The Feather premise: draw a surface, then draw on it.*
 
 - [x] Sweep surface from a stroke — `createFromStroke`, `rebuildSweep`
-- [ ] Surface sampling and spans — `sampleSurface`, `surfaceSpan`
-- [ ] Project strokes onto a guide — `G.project`
-- [ ] Edge behaviour: reach, outline, clamp — `reachAlong`, `insideOutline`
-- [ ] Isolation masking — `isMasked`, `invalidateMask`
+- [x] Surface sampling and spans — `sampleSurface`, `surfaceSpan`
+- [x] Project strokes onto a guide — `G.project`
+- [x] Edge behaviour: reach, outline, clamp — `reachAlong`, `insideOutline`
+- [x] Isolation masking — `isMasked` (the per-viewpoint cache is not ported yet)
 - [ ] Translucent grid-lined guide shader
 - [x] Flat shape guide — `createFlatFromStroke`
 - [x] Five primitives — cube, pyramid, sphere, torus, tube
@@ -99,6 +99,20 @@ went into `core` first:
 
 **Done when:** a stroke lands exactly on a curved guide, stays there under every
 tool, and the same sketch measures identically in both builds.
+
+**Where it stands.** Seven of eleven. The surfaces are built and the queries
+that put paint on them work: the ray query is checked against brute force over
+every triangle, sampling by arc length and projecting a ray agree with each
+other, and the edge is the outline you drew rather than its bounding box. Left
+are the guide shader, Bend, Loft, and the lifecycle.
+
+One thing the tests turned up that is worth knowing before touching this again:
+**a fresh swept guide is edge-on to the view that made it.** The profile is
+extruded ALONG the view, so from where you drew it the surface is a curtain
+seen side-on, and a ray down the view axis runs parallel to it and hits
+nothing. That is why Feather has you orbit before painting. Every probe that
+fired down the sweep axis found nothing and looked like a broken ray query;
+there is now a test that states the fact outright.
 
 ---
 
