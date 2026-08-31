@@ -14,6 +14,7 @@ import android.widget.EditText
 import art.plume.core.ColorSpace
 import art.plume.core.DocumentEnv
 import art.plume.core.Rgba
+import art.plume.core.Transform
 import art.plume.core.Tune
 
 /**
@@ -141,6 +142,13 @@ class Chrome(private val act: Activity, val t: Tokens) {
     var onPressure: () -> Unit = {}
     var onPressureTarget: (String) -> Unit = {}
 
+    /** `#joy` — the transform gizmo. */
+    var onTransformMode: (Transform.Mode) -> Unit = {}
+    var onTransformGrab: (Int?) -> Unit = {}
+    var onTransformDrag: (axis: Int?, dx: Float, dy: Float, sweep: Double, strip: Boolean) -> Unit =
+        { _, _, _, _, _ -> }
+    var onTransformEnd: () -> Unit = {}
+
     /** The staging bar: Loft's tension, a primitive's segments and taper. */
     var onStageValue: (which: Int, value: Double) -> Unit = { _, _ -> }
     var onPrimKind: (String) -> Unit = {}
@@ -210,6 +218,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
     private val ctxBar = panel(act, t)
     private val selBar = panel(act, t)
     private val liquifyPanel = panel(act, t)
+    private val joyPanel = panel(act, t)
     private val stagePanel = panel(act, t, large = true)
     private val brushGrid = panel(act, t, large = true)
     private val slidePop = panel(act, t, large = true)
@@ -293,6 +302,12 @@ class Chrome(private val act: Activity, val t: Tokens) {
     private lateinit var focalValue: TextView
     private lateinit var saveState: TextView
     private lateinit var pressRow: LinearLayout
+    private lateinit var joyPad: JoyPad
+    private lateinit var joyStrip: JoyStrip
+    private lateinit var joyTarget: TextView
+    private val joyModes = HashMap<Transform.Mode, TextButton>()
+    private var joyMode = Transform.Mode.MOVE
+    private var joyLabel = ""
     private var pressureOn = true
     private var pressureTarget = "size"
     private lateinit var stageBar: LinearLayout
@@ -324,6 +339,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
         buildUndoPill()
         buildCtxBar()
         buildSelBar()
+        buildJoyPanel()
         buildLiquifyPanel()
         buildStagePanel()
         buildDock()
@@ -678,6 +694,71 @@ class Chrome(private val act: Activity, val t: Tokens) {
      * the right, and the stylesheet says why: liquify always has a selection,
      * and a selection always has the transform panel, which lives on the right.
      */
+    /**
+     * `#joy` — Move, Turn, Size, a pad and a depth strip.
+     *
+     * The pad's centre drags freely in the screen plane and its three arcs
+     * constrain the drag to one world axis. The strip below it is the depth
+     * axis: it is the one direction a flat circle cannot show, so it gets a
+     * control of its own rather than being folded into the pad.
+     */
+    private fun buildJoyPanel() {
+        joyPanel.orientation = LinearLayout.VERTICAL
+        joyPanel.gravity = Gravity.CENTER_HORIZONTAL
+        val p = t.dp(10f)
+        joyPanel.setPadding(p, p, p, p)
+
+        val modes = LinearLayout(act).apply { orientation = LinearLayout.HORIZONTAL }
+        for ((mode, label) in listOf(
+            Transform.Mode.MOVE to R.string.joy_move,
+            Transform.Mode.ROTATE to R.string.joy_turn,
+            Transform.Mode.SCALE to R.string.joy_size,
+        )) {
+            val b = TextButton(act, t, filled = true, small = true).apply {
+                text = act.getString(label)
+                setOnClickListener { onTransformMode(mode) }
+                layoutParams = LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f,
+                ).apply { marginEnd = t.dp(2f) }
+            }
+            joyModes[mode] = b
+            modes.addView(b)
+        }
+        joyPanel.addView(
+            modes,
+            LinearLayout.LayoutParams(
+                t.dp(112f), ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { bottomMargin = t.dp(8f) },
+        )
+
+        joyPad = JoyPad(
+            act, t,
+            onGrab = { axis -> onTransformGrab(axis) },
+            onDrag = { axis, dx, dy, sweep -> onTransformDrag(axis, dx, dy, sweep, false) },
+            onRelease = { onTransformEnd() },
+        )
+        joyPanel.addView(joyPad)
+
+        joyStrip = JoyStrip(
+            act, t,
+            onDrag = { dy -> onTransformDrag(null, 0f, dy, 0.0, true) },
+            onRelease = { onTransformEnd() },
+        )
+        joyPanel.addView(
+            joyStrip,
+            LinearLayout.LayoutParams(t.dp(108f), t.dp(26f)).apply { topMargin = t.dp(8f) },
+        )
+
+        joyTarget = TextView(act).apply {
+            setTextColor(t.dim)
+            textSize = 10.5f
+            gravity = Gravity.CENTER
+            setPadding(0, t.dp(6f), 0, 0)
+        }
+        joyPanel.addView(joyTarget)
+        joyPanel.visibility = View.GONE
+    }
+
     private fun buildLiquifyPanel() {
         liquifyPanel.setPadding(t.dp(10f), t.dp(8f), t.dp(10f), t.dp(8f))
         liquifyPanel.addView(
@@ -755,6 +836,12 @@ class Chrome(private val act: Activity, val t: Tokens) {
                 setOnClickListener { onLiquifyClose() }
             },
         )
+        for ((m, b) in joyModes) b.on = m == joyMode
+        joyTarget.text = joyLabel
+        /* the gizmo needs something to transform, and liquify owns the
+           selection while it is running */
+        joyPanel.visibility =
+            if (selectionCount > 0 && tool != Tool.LIQUIFY) View.VISIBLE else View.GONE
         liquifyPanel.visibility = View.GONE
     }
 
@@ -1502,6 +1589,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
         slot(R.string.redo, "redo") { onAction(Action.REDO) }
         slot(R.string.tools, "tools") { toggleSheet(toolPill) }
         slot(R.string.brush, "brush") { toggleSheet(brushRail) }
+        slot(R.string.joy_move, "joy") { toggleSheet(joyPanel) }
         slot(R.string.stage, "stage") { toggleSheet(stagePanel) }
         dock.visibility = View.GONE
     }
@@ -1542,6 +1630,10 @@ class Chrome(private val act: Activity, val t: Tokens) {
                 Gravity.START or Gravity.CENTER_VERTICAL,
                 width = t.px(R.dimen.railTabW), height = t.px(R.dimen.railTabH),
             ),
+        )
+        root.addView(
+            joyPanel,
+            lp(Gravity.END or Gravity.CENTER_VERTICAL, right = t.px(R.dimen.edge)),
         )
         root.addView(
             liquifyPanel,
@@ -1585,7 +1677,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
         undoPill.visibility = if (narrow) View.GONE else View.VISIBLE
         dock.visibility = if (narrow) View.VISIBLE else View.GONE
 
-        for (sheet in listOf(toolPill, brushRail, stagePanel)) {
+        for (sheet in listOf(toolPill, brushRail, stagePanel, joyPanel)) {
             if (narrow) asSheet(sheet) else asRail(sheet)
         }
         if (narrow) {
@@ -1644,6 +1736,10 @@ class Chrome(private val act: Activity, val t: Tokens) {
                     top = t.px(R.dimen.stageTop), right = e, width = t.px(R.dimen.stagePanelW),
                 )
                 v.visibility = View.GONE
+            }
+            joyPanel -> {
+                v.orientation = LinearLayout.VERTICAL
+                v.layoutParams = lp(Gravity.END or Gravity.CENTER_VERTICAL, right = e)
             }
         }
         val p = t.px(if (v === toolPill) R.dimen.padPill else R.dimen.padRail)
@@ -1759,7 +1855,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
             return
         }
         val open = isSheetOpen(v)
-        for (other in listOf(toolPill, brushRail, stagePanel)) {
+        for (other in listOf(toolPill, brushRail, stagePanel, joyPanel)) {
             if (other !== v) other.animate().translationY(offscreen(other)).setDuration(220).start()
         }
         openSheet = if (open) null else v
@@ -1803,7 +1899,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
         if (menuOpen()) { setMenu(false); return true }
         for (p in popovers) if (p.visibility == View.VISIBLE) { closePopovers(); return true }
         if (compact) {
-            for (s in listOf(toolPill, brushRail, stagePanel)) {
+            for (s in listOf(toolPill, brushRail, stagePanel, joyPanel)) {
                 if (isSheetOpen(s)) { toggleSheet(s); return true }
             }
         } else if (stagePanel.visibility == View.VISIBLE) {
@@ -1886,6 +1982,14 @@ class Chrome(private val act: Activity, val t: Tokens) {
 
     /** The tool pill's Mirror button lights for either kind of symmetry. */
     fun setSymmetry(on: Boolean) { symmetryOn = on; refresh() }
+
+    /** [usable] dims the axes that are end-on and cannot be dragged along. */
+    fun setTransform(mode: Transform.Mode, label: String, usable: List<Boolean>) {
+        joyMode = mode
+        joyLabel = label
+        joyPad.usable = usable
+        refresh()
+    }
 
     fun setPressure(on: Boolean, target: String) {
         pressureOn = on; pressureTarget = target; refresh()
@@ -1991,6 +2095,12 @@ class Chrome(private val act: Activity, val t: Tokens) {
         }
         /* the strip only exists while the tool does, and it always has a
            selection to work on — that is what it is for */
+        for ((m, b) in joyModes) b.on = m == joyMode
+        joyTarget.text = joyLabel
+        /* the gizmo needs something to transform, and liquify owns the
+           selection while it is running */
+        joyPanel.visibility =
+            if (selectionCount > 0 && tool != Tool.LIQUIFY) View.VISIBLE else View.GONE
         liquifyPanel.visibility =
             if (tool == Tool.LIQUIFY && selectionCount > 0) View.VISIBLE else View.GONE
         for ((k, b) in lqModes) b.on = k == lqMode

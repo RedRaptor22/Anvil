@@ -50,6 +50,7 @@ import art.plume.core.Step
 import art.plume.core.Stroke
 import art.plume.core.StrokePoint
 import art.plume.core.StyleChange
+import art.plume.core.Transform
 import art.plume.core.Tune
 import art.plume.core.Vec3
 import art.plume.core.clamp
@@ -121,6 +122,11 @@ class MainActivity : Activity(), Gestures.Listener {
     /** FACT (C.3): the pressure toggle lives in the Brush Panel. */
     private var pressureOn = true
     private var pressureTarget = "size"
+
+    // ---- the transform gizmo -----------------------------------------------
+
+    private var joyMode = Transform.Mode.MOVE
+    private var joyAxis: Int? = null
 
     private val liquifyCfg = Liquify.Settings()
 
@@ -394,6 +400,36 @@ class MainActivity : Activity(), Gestures.Listener {
             val before = sketch.selection
             sketch.selectOnly(sketch.editable())
             commitSelectionChange("Select all", before)
+        }
+        chrome.onTransformMode = { m -> joyMode = m; pushTransform() }
+        chrome.onTransformGrab = { axis ->
+            joyAxis = axis
+            /*
+             * The whole drag is ONE history step. Snapshotting on every sample
+             * would put a hundred entries in the stack for one gesture, and
+             * undoing a nudge would take a hundred taps.
+             */
+            /*
+             * The same drag snapshot every other point-moving tool uses, so a
+             * gizmo drag lands in history the same shape as a Smooth or a
+             * Liquify: one step, positions before and after.
+             */
+            val sel = sketch.selection
+            if (sel.isNotEmpty()) {
+                dragTargets = sel
+                dragPositions = Editing.snapshot(sel)
+                dragMoved = false
+            }
+            pushTransform()
+        }
+        chrome.onTransformDrag = { axis, dx, dy, sweep, strip ->
+            stepTransform(axis, dx.toDouble(), dy.toDouble(), sweep, strip)
+        }
+        chrome.onTransformEnd = {
+            joyAxis = null
+            commitPointChange("Transform")
+            clearDrag()
+            pushTransform()
         }
         chrome.onPressure = { togglePressure() }
         chrome.onPressureTarget = { target ->
@@ -824,6 +860,64 @@ class MainActivity : Activity(), Gestures.Listener {
         )
     }
 
+    /**
+     * One step of a gizmo drag.
+     *
+     * The centre is the selection's own, recomputed each sample: a rotation
+     * about a stale centre drifts the selection sideways as it turns.
+     */
+    private fun stepTransform(axis: Int?, dx: Double, dy: Double, sweep: Double, strip: Boolean) {
+        val targets = dragTargets ?: return
+        if (targets.isEmpty()) return
+        dragMoved = true
+        val centre = Bounds().also { b -> for (s in targets) for (p in s.pts) b.add(p.p) }
+        if (centre.empty) return
+        val c = centre.centre()
+
+        val m = if (axis == null) {
+            Transform.free(camera, joyMode, dx, dy, c, strip)
+        } else {
+            val a = Transform.AXES[axis]
+            val screen = Transform.axisOnScreen(camera, a, c) ?: return
+            Transform.alongAxis(joyMode, a, screen, c, dx, dy, sweep)
+        }
+        Selection.transform(targets, m)
+        refreshStrokeMeshes(targets)
+        surface.requestRender()
+    }
+
+    private fun pushTransform() {
+        val sel = sketch.selection
+        val label = when {
+            sel.isEmpty() -> getString(R.string.joy_nothing)
+            joyAxis != null -> getString(
+                R.string.joy_axis,
+                getString(
+                    when (joyMode) {
+                        Transform.Mode.MOVE -> R.string.joy_move
+                        Transform.Mode.ROTATE -> R.string.joy_turn
+                        Transform.Mode.SCALE -> R.string.joy_size
+                    },
+                ),
+                "XYZ"[joyAxis!!].toString(),
+            )
+            else -> getString(R.string.joy_count, sel.size)
+        }
+        /*
+         * An axis pointing nearly at the camera has no usable screen
+         * direction, so its arc is dimmed rather than left to send the
+         * selection to the horizon on a one-pixel drag.
+         */
+        val usable = if (sel.isEmpty()) {
+            listOf(false, false, false)
+        } else {
+            val b = Bounds().also { bb -> for (s in sel) for (p in s.pts) bb.add(p.p) }
+            val c = if (b.empty) Vec3() else b.centre()
+            Transform.AXES.map { Transform.axisOnScreen(camera, it, c) != null }
+        }
+        chrome.setTransform(joyMode, label, usable)
+    }
+
     private fun pushLiquify() {
         chrome.setLiquify(
             liquifyCfg.mode.name.lowercase(),
@@ -945,6 +1039,7 @@ class MainActivity : Activity(), Gestures.Listener {
         val g = guides.active
         chrome.setGuide(g != null, g?.name ?: "", g?.opacity ?: 0.42)
         chrome.setSelection(sketch.selection.size)
+        pushTransform()
         chrome.setViewInfo(camera.focal.toInt(), !camera.ortho, sketch.strokes.size)
     }
 

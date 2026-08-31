@@ -22,6 +22,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import art.plume.core.ColorSpace
 import art.plume.core.Rgba
+import art.plume.core.Transform
 import kotlin.math.abs
 import kotlin.math.exp
 
@@ -888,4 +889,188 @@ class ColorWheel(
         /** where the hue knob rides, as a fraction of the radius */
         const val KNOB_RATIO = 0.81
     }
+}
+
+/**
+ * `#joyPad` — the transform gizmo.
+ *
+ * A circle with three coloured arcs on its ring, one per world axis. Pressing
+ * the middle drags freely in the screen plane; grabbing an arc constrains the
+ * drag to that axis. The arcs sit at FIXED, equally spaced points rather than
+ * where each axis happens to project, so a handle stays where you last reached
+ * for it — an axis whose direction is meaningless from here is dimmed instead
+ * of moved.
+ */
+class JoyPad(
+    ctx: Context,
+    private val t: Tokens,
+    private val onGrab: (axis: Int?) -> Unit,
+    private val onDrag: (axis: Int?, dx: Float, dy: Float, sweep: Double) -> Unit,
+    private val onRelease: () -> Unit,
+) : View(ctx) {
+
+    /** Which axes have a usable screen direction; the rest are drawn faint. */
+    var usable = listOf(true, true, true)
+        set(v) { field = v; invalidate() }
+
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val arc = RectF()
+    private var grabbed: Int? = null
+    private var lastX = 0f
+    private var lastY = 0f
+    private var lastAngle = 0.0
+
+    init {
+        val side = t.dp(108f)
+        layoutParams = LinearLayout.LayoutParams(side, side)
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        val c = width / 2f
+        val r = width * (43f / 108f)
+        val inner = width * (19f / 108f)
+
+        paint.style = Paint.Style.FILL
+        paint.color = t.panel2
+        canvas.drawCircle(c, c, c, paint)
+
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = t.dpf(1f)
+        paint.color = t.line
+        canvas.drawCircle(c, c, r, paint)
+        canvas.drawCircle(c, c, inner, paint)
+
+        paint.strokeCap = Paint.Cap.ROUND
+        arc.set(c - r, c - r, c + r, c + r)
+        for (i in 0..2) {
+            val hot = grabbed == i
+            paint.color = AXIS_COLORS[i]
+            paint.alpha = if (!usable[i]) 46 else if (hot) 255 else 217
+            paint.strokeWidth = t.dpf(if (hot) 8f else 5f)
+            val mid = Math.toDegrees(Transform.ARC_ANGLES[i]).toFloat()
+            canvas.drawArc(arc, mid - SPAN_DEG, SPAN_DEG * 2, false, paint)
+        }
+        paint.style = Paint.Style.FILL
+        paint.alpha = 255
+
+        /* the knob in the middle, so the free centre reads as a control */
+        paint.color = t.panel
+        canvas.drawCircle(c, c, t.dpf(13f), paint)
+
+        paint.textSize = t.dpf(9f)
+        paint.textAlign = Paint.Align.CENTER
+        paint.isFakeBoldText = true
+        for (i in 0..2) {
+            paint.color = AXIS_COLORS[i]
+            paint.alpha = if (usable[i]) 230 else 60
+            val a = Transform.ARC_ANGLES[i]
+            val lr = r - t.dpf(13f)
+            canvas.drawText(
+                "XYZ"[i].toString(),
+                c + (kotlin.math.cos(a) * lr).toFloat(),
+                c + (kotlin.math.sin(a) * lr).toFloat() + t.dpf(3f),
+                paint,
+            )
+        }
+        paint.alpha = 255
+    }
+
+    override fun onTouchEvent(e: MotionEvent): Boolean {
+        when (e.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                parent?.requestDisallowInterceptTouchEvent(true)
+                val c = width / 2.0
+                val scale = 108.0 / width
+                grabbed = Transform.pickAxis(
+                    e.x * scale, e.y * scale, 54.0, 19.0, Transform.ARC_ANGLES, usable,
+                )
+                lastX = e.x; lastY = e.y
+                lastAngle = kotlin.math.atan2(e.y - c, e.x - c)
+                onGrab(grabbed)
+                invalidate()
+                return true
+            }
+            MotionEvent.ACTION_MOVE -> {
+                val c = width / 2.0
+                val ang = kotlin.math.atan2(e.y - c, e.x - c)
+                /* shortest way round, so crossing the seam is not a full turn */
+                var sweep = ang - lastAngle
+                while (sweep > Math.PI) sweep -= Math.PI * 2
+                while (sweep < -Math.PI) sweep += Math.PI * 2
+                lastAngle = ang
+                onDrag(grabbed, e.x - lastX, e.y - lastY, sweep)
+                lastX = e.x; lastY = e.y
+                return true
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                grabbed = null
+                invalidate()
+                onRelease()
+                performClick()
+                return true
+            }
+        }
+        return super.onTouchEvent(e)
+    }
+
+    override fun performClick(): Boolean { super.performClick(); return true }
+
+    companion object {
+        /** RGB for XYZ, the same mapping the global axis uses. */
+        val AXIS_COLORS = intArrayOf(
+            0xFFF2545B.toInt(), 0xFF4CC38A.toInt(), 0xFF5B9DFF.toInt(),
+        )
+        /** How much of the ring each arc covers, either side of its centre. */
+        const val SPAN_DEG = 26f
+    }
+}
+
+/**
+ * `#joyStrip` — the depth axis, towards and away from the camera.
+ *
+ * Separate from the pad because there is nowhere on a flat circle to put the
+ * direction you are looking down: it is the one axis a two-dimensional control
+ * cannot show, so it gets a slider of its own.
+ */
+class JoyStrip(
+    ctx: Context,
+    private val t: Tokens,
+    private val onDrag: (dy: Float) -> Unit,
+    private val onRelease: () -> Unit,
+) : View(ctx) {
+
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val rect = RectF()
+    private var lastY = 0f
+
+    init { layoutParams = LinearLayout.LayoutParams(t.dp(108f), t.dp(26f)) }
+
+    override fun onDraw(canvas: Canvas) {
+        rect.set(0f, 0f, width.toFloat(), height.toFloat())
+        paint.color = t.panel2
+        canvas.drawRoundRect(rect, height / 2f, height / 2f, paint)
+        paint.color = t.dim2
+        rect.set(
+            width / 2f - t.dpf(11f), height / 2f - t.dpf(2f),
+            width / 2f + t.dpf(11f), height / 2f + t.dpf(2f),
+        )
+        canvas.drawRoundRect(rect, t.dpf(2f), t.dpf(2f), paint)
+    }
+
+    override fun onTouchEvent(e: MotionEvent): Boolean {
+        when (e.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                parent?.requestDisallowInterceptTouchEvent(true)
+                lastY = e.y
+                return true
+            }
+            MotionEvent.ACTION_MOVE -> { onDrag(e.y - lastY); lastY = e.y; return true }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                onRelease(); performClick(); return true
+            }
+        }
+        return super.onTouchEvent(e)
+    }
+
+    override fun performClick(): Boolean { super.performClick(); return true }
 }

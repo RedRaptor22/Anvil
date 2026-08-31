@@ -158,6 +158,14 @@
     <string name="pivot_released">Orbit point released</string>
     <string name="view_reset">View reset</string>
 
+    <!-- #joy, the transform gizmo -->
+    <string name="joy_move">Move</string>
+    <string name="joy_turn">Turn</string>
+    <string name="joy_size">Size</string>
+    <string name="joy_nothing">Nothing selected</string>
+    <string name="joy_axis">%1$s along %2$s</string>
+    <string name="joy_count">%1$d selected</string>
+
     <string name="nothing_under_that">Nothing under that</string>
     <string name="bad_hex">Not a colour — six hex digits, or three</string>
     <string name="eyedrop_hint">Tap a curve to sample its colour</string>
