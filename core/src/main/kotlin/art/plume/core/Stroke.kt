@@ -83,6 +83,48 @@ class Stroke(
 ) {
     val pts = ArrayList<StrokePoint>()
     val cfg: Brush get() = Brushes.resolve(brush)
+
+    /**
+     * Stable identity, so a document can name a curve across a save, an undo
+     * or an erase that split it in two. Object identity alone will not do:
+     * erasing replaces a stroke with fresh ones built from its surviving runs.
+     */
+    val id: Int = nextId()
+
+    /** Which group this belongs to, if any. Groups hide and show together. */
+    var group: Int? = null
+
+    var selected = false
+
+    /** The seed reference direction, kept so a rebuild reproduces the frame. */
+    var seedRef: Vec3? = null
+
+    /** A copy carrying [points] instead of this stroke's own. */
+    fun withPoints(points: List<StrokePoint>): Stroke {
+        val out = Stroke(brush, color, baseRadius, opacity, guideId)
+        out.group = group
+        out.seedRef = seedRef?.copy()
+        for (q in points) {
+            out.pts.add(
+                StrokePoint(
+                    q.p.copy(),
+                    tan = q.tan?.copy(),
+                    ref = q.ref?.copy(),
+                    roll = q.roll,
+                    pressure = q.pressure,
+                    nrm = q.nrm?.copy(),
+                ),
+            )
+        }
+        return out
+    }
+
+    fun copyStroke(): Stroke = withPoints(pts)
+
+    private companion object {
+        var counter = 0
+        fun nextId(): Int = ++counter
+    }
 }
 
 /** Triangle soup ready for a GL buffer. */

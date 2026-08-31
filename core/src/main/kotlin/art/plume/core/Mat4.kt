@@ -108,6 +108,27 @@ class Mat4 {
             return out
         }
 
+        fun translation(x: Double, y: Double, z: Double, out: Mat4): Mat4 {
+            out.identity()
+            out.m[12] = x; out.m[13] = y; out.m[14] = z
+            return out
+        }
+
+        fun scale(x: Double, y: Double, z: Double, out: Mat4): Mat4 {
+            out.identity()
+            out.m[0] = x; out.m[5] = y; out.m[10] = z
+            return out
+        }
+
+        /** Rotation about the vertical axis, which is what radial symmetry turns on. */
+        fun rotationY(angle: Double, out: Mat4): Mat4 {
+            val c = kotlin.math.cos(angle); val s = kotlin.math.sin(angle)
+            out.identity()
+            out.m[0] = c; out.m[8] = s
+            out.m[2] = -s; out.m[10] = c
+            return out
+        }
+
         /** Rotation about the Z axis, for the canvas roll a two-finger twist gives. */
         fun rotationZ(angle: Double, out: Mat4): Mat4 {
             val c = kotlin.math.cos(angle); val s = kotlin.math.sin(angle)
@@ -191,6 +212,19 @@ class Mat4 {
         m[1]*v.x + m[5]*v.y + m[9]*v.z,
         m[2]*v.x + m[6]*v.y + m[10]*v.z,
     )
+
+    /**
+     * The scale this matrix applies along each axis, as the length of its
+     * basis columns. A uniform scale also scales a brush radius; a non-uniform
+     * one leaves the radius alone rather than asking for a cross-section the
+     * data model cannot represent.
+     */
+    fun uniformScale(): Double {
+        val sx = kotlin.math.sqrt(m[0] * m[0] + m[1] * m[1] + m[2] * m[2])
+        val sy = kotlin.math.sqrt(m[4] * m[4] + m[5] * m[5] + m[6] * m[6])
+        val sz = kotlin.math.sqrt(m[8] * m[8] + m[9] * m[9] + m[10] * m[10])
+        return if (abs(sx - sy) < 1e-6 && abs(sy - sz) < 1e-6) sx else 1.0
+    }
 
     /** The three basis columns of a camera's world matrix: right, up, forward. */
     fun extractBasis(right: Vec3, up: Vec3, forward: Vec3) {
