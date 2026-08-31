@@ -2,6 +2,7 @@ package art.plume.anvil
 
 import android.content.Context
 import android.content.res.Configuration
+import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Outline
@@ -19,6 +20,8 @@ import android.widget.GridLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
+import art.plume.core.ColorSpace
+import art.plume.core.Rgba
 import kotlin.math.abs
 import kotlin.math.exp
 
@@ -700,4 +703,189 @@ class LightPad(
     }
 
     override fun performClick(): Boolean { super.performClick(); return true }
+}
+
+/**
+ * The colour wheel — a hue ring with a saturation/value square inside it.
+ *
+ * Ported from `initColorWheel`, and it replaces the platform colour picker for
+ * the same reason the web build replaces the native input: it cannot be styled
+ * to match, and a system dialog in the middle of this interface is the one
+ * piece of chrome that would look borrowed.
+ *
+ * The ring is drawn ONCE into a bitmap rather than per frame. It is 200x200
+ * pixels of per-pixel trigonometry — cheap once, wasteful sixty times a
+ * second, and it never changes: the hue at a point on the ring is a property
+ * of the ring, not of the colour selected.
+ *
+ * The two edges of the ring are feathered by their distance to it, because a
+ * hard cut at both radii is visibly stepped at this size.
+ */
+class ColorWheel(
+    ctx: Context,
+    private val t: Tokens,
+    private val onPick: (Rgba) -> Unit,
+) : View(ctx) {
+
+    private val hsv = ColorSpace.Hsv(220.0, 0.1, 0.13)
+    private var ring: Bitmap? = null
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val rect = RectF()
+    private val svRect = RectF()
+
+    /** Which control the finger went down on, so a drag stays with it. */
+    private var grabbed = 0            // 0 none, 1 ring, 2 square
+
+    init {
+        val side = t.dp(WHEEL_DP)
+        layoutParams = LinearLayout.LayoutParams(side, side).apply {
+            gravity = Gravity.CENTER_HORIZONTAL
+        }
+    }
+
+    fun setColor(c: Rgba) {
+        /* keep the hue: a grey has none, and letting it read back as 0 would
+           throw the knob to red every time the picker reopened on black */
+        val h = ColorSpace.rgbToHsv(c, hsv.h)
+        hsv.h = h.h; hsv.s = h.s; hsv.v = h.v
+        invalidate()
+    }
+
+    private fun current(): Rgba = ColorSpace.hsvToRgb(hsv.h, hsv.s, hsv.v)
+
+    private fun buildRing(px: Int): Bitmap {
+        val bmp = Bitmap.createBitmap(px, px, Bitmap.Config.ARGB_8888)
+        val r = px / 2.0
+        val inner = r * INNER_RATIO
+        val row = IntArray(px)
+        for (y in 0 until px) {
+            for (x in 0 until px) {
+                val dx = x - r
+                val dy = y - r
+                val d = kotlin.math.sqrt(dx * dx + dy * dy)
+                if (d > r || d < inner) { row[x] = 0; continue }
+                val hue = (Math.toDegrees(kotlin.math.atan2(dy, dx)) + 360.0) % 360.0
+                val c = ColorSpace.hsvToRgb(hue, 1.0, 1.0)
+                val a = (255 * (kotlin.math.min(r - d, d - inner)).coerceIn(0.0, 1.0)).toInt()
+                row[x] = (a shl 24) or
+                    ((c.r * 255).toInt() shl 16) or
+                    ((c.g * 255).toInt() shl 8) or
+                    (c.b * 255).toInt()
+            }
+            bmp.setPixels(row, 0, px, 0, y, px, 1)
+        }
+        return bmp
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        val px = kotlin.math.min(width, height)
+        if (px <= 0) return
+        val bmp = ring?.takeIf { it.width == px } ?: buildRing(px).also { ring?.recycle(); ring = it }
+        canvas.drawBitmap(bmp, 0f, 0f, null)
+
+        // the saturation/value square, centred in the ring's hole
+        val side = px * SV_RATIO
+        val left = (px - side) / 2f
+        svRect.set(left, left, left + side, left + side)
+        val base = ColorSpace.hsvToRgb(hsv.h, 1.0, 1.0)
+        paint.shader = null
+        paint.color = argb(base)
+        canvas.drawRect(svRect, paint)
+        /* white across, black down — the two gradients the web build layers */
+        paint.shader = android.graphics.LinearGradient(
+            svRect.left, 0f, svRect.right, 0f,
+            0xFFFFFFFF.toInt(), 0x00FFFFFF, android.graphics.Shader.TileMode.CLAMP,
+        )
+        canvas.drawRect(svRect, paint)
+        paint.shader = android.graphics.LinearGradient(
+            0f, svRect.top, 0f, svRect.bottom,
+            0x00000000, 0xFF000000.toInt(), android.graphics.Shader.TileMode.CLAMP,
+        )
+        canvas.drawRect(svRect, paint)
+        paint.shader = null
+
+        val c = argb(current())
+        val ringR = px / 2f
+        val a = Math.toRadians(hsv.h)
+        knob(
+            canvas,
+            ringR + (kotlin.math.cos(a) * ringR * KNOB_RATIO).toFloat(),
+            ringR + (kotlin.math.sin(a) * ringR * KNOB_RATIO).toFloat(),
+            c,
+        )
+        knob(
+            canvas,
+            svRect.left + (hsv.s * side).toFloat(),
+            svRect.top + ((1 - hsv.v) * side).toFloat(),
+            c,
+        )
+    }
+
+    /** `.knob` — a 14px dot with a white ring and a hairline outside it. */
+    private fun knob(canvas: Canvas, cx: Float, cy: Float, color: Int) {
+        val r = t.dpf(7f)
+        paint.color = 0x59000000
+        canvas.drawCircle(cx, cy, r + t.dpf(1f), paint)
+        paint.color = 0xFFFFFFFF.toInt()
+        canvas.drawCircle(cx, cy, r, paint)
+        paint.color = color
+        canvas.drawCircle(cx, cy, r - t.dpf(2f), paint)
+    }
+
+    private fun argb(c: Rgba) = android.graphics.Color.rgb(
+        (c.r * 255).toInt().coerceIn(0, 255),
+        (c.g * 255).toInt().coerceIn(0, 255),
+        (c.b * 255).toInt().coerceIn(0, 255),
+    )
+
+    override fun onTouchEvent(e: MotionEvent): Boolean {
+        val px = kotlin.math.min(width, height).toFloat()
+        if (px <= 0) return false
+        when (e.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                parent?.requestDisallowInterceptTouchEvent(true)
+                /*
+                 * Decide once, on the way down, whether this drag belongs to
+                 * the ring or the square. Deciding per sample lets a fast drag
+                 * off the square jump onto the ring and change the hue, which
+                 * is the one thing the square must never do.
+                 */
+                grabbed = if (svRect.contains(e.x, e.y)) 2 else 1
+                apply(e.x, e.y, px)
+                return true
+            }
+            MotionEvent.ACTION_MOVE -> { if (grabbed != 0) apply(e.x, e.y, px); return true }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                grabbed = 0
+                performClick()
+                return true
+            }
+        }
+        return super.onTouchEvent(e)
+    }
+
+    private fun apply(x: Float, y: Float, px: Float) {
+        if (grabbed == 1) {
+            val r = px / 2f
+            hsv.h = (Math.toDegrees(kotlin.math.atan2((y - r).toDouble(), (x - r).toDouble())) + 360.0) % 360.0
+        } else {
+            val side = svRect.width()
+            hsv.s = ((x - svRect.left) / side).toDouble().coerceIn(0.0, 1.0)
+            hsv.v = (1.0 - (y - svRect.top) / side).toDouble().coerceIn(0.0, 1.0)
+        }
+        invalidate()
+        onPick(current())
+    }
+
+    override fun performClick(): Boolean { super.performClick(); return true }
+
+    companion object {
+        const val WHEEL_DP = 200f
+        /** where the ring's hole starts, as a fraction of its radius */
+        const val INNER_RATIO = 0.62
+        /** the square's side, as a fraction of the whole */
+        const val SV_RATIO = 0.52f
+        /** where the hue knob rides, as a fraction of the radius */
+        const val KNOB_RATIO = 0.81
+    }
 }

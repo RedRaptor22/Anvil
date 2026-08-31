@@ -10,7 +10,10 @@ import android.widget.FrameLayout
 import android.widget.GridLayout
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.EditText
+import art.plume.core.ColorSpace
 import art.plume.core.DocumentEnv
+import art.plume.core.Rgba
 import art.plume.core.Tune
 
 /**
@@ -38,6 +41,7 @@ enum class Tool(val key: String, val icon: String) {
     PRIM("prim", "solid"),
     LIQUIFY("liquify", "liquify"),
     INJECT("inject", "inject"),
+    EYEDROP("eyedrop", "pick"),
 }
 
 /**
@@ -98,6 +102,11 @@ class Chrome(private val act: Activity, val t: Tokens) {
     var onFx: () -> Unit = {}
     var onPickBackground: () -> Unit = {}
     var onPickLightColour: () -> Unit = {}
+
+    /** The colour card. [onHex] gets raw text; a bad one leaves the colour alone. */
+    var onHex: (String) -> Unit = {}
+    var onWheel: (Rgba) -> Unit = {}
+    var onEyedrop: () -> Unit = {}
 
     /** The staging bar: Loft's tension, a primitive's segments and taper. */
     var onStageValue: (which: Int, value: Double) -> Unit = { _, _ -> }
@@ -210,6 +219,8 @@ class Chrome(private val act: Activity, val t: Tokens) {
     private lateinit var pixelVal: DragValue
     private lateinit var bgSwatch: View
     private lateinit var lightSwatch: View
+    private lateinit var hexField: EditText
+    private lateinit var colorWheel: ColorWheel
     private lateinit var stageBar: LinearLayout
     private lateinit var stageRow2: LinearLayout
     private lateinit var primKinds: LinearLayout
@@ -849,19 +860,68 @@ class Chrome(private val act: Activity, val t: Tokens) {
     }
 
     /**
-     * `#colorCard` — the hex row and the swatch grid.
+     * `#colorCard` — a hex row, the wheel, and the swatches.
      *
-     * The hue wheel is NOT here yet: it is a 200px canvas plus an HSV box, and
-     * a wheel that cannot be sampled from the sketch is only half of the
-     * control. The swatches are what the rail actually needs to be usable, so
-     * they ship first and the wheel is a named gap, not a silent one.
+     * The wheel replaces the platform picker for the reason the web build
+     * replaces the native input: a system colour dialog cannot be styled to
+     * match, and dropping one into the middle of this interface is the single
+     * piece of chrome that would look borrowed.
      */
     private fun buildColorCard() {
         colorCard.orientation = LinearLayout.VERTICAL
         val p = t.px(R.dimen.padPop)
         colorCard.setPadding(p, p, p, p)
-        colorCard.addView(head(act.getString(R.string.colour)) { closePopovers() })
-        val grid = GridLayout(act).apply { columnCount = 5 }
+
+        /* `#hexRow` — the field and the sample-from-sketch button */
+        val hexRow = LinearLayout(act).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = GradientDrawable().apply {
+                setColor(t.panel2); cornerRadius = t.dpf(11f)
+            }
+            setPadding(t.dp(10f), t.dp(5f), t.dp(6f), t.dp(5f))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            )
+        }
+        hexField = EditText(act).apply {
+            setTextColor(t.ink)
+            textSize = 12f
+            letterSpacing = 0.06f
+            background = null
+            setPadding(0, 0, 0, 0)
+            isSingleLine = true
+            filters = arrayOf(android.text.InputFilter.LengthFilter(7))
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or
+                android.text.InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS
+            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_DONE
+            typeface = android.graphics.Typeface.MONOSPACE
+            layoutParams = LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f,
+            )
+            /*
+             * Committed on Done, not on every keystroke. Parsing as you type
+             * means four characters of a six-character hex is a colour, so the
+             * swatch would jump somewhere wrong on the way to somewhere right.
+             */
+            setOnEditorActionListener { v, _, _ -> onHex(v.text.toString()); true }
+        }
+        hexRow.addView(hexField)
+        hexRow.addView(
+            IcoButton(act, t, IcoButton.SIZE_SMALL).icon("pick").apply {
+                setOnClickListener { onEyedrop() }
+            },
+        )
+        colorCard.addView(hexRow)
+
+        colorWheel = ColorWheel(act, t) { c -> onWheel(c) }
+        colorCard.addView(
+            colorWheel,
+            LinearLayout.LayoutParams(t.dp(ColorWheel.WHEEL_DP), t.dp(ColorWheel.WHEEL_DP))
+                .apply { gravity = Gravity.CENTER_HORIZONTAL; topMargin = t.dp(10f) },
+        )
+
+        val grid = GridLayout(act).apply { columnCount = 8 }
         for (c in PALETTE) {
             grid.addView(
                 View(act).apply {
@@ -871,16 +931,19 @@ class Chrome(private val act: Activity, val t: Tokens) {
                         setStroke(t.dp(1f), t.line)
                     }
                     layoutParams = GridLayout.LayoutParams().apply {
-                        width = t.dp(28f); height = t.dp(28f)
-                        setMargins(t.dp(4f), t.dp(4f), t.dp(4f), t.dp(4f))
+                        width = t.dp(19f); height = t.dp(19f)
+                        setMargins(t.dp(3f), t.dp(3f), t.dp(3f), t.dp(3f))
                     }
-                    setOnClickListener {
-                        inkColor = c; onColor(c); closePopovers(); refresh()
-                    }
+                    setOnClickListener { inkColor = c; onColor(c); refresh() }
                 },
             )
         }
-        colorCard.addView(grid)
+        colorCard.addView(
+            grid,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { gravity = Gravity.CENTER_HORIZONTAL; topMargin = t.dp(8f) },
+        )
         colorCard.visibility = View.GONE
         popovers.add(colorCard)
     }
@@ -1414,6 +1477,27 @@ class Chrome(private val act: Activity, val t: Tokens) {
         pixelVal.text = "${pixelSize.toInt()}px"
         swatch(bgSwatch, backgroundColor)
         swatch(lightSwatch, lightColor)
+
+        /* don't fight the keyboard: only rewrite the field when it is not
+           the thing being typed into */
+        if (!hexField.hasFocus()) {
+            hexField.setText(
+                ColorSpace.toHex(
+                    Rgba(
+                        Color.red(inkColor) / 255.0,
+                        Color.green(inkColor) / 255.0,
+                        Color.blue(inkColor) / 255.0,
+                    ),
+                ),
+            )
+        }
+        colorWheel.setColor(
+            Rgba(
+                Color.red(inkColor) / 255.0,
+                Color.green(inkColor) / 255.0,
+                Color.blue(inkColor) / 255.0,
+            ),
+        )
         icons["brushType"]?.on = brushGrid.visibility == View.VISIBLE
     }
 

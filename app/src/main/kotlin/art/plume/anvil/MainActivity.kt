@@ -19,6 +19,7 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import art.plume.core.Bounds
 import art.plume.core.Camera
+import art.plume.core.ColorSpace
 import art.plume.core.Dedupe
 import art.plume.core.Document
 import art.plume.core.DocumentEnv
@@ -306,6 +307,18 @@ class MainActivity : Activity(), Gestures.Listener {
         chrome.onOpacity = { o -> applyOpacityToSelectionOrBrush(o) }
         chrome.onBrush = { b -> brush = b }
         chrome.onColor = { argb -> applyColorToSelectionOrBrush(rgbaOf(argb)) }
+        chrome.onHex = { text ->
+            val c = ColorSpace.parseHex(text)
+            if (c == null) toast(getString(R.string.bad_hex))
+            else applyColorToSelectionOrBrush(c)
+            chrome.setColor(argbOf(color))
+        }
+        chrome.onWheel = { c -> applyColorToSelectionOrBrush(c) }
+        chrome.onEyedrop = {
+            chrome.closePopovers()
+            setTool(Tool.EYEDROP)
+            toast(getString(R.string.eyedrop_hint))
+        }
         chrome.onStageValue = { which, v -> stageValue(which, v) }
         chrome.onPrimKind = { k -> primKind = k; previewPrimitive() }
         chrome.onStageDone = { commitStaging() }
@@ -362,16 +375,28 @@ class MainActivity : Activity(), Gestures.Listener {
         camera.apply()
     }
 
-    /** `Tools.sample` — the injector takes the whole brush, not just its ink. */
-    private fun sampleAt(x: Double, y: Double) {
+    /**
+     * `Tools.sample`. The two samplers differ in how much they take: the
+     * INJECTOR picks up the whole brush — type, size, opacity and ink — while
+     * the EYEDROPPER takes only the colour, so you can recolour without losing
+     * the nib you had set up.
+     */
+    private fun sampleAt(x: Double, y: Double, whole: Boolean) {
         val hit = Selection.hitTest(sketch, camera, x, y, mask())
         if (hit == null) { toast(getString(R.string.nothing_under_that)); return }
-        brush = hit.brush
         color = hit.color
-        sizeMM = hit.baseRadius * 2.0 / MM
-        opacity = hit.opacity
+        if (whole) {
+            brush = hit.brush
+            sizeMM = hit.baseRadius * 2.0 / MM
+            opacity = hit.opacity
+        }
         syncBrushControls()
-        toast(getString(R.string.sampled, hit.brush))
+        toast(
+            if (whole) getString(R.string.sampled, hit.brush)
+            else getString(R.string.sampled_colour),
+        )
+        /* a sampler is a one-shot: it hands you back the tool you were using */
+        setTool(Tool.DRAW)
     }
 
     /** The eye on the guide bar: keep this surface in the Resource tab. */
@@ -700,7 +725,8 @@ class MainActivity : Activity(), Gestures.Listener {
             /* Tools.begin: fill and the samplers act on the press itself and
                have no drag of their own. */
             Tool.FILL -> fillActiveGuide()
-            Tool.INJECT -> sampleAt(x.toDouble(), y.toDouble())
+            Tool.INJECT -> sampleAt(x.toDouble(), y.toDouble(), whole = true)
+            Tool.EYEDROP -> sampleAt(x.toDouble(), y.toDouble(), whole = false)
             Tool.LOFT -> loftPick(x.toDouble(), y.toDouble())
 
             else -> {}
@@ -1266,6 +1292,7 @@ class MainActivity : Activity(), Gestures.Listener {
 
     private fun applyColorToSelectionOrBrush(ink: Rgba) {
         color = ink
+        chrome.setColor(argbOf(ink))
         val sel = sketch.selection
         if (sel.isEmpty()) return
         // FACT: the brush panel restyles a live selection rather than only

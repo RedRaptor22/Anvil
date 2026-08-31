@@ -98,6 +98,9 @@
     <string name="shape_curve">Smoothed%1$s — drag to bend it</string>
 
     <string name="nothing_under_that">Nothing under that</string>
+    <string name="bad_hex">Not a colour — six hex digits, or three</string>
+    <string name="eyedrop_hint">Tap a curve to sample its colour</string>
+    <string name="sampled_colour">Picked up the colour</string>
     <string name="nothing_to_export">Nothing to export</string>
     <string name="snapshot_saved">Snapshot saved</string>
     <string name="snapshot_failed">Could not read the frame</string>
