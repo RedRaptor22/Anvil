@@ -276,6 +276,22 @@ class MainActivity : Activity(), Gestures.Listener {
         chrome.onOpacity = { o -> applyOpacityToSelectionOrBrush(o) }
         chrome.onBrush = { b -> brush = b }
         chrome.onColor = { argb -> applyColorToSelectionOrBrush(rgbaOf(argb)) }
+        chrome.onEnv = { toggle -> flip(toggle) }
+        chrome.onLight = { az, alt ->
+            docEnv.light.az = az
+            docEnv.light.alt = alt
+            pushEnvironment()
+        }
+        /*
+         * The intensity, ambient, f-stop, grain and block-size readouts are
+         * dragged, so the panel owns the number while the finger is down and
+         * hands it back here. Reading it out of the chrome rather than passing
+         * it through the callback keeps one copy of each value.
+         */
+        chrome.onLightLevels = { chrome.readInto(docEnv); pushEnvironment() }
+        chrome.onFx = { chrome.readInto(docEnv); pushEnvironment() }
+        chrome.onPickBackground = { toast(getString(R.string.not_yet_colour_wheel)) }
+        chrome.onPickLightColour = { toast(getString(R.string.not_yet_colour_wheel)) }
         chrome.onGuideOpacity = { v ->
             guides.active?.let { g -> g.opacity = v; pushGuides(); surface.requestRender() }
         }
@@ -391,6 +407,60 @@ class MainActivity : Activity(), Gestures.Listener {
         chrome.setOpacityValue(opacity)
         chrome.setBrush(brush)
         chrome.setColor(argbOf(color))
+    }
+
+    /**
+     * `P.applyEnv` — the environment reaching the renderer, in one call.
+     *
+     * The light and the effects belong to the SKETCH, so a load brings them
+     * with it. Copied into this activity's own [docEnv] rather than held by
+     * reference, because [docEnv] is what a save writes back and a restore
+     * hands back a fresh object each time.
+     */
+    private fun applyEnvironment(env: DocumentEnv) {
+        docEnv.background = env.background
+        docEnv.grid = env.grid
+        docEnv.axis = env.axis
+        docEnv.fog = env.fog
+        docEnv.shaded = env.shaded
+        docEnv.render = env.render
+        docEnv.groundShadow = env.groundShadow
+        docEnv.light.copyFrom(env.light)
+        docEnv.fx.copyFrom(env.fx)
+        pushEnvironment()
+    }
+
+    /**
+     * A Scene switch thrown.
+     *
+     * Not undoable, deliberately. The environment is how you are LOOKING at
+     * the sketch rather than part of it — turning the grid off and then
+     * undoing twice should not put the grid back and leave your last stroke
+     * erased. The web build treats them the same way. It does travel in the
+     * file, which is a different question.
+     */
+    private fun flip(toggle: EnvToggle) {
+        when (toggle) {
+            EnvToggle.GRID -> docEnv.grid = !docEnv.grid
+            EnvToggle.AXIS -> docEnv.axis = !docEnv.axis
+            EnvToggle.FOG -> docEnv.fog = !docEnv.fog
+            EnvToggle.SHADED -> docEnv.shaded = !docEnv.shaded
+            EnvToggle.RENDER -> docEnv.render = !docEnv.render
+            EnvToggle.SHADOW -> docEnv.groundShadow = !docEnv.groundShadow
+            EnvToggle.TOON -> docEnv.light.toon = !docEnv.light.toon
+            EnvToggle.DOF -> docEnv.fx.dofOn = !docEnv.fx.dofOn
+            EnvToggle.GRAIN -> docEnv.fx.grainOn = !docEnv.fx.grainOn
+            EnvToggle.PIXEL -> docEnv.fx.pixelOn = !docEnv.fx.pixelOn
+        }
+        pushEnvironment()
+        scheduleAutosave()
+    }
+
+    /** Push [docEnv] at the renderer and at the panel showing it. */
+    private fun pushEnvironment() {
+        renderer.setEnvironment(docEnv)
+        chrome.setEnvironment(docEnv)
+        surface.requestRender()
     }
 
     /** `UI.refresh` — push the model back at the chrome and let it re-derive. */

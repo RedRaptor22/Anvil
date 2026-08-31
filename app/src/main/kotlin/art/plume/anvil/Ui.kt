@@ -15,6 +15,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.ViewOutlineProvider
 import android.widget.FrameLayout
+import android.widget.GridLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -513,6 +514,181 @@ class HSlider(
                 val f = ((e.x - thumb) / (width - 2 * thumb)).coerceIn(0f, 1f)
                 value = min + f * (max - min)
                 onChange(value)
+                return true
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                performClick()
+                return true
+            }
+        }
+        return super.onTouchEvent(e)
+    }
+
+    override fun performClick(): Boolean { super.performClick(); return true }
+}
+
+/**
+ * `.tabs` — a row of tabs with an underline indicator.
+ *
+ * The stylesheet is specific about this one: the active tab is not a filled
+ * pill but plain text in the ink colour with a 2px rule under it, inset 12%
+ * either side. It is the only place in the interface that marks a selection
+ * with a line rather than with a ground.
+ */
+class Tabs(
+    ctx: Context,
+    private val t: Tokens,
+    labels: List<String>,
+    private val onPick: (Int) -> Unit,
+) : LinearLayout(ctx) {
+
+    private val buttons = ArrayList<TextView>()
+    private val rule = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val bar = RectF()
+
+    var selected = 0
+        set(v) { field = v; sync(); invalidate() }
+
+    init {
+        orientation = HORIZONTAL
+        setWillNotDraw(false)
+        for ((i, label) in labels.withIndex()) {
+            val b = TextView(ctx).apply {
+                text = label
+                gravity = Gravity.CENTER
+                textSize = 12f
+                minHeight = t.dp(36f)
+                isClickable = true
+                setPadding(t.dp(4f), t.dp(8f), t.dp(4f), t.dp(8f))
+                layoutParams = LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                setOnClickListener { selected = i; onPick(i) }
+            }
+            buttons.add(b)
+            addView(b)
+        }
+        sync()
+    }
+
+    private fun sync() {
+        for ((i, b) in buttons.withIndex()) {
+            b.setTextColor(if (i == selected) t.ink else t.dim)
+            b.setTypeface(null, if (i == selected) android.graphics.Typeface.BOLD else 0)
+        }
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+        rule.color = t.line
+        canvas.drawRect(0f, height - t.dpf(1f), width.toFloat(), height.toFloat(), rule)
+        val b = buttons.getOrNull(selected) ?: return
+        val inset = b.width * 0.12f
+        rule.color = t.ink
+        bar.set(b.left + inset, height - t.dpf(2f), b.right - inset, height.toFloat())
+        canvas.drawRoundRect(bar, t.dpf(1f), t.dpf(1f), rule)
+    }
+}
+
+/**
+ * `.igrid` — a grid of option buttons, three or four across.
+ *
+ * Distinct from the icon buttons because an option here INVERTS when it is on
+ * (`background:var(--active);color:var(--onActive)`) rather than taking a soft
+ * tint. That is the stylesheet's own split: a tool is a mode you are in, an
+ * option is a switch you have thrown.
+ */
+class OptionGrid(
+    private val ctx: Context,
+    private val t: Tokens,
+    columns: Int,
+) : GridLayout(ctx) {
+
+    private val buttons = HashMap<String, TextButton>()
+
+    init { columnCount = columns }
+
+    fun option(key: String, label: String, onToggle: () -> Unit): OptionGrid {
+        val b = TextButton(ctx, t, filled = true, small = true).apply {
+            text = label
+            setOnClickListener { onToggle() }
+        }
+        b.layoutParams = GridLayout.LayoutParams().apply {
+            width = 0
+            height = t.dp(40f)
+            columnSpec = spec(UNDEFINED, 1f)
+            setMargins(t.dp(3f), t.dp(3f), t.dp(3f), t.dp(3f))
+        }
+        buttons[key] = b
+        addView(b)
+        return this
+    }
+
+    fun setOn(key: String, on: Boolean) { buttons[key]?.on = on }
+
+    fun setUsable(key: String, enabled: Boolean) { buttons[key]?.isEnabled = enabled }
+}
+
+/**
+ * The light pad — an 84dp square you drag the sun around in.
+ *
+ * Ported from `bindLightPad`. Sideways turns the key light around the sketch
+ * and up and down raises it from the horizon to overhead: the two things
+ * Feather's lighting icon slides between, given a surface big enough to aim
+ * with a thumb. THE DOT IS WHERE THE LIGHT IS, so dragging it left moves the
+ * light left — the other reading, where the dot marks the lit side, has the
+ * whole control backwards.
+ */
+class LightPad(
+    ctx: Context,
+    private val t: Tokens,
+    private val onAim: (az: Double, alt: Double) -> Unit,
+) : View(ctx) {
+
+    var az = 0.0
+        set(v) { field = v; invalidate() }
+    var alt = 0.0
+        set(v) { field = v; invalidate() }
+
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val rect = RectF()
+
+    init { layoutParams = LinearLayout.LayoutParams(t.dp(84f), t.dp(84f)) }
+
+    override fun onDraw(canvas: Canvas) {
+        val r = t.dpf(12f)
+        rect.set(0f, 0f, width.toFloat(), height.toFloat())
+        paint.shader = android.graphics.LinearGradient(
+            0f, 0f, 0f, height.toFloat(), t.panel3, t.panel2,
+            android.graphics.Shader.TileMode.CLAMP,
+        )
+        canvas.drawRoundRect(rect, r, r, paint)
+        paint.shader = null
+
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = t.dpf(1f)
+        paint.color = t.line
+        canvas.drawRoundRect(rect, r, r, paint)
+        paint.style = Paint.Style.FILL
+
+        val fx = (az / (Math.PI * 2) + 0.5).coerceIn(0.0, 1.0)
+        val fy = (1.0 - alt / (Math.PI / 2)).coerceIn(0.0, 1.0)
+        val cx = (fx * width).toFloat()
+        val cy = (fy * height).toFloat()
+        /* the sun's own glow: box-shadow 0 0 12px 3px rgba(255,211,107,.7) */
+        paint.color = 0x66FFD36B
+        canvas.drawCircle(cx, cy, t.dpf(13f), paint)
+        paint.color = 0xFFFFD36B.toInt()
+        canvas.drawCircle(cx, cy, t.dpf(8f), paint)
+    }
+
+    override fun onTouchEvent(e: MotionEvent): Boolean {
+        when (e.actionMasked) {
+            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE -> {
+                parent?.requestDisallowInterceptTouchEvent(true)
+                val fx = (e.x / width).coerceIn(0f, 1f)
+                val fy = (e.y / height).coerceIn(0f, 1f)
+                az = (fx - 0.5) * Math.PI * 2
+                alt = (1.0 - fy) * (Math.PI / 2)   // horizon at the bottom
+                onAim(az, alt)
                 return true
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {

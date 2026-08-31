@@ -10,6 +10,7 @@ import android.widget.FrameLayout
 import android.widget.GridLayout
 import android.widget.LinearLayout
 import android.widget.TextView
+import art.plume.core.DocumentEnv
 import art.plume.core.Tune
 
 /**
@@ -38,6 +39,15 @@ enum class Tool(val key: String, val icon: String) {
     LIQUIFY("liquify", "liquify"),
     INJECT("inject", "inject"),
 }
+
+/**
+ * The Scene tab's switches.
+ *
+ * Separate from [Action] because these are STATE the chrome renders back,
+ * not one-shot commands: each one has an on and an off that the panel has to
+ * show, and folding them into Action would mean Action carried both meanings.
+ */
+enum class EnvToggle { GRID, AXIS, FOG, SHADED, RENDER, SHADOW, TOON, DOF, GRAIN, PIXEL }
 
 /** Everything a chrome button asks for that is not a change of tool. */
 enum class Action {
@@ -81,6 +91,14 @@ class Chrome(private val act: Activity, val t: Tokens) {
     var onBrush: (String) -> Unit = {}
     var onColor: (Int) -> Unit = {}
 
+    /** The Scene tab. Each hands back what changed; the chrome renders the rest. */
+    var onEnv: (EnvToggle) -> Unit = {}
+    var onLight: (az: Double, alt: Double) -> Unit = { _, _ -> }
+    var onLightLevels: () -> Unit = {}
+    var onFx: () -> Unit = {}
+    var onPickBackground: () -> Unit = {}
+    var onPickLightColour: () -> Unit = {}
+
     val root = FrameLayout(act)
 
     // ---- state the chrome renders ----------------------------------------
@@ -95,6 +113,29 @@ class Chrome(private val act: Activity, val t: Tokens) {
     private var guideOpacity = 0.42
     private var selectionCount = 0
     private var compact = false
+
+    /*
+     * The Scene tab's model. Held here and pushed back by setEnvironment so a
+     * drag on a readout can update the number under the finger without waiting
+     * for the round trip through the document.
+     */
+    private var envGrid = true
+    private var envAxis = false
+    private var envFog = false
+    private var envShaded = true
+    private var envRender = false
+    private var envShadow = true
+    private var envToon = false
+    private var envDof = false
+    private var envGrain = false
+    private var envPixel = false
+    private var lightIntensity = 1.0
+    private var lightAmbient = 0.66
+    private var fstop = 5.6
+    private var grainLevel = 35.0
+    private var pixelSize = 4.0
+    private var backgroundColor = Color.rgb(236, 234, 243)
+    private var lightColor = Color.WHITE
 
     /** Draw/Shape, Select/Lasso, Erase/Vacuum — which side of each pair shows. */
     private val partner = mapOf(
@@ -147,6 +188,18 @@ class Chrome(private val act: Activity, val t: Tokens) {
     private lateinit var vCount: TextView
     private lateinit var sizePopVal: TextView
     private lateinit var opacityPopVal: TextView
+    private lateinit var stageTabs: Tabs
+    private lateinit var sceneOptions: OptionGrid
+    private lateinit var fxOptions: OptionGrid
+    private lateinit var toonButton: TextButton
+    private lateinit var lightPad: LightPad
+    private lateinit var intensityVal: DragValue
+    private lateinit var ambientVal: DragValue
+    private lateinit var fstopVal: DragValue
+    private lateinit var grainVal: DragValue
+    private lateinit var pixelVal: DragValue
+    private lateinit var bgSwatch: View
+    private lateinit var lightSwatch: View
 
     /** `POPOVERS` in ui.js: only one of these is ever open. */
     private val popovers = ArrayList<View>()
@@ -406,31 +459,188 @@ class Chrome(private val act: Activity, val t: Tokens) {
         selBar.visibility = View.GONE
     }
 
+    /**
+     * `#stagePanel` — Curves, Import and Scene.
+     *
+     * Scene is complete: it is what Phase 5 exists for. The other two tabs say
+     * what is missing rather than showing an empty list, because a Curves tab
+     * with nothing in it looks like a sketch with no curves in it.
+     */
     private fun buildStagePanel() {
         stagePanel.orientation = LinearLayout.VERTICAL
         val p = t.px(R.dimen.padCard)
         stagePanel.setPadding(p, p, p, p)
-        stagePanel.addView(head(act.getString(R.string.stage)) { onAction(Action.STAGE) })
-        for ((label, a) in listOf(
-            R.string.new_sketch to Action.NEW,
-            R.string.save to Action.SAVE,
-            R.string.open to Action.OPEN,
-            R.string.export_ to Action.EXPORT,
-            R.string.clear to Action.CLEAR,
-        )) {
-            stagePanel.addView(
-                TextButton(act, t, filled = true).apply {
-                    text = act.getString(label)
-                    gravity = Gravity.START or Gravity.CENTER_VERTICAL
-                    setOnClickListener { onAction(a) }
-                    layoutParams = LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ).apply { topMargin = t.dp(4f) }
-                },
-            )
+        stagePanel.addView(head(act.getString(R.string.stage)) { toggleStage() })
+
+        val bodies = ArrayList<View>()
+        stageTabs = Tabs(
+            act, t,
+            listOf(
+                act.getString(R.string.tab_curves),
+                act.getString(R.string.tab_import),
+                act.getString(R.string.tab_scene),
+            ),
+        ) { i -> for ((j, b) in bodies.withIndex()) b.visibility = if (i == j) View.VISIBLE else View.GONE }
+        stagePanel.addView(
+            stageTabs,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { bottomMargin = t.dp(10f) },
+        )
+
+        bodies.add(gap(R.string.not_yet_groups))
+        bodies.add(gap(R.string.not_yet_import))
+        bodies.add(buildSceneTab())
+        for ((i, b) in bodies.withIndex()) {
+            b.visibility = if (i == 2) View.VISIBLE else View.GONE
+            stagePanel.addView(b)
         }
+        stageTabs.selected = 2
         stagePanel.visibility = View.GONE
     }
+
+    /** `.empty` — the note that stands in for a list nothing has filled yet. */
+    private fun gap(res: Int): View = TextView(act).apply {
+        text = act.getString(res)
+        setTextColor(t.dim2)
+        textSize = 11f
+        setLineSpacing(0f, 1.55f)
+        setPadding(t.dp(1f), t.dp(3f), t.dp(1f), t.dp(3f))
+        layoutParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+        )
+    }
+
+    private fun buildSceneTab(): View {
+        val col = LinearLayout(act).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            )
+        }
+
+        col.addView(labelRow(R.string.background, bgDot()))
+
+        sceneOptions = OptionGrid(act, t, 3)
+            .option("grid", act.getString(R.string.opt_grid)) { onEnv(EnvToggle.GRID) }
+            .option("axis", act.getString(R.string.opt_axis)) { onEnv(EnvToggle.AXIS) }
+            .option("fog", act.getString(R.string.opt_fog)) { onEnv(EnvToggle.FOG) }
+            .option("shade", act.getString(R.string.opt_shade)) { onEnv(EnvToggle.SHADED) }
+            .option("render", act.getString(R.string.opt_render)) { onEnv(EnvToggle.RENDER) }
+            .option("shadow", act.getString(R.string.opt_shadow)) { onEnv(EnvToggle.SHADOW) }
+        col.addView(sceneOptions, matchWrap(t.dp(4f)))
+
+        /* ---- lighting ---- */
+        toonButton = TextButton(act, t, filled = true, small = true).apply {
+            text = act.getString(R.string.opt_toon)
+            setOnClickListener { onEnv(EnvToggle.TOON) }
+        }
+        col.addView(labelRow(R.string.lighting, toonButton))
+
+        val lightRow = LinearLayout(act).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        lightPad = LightPad(act, t) { az, alt -> onLight(az, alt); refresh() }
+        lightRow.addView(lightPad)
+        val lightCol = LinearLayout(act).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f,
+            ).apply { marginStart = t.dp(10f) }
+        }
+        lightCol.addView(labelRow(R.string.colour, lightDot()))
+        /*
+         * The light's two numbers ride the same drag-a-readout mechanism the
+         * brush size does, so there is one way to nudge a number in this app.
+         * Both are linear — they are already percentages — unlike the brush
+         * size, which is multiplicative because it spans 1 to 300.
+         */
+        intensityVal = DragValue(
+            act, t, logarithmic = false, rate = 0.4,
+            get = { lightIntensity * 100.0 },
+            set = { v -> lightIntensity = clampTo(v / 100.0, 0.0, 3.0); onLightLevels(); refresh() },
+        )
+        ambientVal = DragValue(
+            act, t, logarithmic = false, rate = 0.4,
+            get = { lightAmbient * 100.0 },
+            set = { v -> lightAmbient = clampTo(v / 100.0, 0.0, 1.0); onLightLevels(); refresh() },
+        )
+        lightCol.addView(labelRow(R.string.intensity, intensityVal))
+        lightCol.addView(labelRow(R.string.ambient, ambientVal))
+        lightRow.addView(lightCol)
+        col.addView(lightRow, matchWrap(t.dp(8f)))
+
+        /* ---- effects ---- */
+        col.addView(labelRow(R.string.effects, null))
+        fxOptions = OptionGrid(act, t, 3)
+            .option("dof", act.getString(R.string.opt_dof)) { onEnv(EnvToggle.DOF) }
+            .option("grain", act.getString(R.string.opt_grain)) { onEnv(EnvToggle.GRAIN) }
+            .option("pixel", act.getString(R.string.opt_pixel)) { onEnv(EnvToggle.PIXEL) }
+        col.addView(fxOptions, matchWrap(t.dp(4f)))
+
+        /* f-stop and block size are geometric: 1.4 to 22 and 1 to 40 both span
+           more than a decade, and a linear drag would spend most of its travel
+           at the end where nothing changes */
+        fstopVal = DragValue(
+            act, t, logarithmic = true, rate = 0.011,
+            get = { fstop },
+            set = { v -> fstop = clampTo(v, 1.4, 22.0); onFx(); refresh() },
+        )
+        grainVal = DragValue(
+            act, t, logarithmic = false, rate = 0.4,
+            get = { grainLevel },
+            set = { v -> grainLevel = clampTo(v, 0.0, 100.0); onFx(); refresh() },
+        )
+        pixelVal = DragValue(
+            act, t, logarithmic = true, rate = 0.011,
+            get = { pixelSize },
+            set = { v -> pixelSize = clampTo(v, 1.0, 40.0); onFx(); refresh() },
+        )
+        col.addView(labelRow(R.string.fstop, fstopVal))
+        col.addView(labelRow(R.string.grain_level, grainVal))
+        col.addView(labelRow(R.string.block_size, pixelVal))
+        return col
+    }
+
+    private fun clampTo(v: Double, lo: Double, hi: Double) = if (v < lo) lo else if (v > hi) hi else v
+
+    private fun matchWrap(top: Int) = LinearLayout.LayoutParams(
+        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+    ).apply { topMargin = top }
+
+    /** `label.lab` on the left, a control on the right. */
+    private fun labelRow(label: Int, control: View?): View = LinearLayout(act).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        addView(
+            TextView(act).apply {
+                text = act.getString(label)
+                setTextColor(t.dim2)
+                textSize = 10f
+                letterSpacing = 0.08f
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+                layoutParams = LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f,
+                )
+            },
+        )
+        if (control != null) {
+            (control.parent as? ViewGroup)?.removeView(control)
+            addView(control)
+        }
+        layoutParams = matchWrap(t.dp(8f))
+    }
+
+    private fun bgDot(): View = View(act).apply {
+        layoutParams = LinearLayout.LayoutParams(t.dp(30f), t.dp(30f))
+        setOnClickListener { onPickBackground() }
+    }.also { bgSwatch = it }
+
+    private fun lightDot(): View = View(act).apply {
+        layoutParams = LinearLayout.LayoutParams(t.dp(30f), t.dp(30f))
+        setOnClickListener { onPickLightColour() }
+    }.also { lightSwatch = it }
 
     /** `.mhead` — a card title with a close button on the right. */
     private fun head(title: String, onClose: () -> Unit): View =
@@ -947,6 +1157,45 @@ class Chrome(private val act: Activity, val t: Tokens) {
 
     fun setSelection(count: Int) { selectionCount = count; refresh() }
 
+    /** The whole Scene tab, from the document. */
+    fun setEnvironment(env: DocumentEnv) {
+        envGrid = env.grid
+        envAxis = env.axis
+        envFog = env.fog
+        envShaded = env.shaded
+        envRender = env.render
+        envShadow = env.groundShadow
+        envToon = env.light.toon
+        envDof = env.fx.dofOn
+        envGrain = env.fx.grainOn
+        envPixel = env.fx.pixelOn
+        lightIntensity = env.light.intensity
+        lightAmbient = env.light.ambient
+        fstop = env.fx.fstop
+        grainLevel = env.fx.grain
+        pixelSize = env.fx.pixel
+        backgroundColor = rgb(env.background)
+        lightColor = rgb(env.light.color)
+        lightPad.az = env.light.az
+        lightPad.alt = env.light.alt
+        refresh()
+    }
+
+    /** What the panel currently reads, for the caller to fold back in. */
+    fun readInto(env: DocumentEnv) {
+        env.light.intensity = lightIntensity
+        env.light.ambient = lightAmbient
+        env.fx.fstop = fstop
+        env.fx.grain = grainLevel
+        env.fx.pixel = pixelSize
+    }
+
+    private fun rgb(c: art.plume.core.Rgba): Int = Color.rgb(
+        (c.r * 255).toInt().coerceIn(0, 255),
+        (c.g * 255).toInt().coerceIn(0, 255),
+        (c.b * 255).toInt().coerceIn(0, 255),
+    )
+
     fun setViewInfo(focalMm: Int, perspective: Boolean, curves: Int) {
         vFocal.text = focalMm.toString()
         vProj.text = act.getString(if (perspective) R.string.persp else R.string.ortho)
@@ -981,7 +1230,46 @@ class Chrome(private val act: Activity, val t: Tokens) {
         selBar.visibility = if (selectionCount > 0) View.VISIBLE else View.GONE
         icons["stage"]?.on =
             if (compact) isSheetOpen(stagePanel) else stagePanel.visibility == View.VISIBLE
+
+        sceneOptions.setOn("grid", envGrid)
+        sceneOptions.setOn("axis", envAxis)
+        sceneOptions.setOn("fog", envFog)
+        sceneOptions.setOn("shade", envShaded)
+        sceneOptions.setOn("render", envRender)
+        sceneOptions.setOn("shadow", envShadow)
+        /*
+         * FACT: shadows and effects show accurately only in rendering mode. A
+         * switch you can throw that then does nothing is worse than one that
+         * says it is unavailable, so outside render mode they grey out rather
+         * than lying.
+         */
+        sceneOptions.setUsable("shadow", envRender)
+        fxOptions.setOn("dof", envDof)
+        fxOptions.setOn("grain", envGrain)
+        fxOptions.setOn("pixel", envPixel)
+        for (k in listOf("dof", "grain", "pixel")) fxOptions.setUsable(k, envRender)
+
+        toonButton.on = envToon
+        /* toon bands a SHADED material; with shading off there is nothing to band */
+        toonButton.isEnabled = envShaded
+
+        intensityVal.text = "${(lightIntensity * 100).toInt()}%"
+        ambientVal.text = "${(lightAmbient * 100).toInt()}%"
+        fstopVal.text = "f/" + ((Math.round(fstop * 10.0)) / 10.0).toString()
+        grainVal.text = "${grainLevel.toInt()}%"
+        pixelVal.text = "${pixelSize.toInt()}px"
+        swatch(bgSwatch, backgroundColor)
+        swatch(lightSwatch, lightColor)
         icons["brushType"]?.on = brushGrid.visibility == View.VISIBLE
+    }
+
+    /** `input[type=color]` — a circular well with a --dim ring around it. */
+    private fun swatch(v: View, argb: Int) {
+        v.background = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(argb)
+            setStroke(t.dp(2f), t.dim)
+        }
     }
 
     companion object {

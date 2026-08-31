@@ -50,6 +50,32 @@
     <string name="not_yet_prim">Primitives picker not wired yet</string>
     <string name="not_yet_pressure">Pressure curve settings not wired yet</string>
     <string name="not_yet_help">Walkthrough not ported yet</string>
+    <string name="not_yet_colour_wheel">The colour wheel is not built yet</string>
+
+    <!-- #stagePanel -->
+    <string name="tab_curves">Curves</string>
+    <string name="tab_import">Import</string>
+    <string name="tab_scene">Scene</string>
+    <string name="background">Background</string>
+    <string name="lighting">Lighting</string>
+    <string name="intensity">Intensity</string>
+    <string name="ambient">Ambient</string>
+    <string name="effects">Effects</string>
+    <string name="fstop">F-stop</string>
+    <string name="grain_level">Grain level</string>
+    <string name="block_size">Block size</string>
+    <string name="opt_grid">Grid</string>
+    <string name="opt_axis">Axis</string>
+    <string name="opt_fog">Fog</string>
+    <string name="opt_shade">Shade</string>
+    <string name="opt_render">Render</string>
+    <string name="opt_shadow">Shadow</string>
+    <string name="opt_toon">Toon</string>
+    <string name="opt_dof">DOF</string>
+    <string name="opt_grain">Grain</string>
+    <string name="opt_pixel">Pixel</string>
+    <string name="not_yet_groups">The groups panel is not built yet. Grouping, hiding and reordering all work in the engine and are under test; only the list is missing.</string>
+    <string name="not_yet_import">Importing a photo or a model to trace over is not wired up yet. OBJ and STL both read, and an imported mesh becomes a guide you can paint on.</string>
 
     <string name="nothing_under_that">Nothing under that</string>
     <string name="sampled">Picked up the %1$s brush</string>
