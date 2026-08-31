@@ -20,9 +20,13 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import art.plume.core.Camera
 import art.plume.core.Dedupe
+import art.plume.core.GuidePainting
+import art.plume.core.GuideScene
+import art.plume.core.Guides
 import art.plume.core.History
 import art.plume.core.LiveStroke
 import art.plume.core.MM
+import art.plume.core.Ray
 import art.plume.core.Rgba
 import art.plume.core.Stabilizer
 import art.plume.core.Step
@@ -55,6 +59,19 @@ class MainActivity : Activity(), Gestures.Listener {
     private val camera = Camera()
     private val history = History()
     private val stabilizer = Stabilizer()
+    private val guides = GuideScene()
+
+    /** What the next stroke does. */
+    private enum class Mode { DRAW, GUIDE, FLAT }
+    private var mode = Mode.DRAW
+
+    /**
+     * FACT (C.1, inferred): with no guide, the first stroke makes one. Kept as
+     * a flag because it is an inference rather than documented behaviour, and
+     * is the first thing to turn off if it proves wrong.
+     */
+    private var autoGuide = true
+
 
     /** The document: committed strokes, in draw order. */
     private val doc = ArrayList<Stroke>()
@@ -70,8 +87,11 @@ class MainActivity : Activity(), Gestures.Listener {
     private lateinit var undoButton: Button
     private lateinit var redoButton: Button
     private lateinit var sizeLabel: TextView
+    private lateinit var modeButton: Button
+    private lateinit var guideButton: Button
 
     private val scratch = Vec3()
+    private val penRay = Ray()
     private var spinning = false
 
     /** Whether the gesture that just ended was an orbit; only an orbit coasts. */
@@ -124,6 +144,7 @@ class MainActivity : Activity(), Gestures.Listener {
 
         history.addListener { refreshControls() }
         refreshControls()
+        pushGuides()
         hideSystemBars()
     }
 
@@ -183,6 +204,28 @@ class MainActivity : Activity(), Gestures.Listener {
         }
         row.addView(undoButton); row.addView(redoButton); row.addView(clear)
         bar.addView(row)
+
+        val guideRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        modeButton = Button(this).apply {
+            text = modeLabel()
+            setOnClickListener {
+                mode = when (mode) {
+                    Mode.DRAW -> Mode.GUIDE
+                    Mode.GUIDE -> Mode.FLAT
+                    Mode.FLAT -> Mode.DRAW
+                }
+                text = modeLabel()
+            }
+        }
+        guideButton = Button(this).apply {
+            text = getString(R.string.close_guide)
+            setOnClickListener { closeActiveGuide() }
+        }
+        guideRow.addView(modeButton); guideRow.addView(guideButton)
+        bar.addView(guideRow)
 
         sizeLabel = TextView(this).apply {
             setTextColor(Color.WHITE)
@@ -255,9 +298,16 @@ class MainActivity : Activity(), Gestures.Listener {
 
     private fun sizeText(): String = "Brush ${sizeMM.toInt()} mm"
 
+    private fun modeLabel(): String = when (mode) {
+        Mode.DRAW -> getString(R.string.mode_draw)
+        Mode.GUIDE -> getString(R.string.mode_guide)
+        Mode.FLAT -> getString(R.string.mode_flat)
+    }
+
     private fun refreshControls() {
         undoButton.isEnabled = history.canUndo()
         redoButton.isEnabled = history.canRedo()
+        guideButton.isEnabled = guides.active != null
     }
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
@@ -295,12 +345,76 @@ class MainActivity : Activity(), Gestures.Listener {
 
         // the same order the web build commits in: clean the samples, then build
         Dedupe.clean(s)
-        if (s.pts.size >= 2) commit(s) else surface.requestRender()
+        if (s.pts.size < 2) { surface.requestRender(); return }
+
+        /*
+         * A guide is built from the stroke's WORLD points, which for a stroke
+         * drawn with no guide active lie on the camera-facing draw plane — so
+         * the profile is the shape as drawn, in the plane it was drawn on.
+         */
+        val wantsGuide = mode != Mode.DRAW ||
+            (autoGuide && guides.active == null && doc.isEmpty())
+        if (wantsGuide) makeGuideFrom(s) else commit(s)
     }
 
     override fun onDrawCancel() {
         synchronized(liveBuffer) { live = null }
         renderer.setLive(null)
+        surface.requestRender()
+    }
+
+    // ---- guides ---------------------------------------------------------
+
+    /**
+     * Turn the stroke just drawn into a guide.
+     *
+     * FACT (C.1, inferred): with nothing on the page and no guide, the first
+     * stroke makes one — which is how Feather gets you onto a surface without
+     * a mode switch. An explicit Guide mode does the same thing on demand.
+     */
+    private fun makeGuideFrom(s: Stroke) {
+        val pts = s.pts.map { it.p.copy() }
+        val fwd = Vec3()
+        camera.forward(fwd)
+        // only `right` matters here: it fixes which way the guide's u axis
+        // runs, so "across the guide" matches across the glass
+        val right = Vec3(); val up = Vec3(); val back = Vec3()
+        camera.basis(right, up, back)
+
+        val g = when (mode) {
+            Mode.FLAT -> Guides.createFlatFromStroke(pts, fwd, right)
+            else -> Guides.createFromStroke(pts, fwd, right, camera.radius)
+        } ?: run {
+            // nothing usable — keep the stroke rather than losing the gesture
+            commit(s)
+            return
+        }
+
+        val previous = guides.active
+        history.run(
+            Step(
+                "Create guide", cost = s.pts.size,
+                onRedo = { guides.setActive(g); pushGuides() },
+                onUndo = { guides.setActive(previous); pushGuides() },
+            ),
+        )
+        if (mode != Mode.DRAW) { mode = Mode.DRAW; modeButton.text = modeLabel() }
+    }
+
+    private fun closeActiveGuide() {
+        val g = guides.active ?: return
+        history.run(
+            Step(
+                "Close guide",
+                onRedo = { guides.close(); pushGuides() },
+                onUndo = { guides.setActive(g); pushGuides() },
+            ),
+        )
+    }
+
+    private fun pushGuides() {
+        renderer.setGuides(guides.drawList())
+        refreshControls()
         surface.requestRender()
     }
 
@@ -315,6 +429,30 @@ class MainActivity : Activity(), Gestures.Listener {
     private fun appendAt(
         s: Stroke, px: Double, py: Double, pressure: Float, az: Float,
     ): Boolean {
+        /*
+         * With a guide active the pen paints ONTO it: the sample is a ray from
+         * the eye through the pixel, met with the surface. Off the edge it
+         * clamps back to the guide's nearest point, which is what the Clamp
+         * setting already promises.
+         */
+        val active = guides.active
+        if (active != null && mode == Mode.DRAW) {
+            camera.rayFrom(px, py, penRay)
+            val hit = GuidePainting.project(active, penRay, clampOffSurface = true)
+            if (hit != null) {
+                s.pts.lastOrNull()?.let { if (it.p.distanceTo(hit.point) < 0.0005) return false }
+                s.pts.add(
+                    StrokePoint(
+                        hit.point.copy(), pressure = pressure.toDouble(), roll = az.toDouble(),
+                        nrm = hit.normal.copy(),
+                    ),
+                )
+                s.guideId = active.id
+                return true
+            }
+            return false
+        }
+
         val p = camera.planePoint(px, py, scratch) ?: return false
         // a second gate in WORLD units: two samples the tube could not show
         // apart are one sample, however far apart they were on screen

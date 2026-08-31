@@ -4,4 +4,8 @@
     <string name="undo">Undo</string>
     <string name="redo">Redo</string>
     <string name="clear">Clear sketch</string>
+    <string name="mode_draw">Draw</string>
+    <string name="mode_guide">Guide</string>
+    <string name="mode_flat">Flat guide</string>
+    <string name="close_guide">Close guide</string>
 </resources>

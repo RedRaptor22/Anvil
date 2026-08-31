@@ -46,6 +46,21 @@ object Grid {
     }
 
     /**
+     * Guide fill and line colours for a background.
+     *
+     * Ported from `guideColors` in `js/guides.js`, per the v1.5 note that guide
+     * visuals "respond to background colors for better visibility". A light
+     * page gets a deep blue that reads against paper; a dark one gets a pale
+     * blue that does not disappear into it.
+     */
+    fun guideColors(bg: Rgba): Pair<Rgba, Rgba> =
+        if (luminance(bg) > 0.5) {
+            Rgba(0.184, 0.373, 0.749) to Rgba(0.078, 0.200, 0.435)   // #2f5fbf / #14336f
+        } else {
+            Rgba(0.498, 0.659, 0.961) to Rgba(0.839, 0.902, 1.0)     // #7fa8f5 / #d6e6ff
+        }
+
+    /**
      * The ground plane grid, on y = 0, with the two centre lines picked out in
      * the stronger colour.
      */

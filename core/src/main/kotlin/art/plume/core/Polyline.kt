@@ -108,6 +108,45 @@ object Polyline {
         return out.set(v).rotateAbout(axis, kotlin.math.acos(d))
     }
 
+    /**
+     * A cardinal spline segment. [tension] 0 is sharp (piecewise linear), 1 is
+     * smooth. This is the interpolator behind Loft's tension slider.
+     */
+    fun catmullRom(
+        p0: Vec3, p1: Vec3, p2: Vec3, p3: Vec3, t: Double, tension: Double = 1.0,
+    ): Vec3 {
+        val t2 = t * t
+        val t3 = t2 * t
+        val m1 = (p2 - p0) * (0.5 * tension)
+        val m2 = (p3 - p1) * (0.5 * tension)
+        val out = p1 * (2 * t3 - 3 * t2 + 1)
+        out.addScaled(m1, t3 - 2 * t2 + t)
+        out.addScaled(p2, -2 * t3 + 3 * t2)
+        out.addScaled(m2, t3 - t2)
+        return out
+    }
+
+    /** Sample a chain of control points with the cardinal spline, ends clamped. */
+    fun sampleChain(ctrl: List<Vec3>, samples: Int, tension: Double = 1.0): List<Vec3> {
+        val n = ctrl.size
+        val out = ArrayList<Vec3>(samples)
+        if (n == 0) return out
+        if (n == 1) { for (i in 0 until samples) out.add(ctrl[0].copy()); return out }
+        val segs = n - 1
+        for (i in 0 until samples) {
+            val u = (i.toDouble() / (samples - 1)) * segs
+            val sIdx = kotlin.math.min(segs - 1, kotlin.math.floor(u).toInt())
+            val t = u - sIdx
+            out.add(
+                catmullRom(
+                    ctrl[max(0, sIdx - 1)], ctrl[sIdx],
+                    ctrl[sIdx + 1], ctrl[kotlin.math.min(n - 1, sIdx + 2)], t, tension,
+                ),
+            )
+        }
+        return out
+    }
+
     /** The largest distance from [centre] to any of [pts]. */
     fun extentFrom(pts: List<Vec3>, centre: Vec3): Double {
         var e = 0.0

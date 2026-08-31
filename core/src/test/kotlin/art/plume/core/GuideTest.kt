@@ -375,11 +375,34 @@ class GuideTest {
 
         val (pLo, pHi) = bounds("pyramid")
         assertEquals(2.4, pHi.y - pLo.y, 1e-6)
+        assertEquals(1.5, pHi.x, 1e-6)
 
         // the torus lies flat like the grid: wide in X and Z, thin in Y
         val (tLo, tHi) = bounds("torus")
         assertEquals(2 * (1.4 + 0.42), tHi.x - tLo.x, 1e-6)
         assertEquals(2 * 0.42, tHi.y - tLo.y, 1e-6)
+    }
+
+    @Test
+    fun `a pyramid comes to a point, and is not a four-sided prism`() {
+        /*
+         * It was one. The height check above passed while the shape was wrong,
+         * because a prism and a cone of the same height have the same bounding
+         * box — a test that could not tell them apart. This one can.
+         */
+        val s = Primitives.create("pyramid").surface!!
+        var topR = 0.0
+        var bottomR = 0.0
+        for (i in 0 until s.vertexCount) {
+            val y = s.positions[i * 3 + 1]
+            val r = kotlin.math.hypot(
+                s.positions[i * 3].toDouble(), s.positions[i * 3 + 2].toDouble(),
+            )
+            if (y > 1.19f) topR = maxOf(topR, r)
+            if (y < -1.19f) bottomR = maxOf(bottomR, r)
+        }
+        assertEquals(0.0, topR, 1e-9, "the apex should be a point")
+        assertEquals(1.5, bottomR, 1e-6, "the base should be radius 1.5")
     }
 
     @Test

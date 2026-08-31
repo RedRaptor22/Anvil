@@ -108,12 +108,19 @@ class Guide(
     var name: String = defaultName(kind),
 ) {
     /**
-     * FACT: a guide "cannot be made completely opaque" — the clamp lives on
-     * the property rather than in a setter method so there is no route that
-     * skips it.
+     * FACT (A.2/A.10): opacity is adjustable down to 0% but never fully opaque
+     * — EXCEPT for an imported image, which is reference art rather than
+     * scaffolding and is allowed to be solid.
+     *
+     * The clamp lives on the property rather than in a setter method so there
+     * is no route into it that skips the limit.
      */
     var opacity: Double = Tune.GUIDE_OPACITY_INIT
-        set(value) { field = clamp(value, 0.0, Tune.GUIDE_OPACITY_MAX) }
+        set(value) { field = clamp(value, 0.0, maxOpacity) }
+
+    /** How opaque this guide is allowed to get. */
+    val maxOpacity: Double
+        get() = if (kind == GuideKind.IMAGE) 1.0 else Tune.GUIDE_OPACITY_MAX
 
     var sweep: Sweep? = null
     var plane: PlaneData? = null
@@ -131,6 +138,21 @@ class Guide(
      * fallback is explicitly wrong.
      */
     var noClamp = false
+
+    /**
+     * The mesh as it was before any bend, so repeated bends re-deform the
+     * original rather than compounding into mush — which matches how a swept
+     * bend replaces its path rather than bending the bent thing again.
+     */
+    var originalPositions: FloatArray? = null
+    var originalNormals: FloatArray? = null
+
+    /** The stroke this guide was last bent along, kept so it can be saved. */
+    var bendPath: List<Vec3>? = null
+
+    /** A loft keeps its input curves, so it can be re-lofted or reloaded. */
+    var loftCurves: List<List<Vec3>>? = null
+    var loftTension = 1.0
 
     var primitiveKind: String? = null
     var primitiveSegments = 24

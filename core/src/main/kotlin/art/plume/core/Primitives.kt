@@ -36,7 +36,8 @@ object Primitives {
         val b = MeshBuilder()
         when (kind) {
             "cube" -> box(b, 2.0, 2.0, 2.0)
-            "pyramid" -> cone(b, 1.5, 1.5, 2.4, 4)
+            // radius 1.5 at the base, coming to a POINT: a four-sided cone
+            "pyramid" -> cone(b, 0.0, 1.5, 2.4, 4)
             "sphere" -> sphere(b, 1.4, seg, max(3, seg shr 1))
             /* Feather offers a torus among its readymades, and it is the one
                shape here you cannot get by bending a swept guide into a ring:

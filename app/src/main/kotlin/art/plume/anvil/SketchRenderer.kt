@@ -4,11 +4,15 @@ import android.opengl.GLES30
 import android.opengl.GLSurfaceView
 import art.plume.core.Camera
 import art.plume.core.Grid
+import art.plume.core.Guide
+import art.plume.core.GuideKind
+import art.plume.core.GuideSurface
 import art.plume.core.LiveStroke
 import art.plume.core.MeshData
 import art.plume.core.Rgba
 import art.plume.core.Stroke
 import art.plume.core.StrokeGeometry
+import art.plume.core.Tune
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
@@ -47,6 +51,9 @@ class SketchRenderer : GLSurfaceView.Renderer {
     private var live: LiveStroke? = null
     private var liveBuffers: LiveBuffers? = null
 
+    private var guides: List<Guide> = emptyList()
+    private val guideUploaded = HashMap<GuideSurface, GuideBuffers>()
+
     /** Environment, in the same terms as the web build's `P.ENV`. */
     var background = Rgba(0.925, 0.918, 0.953)      // the web build's --bg
     var showGrid = true
@@ -55,6 +62,7 @@ class SketchRenderer : GLSurfaceView.Renderer {
 
     private val matrixLock = Any()
     private val mvp = FloatArray(16)
+    private val eye = FloatArray(3)
 
     private var program = 0
     private var aPos = 0; private var aNor = 0; private var aCol = 0
@@ -64,6 +72,12 @@ class SketchRenderer : GLSurfaceView.Renderer {
 
     private var lineProgram = 0
     private var lPos = 0; private var lCol = 0; private var lMvp = 0
+
+    private var guideProgram = 0
+    private var gPos = 0; private var gNor = 0; private var gUvw = 0
+    private var gMvp = 0; private var gEye = 0
+    private var gFill = 0; private var gLine = 0
+    private var gOpacity = 0; private var gStep = 0; private var gMode = 0; private var gSelect = 0
 
     private var gridBuffers: LineBuffers? = null
     private var axisBuffers: LineBuffers? = null
@@ -80,6 +94,9 @@ class SketchRenderer : GLSurfaceView.Renderer {
 
     private class Buffers(val vbo: Int, val nbo: Int, val cbo: Int, val ibo: Int, val count: Int)
     private class LineBuffers(val vbo: Int, val cbo: Int, val count: Int)
+    private class GuideBuffers(
+        val vbo: Int, val nbo: Int, val ubo: Int, val ibo: Int, val count: Int,
+    )
 
     /** The dynamic buffers behind the stroke currently being drawn. */
     private class LiveBuffers(
@@ -114,6 +131,19 @@ class SketchRenderer : GLSurfaceView.Renderer {
         lCol = GLES30.glGetAttribLocation(lineProgram, "aCol")
         lMvp = GLES30.glGetUniformLocation(lineProgram, "uMvp")
 
+        guideProgram = link(GUIDE_VERT, GUIDE_FRAG)
+        gPos = GLES30.glGetAttribLocation(guideProgram, "aPos")
+        gNor = GLES30.glGetAttribLocation(guideProgram, "aNor")
+        gUvw = GLES30.glGetAttribLocation(guideProgram, "aUvw")
+        gMvp = GLES30.glGetUniformLocation(guideProgram, "uMvp")
+        gEye = GLES30.glGetUniformLocation(guideProgram, "uEye")
+        gFill = GLES30.glGetUniformLocation(guideProgram, "uFill")
+        gLine = GLES30.glGetUniformLocation(guideProgram, "uLine")
+        gOpacity = GLES30.glGetUniformLocation(guideProgram, "uOpacity")
+        gStep = GLES30.glGetUniformLocation(guideProgram, "uStep")
+        gMode = GLES30.glGetUniformLocation(guideProgram, "uMode")
+        gSelect = GLES30.glGetUniformLocation(guideProgram, "uSelect")
+
         /*
          * Every buffer name belonged to the context that just went away. Drop
          * the bookkeeping rather than deleting: the names are already invalid,
@@ -122,6 +152,7 @@ class SketchRenderer : GLSurfaceView.Renderer {
          */
         uploaded.clear()
         liveBuffers = null
+        guideUploaded.clear()
         gridBuffers = null; axisBuffers = null; gridSignature = ""
     }
 
@@ -133,6 +164,9 @@ class SketchRenderer : GLSurfaceView.Renderer {
     fun setCamera(camera: Camera) {
         synchronized(matrixLock) {
             camera.viewProjection.into(mvp)
+            eye[0] = camera.eye.x.toFloat()
+            eye[1] = camera.eye.y.toFloat()
+            eye[2] = camera.eye.z.toFloat()
         }
     }
 
@@ -145,7 +179,8 @@ class SketchRenderer : GLSurfaceView.Renderer {
         drainDeletions()
 
         val m = FloatArray(16)
-        synchronized(matrixLock) { mvp.copyInto(m) }
+        val e = FloatArray(3)
+        synchronized(matrixLock) { mvp.copyInto(m); eye.copyInto(e) }
 
         drawEnvironment(m)
 
@@ -161,6 +196,99 @@ class SketchRenderer : GLSurfaceView.Renderer {
             for (s in strokes) draw(s)
         }
         drawLive()
+
+        // guides last: they are translucent scaffolding and belong over the ink
+        drawGuides(m, e)
+    }
+
+    // ---- guides ---------------------------------------------------------
+
+    fun setGuides(list: List<Guide>): Unit = synchronized(strokes) { guides = list }
+
+    private fun drawGuides(m: FloatArray, e: FloatArray) {
+        val list = synchronized(strokes) { guides }
+        if (list.isEmpty()) {
+            if (guideUploaded.isNotEmpty()) releaseGuides(emptySet())
+            return
+        }
+        releaseGuides(list.mapNotNull { it.surface }.toSet())
+
+        val (fill, line) = Grid.guideColors(background)
+        GLES30.glUseProgram(guideProgram)
+        GLES30.glUniformMatrix4fv(gMvp, 1, false, m, 0)
+        GLES30.glUniform3f(gEye, e[0], e[1], e[2])
+        GLES30.glUniform3f(gFill, fill.r.toFloat(), fill.g.toFloat(), fill.b.toFloat())
+        GLES30.glUniform3f(gLine, line.r.toFloat(), line.g.toFloat(), line.b.toFloat())
+        GLES30.glUniform1f(gStep, Tune.GUIDE_GRID_STEP.toFloat())
+
+        GLES30.glEnable(GLES30.GL_BLEND)
+        GLES30.glBlendFunc(GLES30.GL_SRC_ALPHA, GLES30.GL_ONE_MINUS_SRC_ALPHA)
+        /*
+         * Double-sided and no depth write. A guide is a sheet you orbit around
+         * and see from both faces, and it must not occlude the ink drawn on it
+         * — writing depth would make paint on the far side vanish behind the
+         * scaffolding it was painted onto.
+         */
+        GLES30.glDisable(GLES30.GL_CULL_FACE)
+        GLES30.glDepthMask(false)
+
+        for (g in list) {
+            val surface = g.surface ?: continue
+            val b = guideUploaded[surface] ?: uploadGuide(surface) ?: continue
+            GLES30.glUniform1f(gOpacity, g.opacity.toFloat())
+            // a primitive has no arc-length grid, so its lines come from a
+            // triplanar projection of world space instead
+            val triplanar = g.kind == GuideKind.PRIMITIVE || g.kind == GuideKind.MODEL
+            GLES30.glUniform1f(gMode, if (triplanar) 1f else 0f)
+            GLES30.glUniform1f(gSelect, if (g.selected) 1f else 0f)
+
+            GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, b.vbo)
+            GLES30.glEnableVertexAttribArray(gPos)
+            GLES30.glVertexAttribPointer(gPos, 3, GLES30.GL_FLOAT, false, 0, 0)
+            GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, b.nbo)
+            GLES30.glEnableVertexAttribArray(gNor)
+            GLES30.glVertexAttribPointer(gNor, 3, GLES30.GL_FLOAT, false, 0, 0)
+            GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, b.ubo)
+            GLES30.glEnableVertexAttribArray(gUvw)
+            GLES30.glVertexAttribPointer(gUvw, 2, GLES30.GL_FLOAT, false, 0, 0)
+            GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, b.ibo)
+            GLES30.glDrawElements(GLES30.GL_TRIANGLES, b.count, GLES30.GL_UNSIGNED_INT, 0)
+        }
+
+        GLES30.glDisableVertexAttribArray(gPos)
+        GLES30.glDisableVertexAttribArray(gNor)
+        GLES30.glDisableVertexAttribArray(gUvw)
+        GLES30.glDepthMask(true)
+        GLES30.glEnable(GLES30.GL_CULL_FACE)
+        GLES30.glDisable(GLES30.GL_BLEND)
+    }
+
+    private fun uploadGuide(s: GuideSurface): GuideBuffers? {
+        if (s.indices.isEmpty()) return null
+        val ids = IntArray(4)
+        GLES30.glGenBuffers(4, ids, 0)
+        arrayBuffer(ids[0], s.positions, GLES30.GL_STATIC_DRAW)
+        arrayBuffer(ids[1], s.normals, GLES30.GL_STATIC_DRAW)
+        arrayBuffer(ids[2], s.uv, GLES30.GL_STATIC_DRAW)
+        GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, ids[3])
+        GLES30.glBufferData(
+            GLES30.GL_ELEMENT_ARRAY_BUFFER, s.indices.size * 4,
+            intBuffer(s.indices, s.indices.size), GLES30.GL_STATIC_DRAW,
+        )
+        val b = GuideBuffers(ids[0], ids[1], ids[2], ids[3], s.indices.size)
+        guideUploaded[s] = b
+        return b
+    }
+
+    /** Drop the buffers of any surface no longer on screen — a rebuilt guide
+     *  hands over a NEW surface, so its old one lands here. */
+    private fun releaseGuides(keep: Set<GuideSurface>) {
+        val gone = guideUploaded.keys.filter { it !in keep }
+        for (k in gone) {
+            guideUploaded.remove(k)?.let {
+                GLES30.glDeleteBuffers(4, intArrayOf(it.vbo, it.nbo, it.ubo, it.ibo), 0)
+            }
+        }
     }
 
     // ---- environment ----------------------------------------------------
@@ -443,6 +571,82 @@ class SketchRenderer : GLSurfaceView.Renderer {
               float d = dot(n, normalize(uLightDir)) * 0.5 + 0.5;
               float lit = uAmbient + (1.0 - uAmbient) * d * uIntensity;
               fragColor = vec4(vCol.rgb * uLightCol * lit, vCol.a);
+            }"""
+
+        /*
+         * The guide surface: translucent, grid-lined, background-aware.
+         *
+         * Ported from the VERT/FRAG pair in `js/guides.js`. Two things carry
+         * over exactly because they are what make a guide read as a SURFACE
+         * rather than a haze: the grid lines are drawn in the surface's own
+         * arc-length coordinates, so they keep a constant physical spacing
+         * however the sheet is stretched; and grazing angles get a lift, so the
+         * silhouette firms up and the form reads as a volume.
+         *
+         * `fwidth` needs a derivatives extension in WebGL 1 and is core in
+         * GLSL ES 3.0, which is the one place this side has it easier.
+         */
+        const val GUIDE_VERT = """#version 300 es
+            precision highp float;
+            in vec3 aPos;
+            in vec3 aNor;
+            in vec2 aUvw;
+            uniform mat4 uMvp;
+            out vec2 vUv2;
+            out vec3 vN;
+            out vec3 vW;
+            void main(){
+              vUv2 = aUvw;
+              vN = aNor;
+              vW = aPos;
+              gl_Position = uMvp * vec4(aPos, 1.0);
+            }"""
+
+        const val GUIDE_FRAG = """#version 300 es
+            precision highp float;
+            uniform vec3  uFill;
+            uniform vec3  uLine;
+            uniform vec3  uEye;
+            uniform float uOpacity;
+            uniform float uStep;
+            uniform float uMode;
+            uniform float uSelect;
+            in vec2 vUv2;
+            in vec3 vN;
+            in vec3 vW;
+            out vec4 fragColor;
+
+            float gridFactor(vec2 c, float step){
+              vec2 g = c / step;
+              vec2 d = fwidth(g);
+              vec2 f = abs(fract(g - 0.5) - 0.5) / max(d, 1e-5);
+              return 1.0 - min(min(f.x, f.y), 1.0);
+            }
+
+            void main(){
+              vec3 n = normalize(vN);
+              if(!gl_FrontFacing) n = -n;
+              float line;
+              if(uMode < 0.5){
+                line = gridFactor(vUv2, uStep);
+              } else {
+                /* a primitive has no arc-length grid, so the lines come from a
+                   triplanar projection of world space instead */
+                vec3 an = abs(normalize(vN));
+                float w = max(an.x + an.y + an.z, 1e-4);
+                line = ( gridFactor(vW.yz, uStep)*an.x
+                       + gridFactor(vW.xz, uStep)*an.y
+                       + gridFactor(vW.xy, uStep)*an.z ) / w;
+              }
+              vec3 view = normalize(uEye - vW);
+              float facing = abs(dot(n, view));
+              float rim = pow(1.0 - facing, 2.0);
+              float a = uOpacity * (0.55 + 0.45*rim);
+              vec3 col = mix(uFill, uLine, line);
+              a = mix(a, min(uOpacity*1.9, 0.95), line*0.85);
+              col = mix(col, vec3(0.36,0.85,0.55), uSelect*0.6);
+              if(a < 0.002) discard;
+              fragColor = vec4(col, a);
             }"""
 
         const val LINE_VERT = """#version 300 es
