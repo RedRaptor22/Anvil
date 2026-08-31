@@ -72,7 +72,6 @@ class MainActivity : Activity(), Gestures.Listener {
      */
     private var autoGuide = true
 
-
     /** The document: committed strokes, in draw order. */
     private val doc = ArrayList<Stroke>()
 

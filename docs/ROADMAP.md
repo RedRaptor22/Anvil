@@ -5,7 +5,7 @@ genuinely depends on what. Each phase ends with something you can hold in your
 hand — not a milestone on paper — and each one's logic goes into the tested
 core before anything draws it.
 
-**62 items · 23 complete · ~10,800 lines of web build to port · ~65% of it is
+**62 items · 27 complete · ~10,800 lines of web build to port · ~65% of it is
 pure logic that transfers with tests.**
 
 ---
@@ -81,7 +81,7 @@ went into `core` first:
 
 ---
 
-## Phase 02 — Guides `IN PROGRESS, LARGEST`
+## Phase 02 — Guides `CODE COMPLETE`
 
 *The Feather premise: draw a surface, then draw on it.*
 
@@ -90,23 +90,37 @@ went into `core` first:
 - [x] Project strokes onto a guide — `G.project`
 - [x] Edge behaviour: reach, outline, clamp — `reachAlong`, `insideOutline`
 - [x] Isolation masking — `isMasked` (the per-viewpoint cache is not ported yet)
-- [ ] Translucent grid-lined guide shader
+- [x] Translucent grid-lined guide shader
 - [x] Flat shape guide — `createFlatFromStroke`
 - [x] Five primitives — cube, pyramid, sphere, torus, tube
-- [ ] Bend — `G.bend`, `bendMesh`
-- [ ] Loft from selected curves — `loftFromCurves`
-- [ ] Guide lifecycle: active, close, save, reuse, opacity
+- [x] Bend — `G.bend`, `bendMesh`
+- [x] Loft from selected curves — `loftFromCurves`
+- [x] Guide lifecycle: active, close, save, reuse, opacity
 
 **Done when:** a stroke lands exactly on a curved guide, stays there under every
 tool, and the same sketch measures identically in both builds.
 
-**Where it stands.** Seven of eleven. The surfaces are built and the queries
-that put paint on them work: the ray query is checked against brute force over
-every triangle, sampling by arc length and projecting a ray agree with each
-other, and the edge is the outline you drew rather than its bounding box. Left
-are the guide shader, Bend, Loft, and the lifecycle.
+**Where it stands.** All eleven are written and tested — 112 core tests, up
+from 19 at the start of Phase 1. The surfaces build, the ray query is checked
+against brute force over every triangle, sampling by arc length and projecting
+a ray agree with each other, the edge is the outline you drew rather than its
+bounding box, and the guide draws.
 
-One thing the tests turned up that is worth knowing before touching this again:
+Two halves of "done when" are NOT closed yet, and both need someone else:
+"stays there under every tool" needs the Phase 3 tools to exist, and "measures
+identically in both builds" needs the same sketch opened in each, which needs
+the Phase 4 file format. Until then this is a phase whose parts are verified
+and whose whole is not.
+
+Three things the tests turned up, beyond the edge-on fact below: the pyramid
+primitive was a four-sided **prism** — the dimension test checked its height,
+and a prism and a cone of the same height share a bounding box, so it could not
+tell them apart; an imported **image** guide is allowed to be fully opaque,
+which the "never completely opaque" clamp was wrongly applying to; and a loft
+rebuilt through the resampler drifts 0.05mm per cycle, which is why the rebuild
+path uses the stored curves verbatim.
+
+One thing worth knowing before touching this again:
 **a fresh swept guide is edge-on to the view that made it.** The profile is
 extruded ALONG the view, so from where you drew it the surface is a curtain
 seen side-on, and a ray down the view axis runs parallel to it and hits
