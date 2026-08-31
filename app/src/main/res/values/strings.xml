@@ -21,4 +21,7 @@
     <string name="delete">Delete</string>
     <string name="close_guide">Close guide</string>
     <string name="mirror">Mirror</string>
+    <string name="save">Save</string>
+    <string name="open">Open</string>
+    <string name="export_">Export</string>
 </resources>

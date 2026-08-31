@@ -1,10 +1,15 @@
 package art.plume.anvil
 
 import android.app.Activity
+import android.app.AlertDialog
+import android.content.Intent
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.opengl.GLSurfaceView
+import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.Choreographer
 import android.view.Gravity
 import android.view.MotionEvent
@@ -22,7 +27,11 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import art.plume.core.Camera
 import art.plume.core.Dedupe
+import art.plume.core.Document
+import art.plume.core.DocumentEnv
+import art.plume.core.DocumentTool
 import art.plume.core.Editing
+import art.plume.core.Export
 import art.plume.core.Fill
 import art.plume.core.GuidePainting
 import art.plume.core.GuideScene
@@ -82,6 +91,25 @@ class MainActivity : Activity(), Gestures.Listener {
 
     private val liquifyCfg = Liquify.Settings()
 
+    // ---- files ------------------------------------------------------------
+
+    private val docEnv = DocumentEnv()
+    private val docTool = DocumentTool()
+
+    /**
+     * Sections of the last opened file this build does not model yet — the
+     * light, the post effects. Carried so a sketch made in the browser does
+     * not come back re-lit after a trip through the phone.
+     */
+    private var carried: Document.Carried? = null
+
+    private val io = java.util.concurrent.Executors.newSingleThreadExecutor()
+    private val main = Handler(Looper.getMainLooper())
+    private var autosavePending = false
+
+    /** The material file waiting for its own destination; see [exportObj]. */
+    private var pendingMtl: String? = null
+
     private val liveBuffer = LiveStroke()
     private var live: Stroke? = null
 
@@ -93,6 +121,7 @@ class MainActivity : Activity(), Gestures.Listener {
     private lateinit var undoButton: Button
     private lateinit var redoButton: Button
     private lateinit var sizeLabel: TextView
+    private lateinit var sizeBar: SeekBar
     private lateinit var guideButton: Button
     private val toolButtons = HashMap<Tool, Button>()
 
@@ -153,13 +182,29 @@ class MainActivity : Activity(), Gestures.Listener {
         setContentView(root)
 
         history.addListener { refreshControls() }
+        restoreAutosave()
         refreshControls()
+        syncBrushControls()
+        renderer.setStrokes(sketch.strokes)
         pushGuides()
         hideSystemBars()
     }
 
     override fun onResume() { super.onResume(); surface.onResume(); pushCamera() }
-    override fun onPause() { super.onPause(); surface.onPause() }
+
+    override fun onPause() {
+        super.onPause()
+        surface.onPause()
+        /*
+         * Write NOW rather than on the debounce. Android kills a backgrounded
+         * process whenever it likes, and the whole point of an autosave is to
+         * survive that — a save that was still waiting its half second is a
+         * save that did not happen.
+         */
+        writeAutosave()
+    }
+
+    override fun onDestroy() { super.onDestroy(); io.shutdown() }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
@@ -203,7 +248,7 @@ class MainActivity : Activity(), Gestures.Listener {
             setTextColor(Color.WHITE)
             text = sizeText()
         }
-        val size = SeekBar(this).apply {
+        sizeBar = SeekBar(this).apply {
             // FACT: the brush panel runs 1mm - 300mm
             max = (Tune.BRUSH_MAX_MM - Tune.BRUSH_MIN_MM).toInt()
             progress = (sizeMM - Tune.BRUSH_MIN_MM).toInt()
@@ -212,9 +257,6 @@ class MainActivity : Activity(), Gestures.Listener {
                     sizeMM = clamp(
                         Tune.BRUSH_MIN_MM + value, Tune.BRUSH_MIN_MM, Tune.BRUSH_MAX_MM,
                     )
-                    // Liquify's disc is set in pixels, and follows the brush so
-                    // there is only one size to think about
-                    liquifyCfg.size = camera.worldToPx(sizeMM * MM * 0.5) * 4
                     sizeLabel.text = sizeText()
                 }
                 override fun onStartTrackingTouch(sb: SeekBar?) {}
@@ -222,7 +264,7 @@ class MainActivity : Activity(), Gestures.Listener {
             })
         }
         bar.addView(sizeLabel)
-        bar.addView(size)
+        bar.addView(sizeBar)
         bar.addView(buildSwatches())
 
         bar.layoutParams = FrameLayout.LayoutParams(
@@ -313,6 +355,24 @@ class MainActivity : Activity(), Gestures.Listener {
                 setOnClickListener { clearSketch() }
             },
         )
+        row.addView(
+            Button(this).apply {
+                text = getString(R.string.save)
+                setOnClickListener { chooseSaveTarget() }
+            },
+        )
+        row.addView(
+            Button(this).apply {
+                text = getString(R.string.open)
+                setOnClickListener { chooseOpenTarget() }
+            },
+        )
+        row.addView(
+            Button(this).apply {
+                text = getString(R.string.export_)
+                setOnClickListener { chooseExportFormat() }
+            },
+        )
         return HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
             addView(row)
@@ -358,6 +418,12 @@ class MainActivity : Activity(), Gestures.Listener {
     }
 
     private fun sizeText(): String = "Brush ${sizeMM.toInt()} mm"
+
+    /** After a load the brush came from the file, so the slider has to follow. */
+    private fun syncBrushControls() {
+        sizeLabel.text = sizeText()
+        sizeBar.progress = (sizeMM - Tune.BRUSH_MIN_MM).toInt()
+    }
 
     private fun refreshControls() {
         undoButton.isEnabled = history.canUndo()
@@ -408,6 +474,14 @@ class MainActivity : Activity(), Gestures.Listener {
             Tool.LIQUIFY -> {
                 val sel = sketch.selection
                 if (sel.isEmpty()) { toast("Select the curves to liquify first"); return }
+                /*
+                 * The disc is in pixels and follows the brush, so there is only
+                 * one size to think about. Worked out HERE rather than cached
+                 * when the slider moves: at that moment the camera may not have
+                 * been laid out yet, and a disc sized against a 1x1 viewport is
+                 * a tool that does nothing until you touch the slider again.
+                 */
+                liquifyCfg.size = maxOf(24.0, camera.worldToPx(sizeMM * MM * 0.5) * 4)
                 dragTargets = sel
                 dragPositions = Editing.snapshot(sel)
             }
@@ -812,6 +886,203 @@ class MainActivity : Activity(), Gestures.Listener {
         surface.requestRender()
     }
 
+    // ---- files -----------------------------------------------------------------
+
+    /**
+     * Save, open and export all go through the Storage Access Framework.
+     *
+     * An app writing into shared storage by path has not been the way to do
+     * this since Android 10, and the picker is also the only route that lets
+     * someone put a sketch in Drive or hand it to another app — which is the
+     * point of having a portable format at all.
+     */
+    private fun chooseSaveTarget() {
+        startActivityForResult(
+            Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "application/json"
+                putExtra(Intent.EXTRA_TITLE, "sketch.plume.json")
+            },
+            REQ_SAVE,
+        )
+    }
+
+    private fun chooseOpenTarget() {
+        startActivityForResult(
+            Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                // .plume.json files are often reported as octet-stream, so
+                // asking only for application/json hides them in the picker
+                type = "*/*"
+            },
+            REQ_OPEN,
+        )
+    }
+
+    private fun chooseExportFormat() {
+        if (sketch.strokes.isEmpty()) { toast("Nothing to export"); return }
+        val names = arrayOf("OBJ + MTL (mm)", "STL binary (mm)", "glTF 2.0 (metres)")
+        AlertDialog.Builder(this)
+            .setTitle(R.string.export_)
+            .setItems(names) { _, which ->
+                val (req, ext, mime) = when (which) {
+                    0 -> Triple(REQ_EXPORT_OBJ, "obj", "model/obj")
+                    1 -> Triple(REQ_EXPORT_STL, "stl", "model/stl")
+                    else -> Triple(REQ_EXPORT_GLTF, "gltf", "model/gltf+json")
+                }
+                startActivityForResult(
+                    Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                        addCategory(Intent.CATEGORY_OPENABLE)
+                        type = mime
+                        putExtra(Intent.EXTRA_TITLE, "sketch.$ext")
+                    },
+                    req,
+                )
+            }
+            .show()
+    }
+
+    @Deprecated("Activity.onActivityResult")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        @Suppress("DEPRECATION")
+        super.onActivityResult(requestCode, resultCode, data)
+        val uri = data?.data ?: return
+        if (resultCode != RESULT_OK) return
+        when (requestCode) {
+            REQ_SAVE -> writeText(uri, currentDocumentText(), "Saved")
+            REQ_OPEN -> openDocument(uri)
+            REQ_EXPORT_OBJ -> exportObj(uri)
+            REQ_EXPORT_MTL -> pendingMtl?.let {
+                writeText(uri, it, "Exported materials")
+                pendingMtl = null
+            }
+            REQ_EXPORT_STL -> writeBytes(uri, Export.stlBinary(Export.collect(sketch)), "Exported STL")
+            REQ_EXPORT_GLTF -> {
+                // glTF is defined in METRES, and a world unit already is one
+                val text = Export.gltfSource(Export.collect(sketch, scale = 1.0), "sketch")
+                if (text == null) toast("Nothing to export") else writeText(uri, text, "Exported glTF")
+            }
+        }
+    }
+
+    /**
+     * An OBJ loses its colours without the `.mtl` beside it, and the picker
+     * only ever hands over one destination.
+     *
+     * So the materials get a picker of their own. Guessing a sibling URI by
+     * string surgery is not something the Storage Access Framework promises
+     * will work — it happens to on some providers and silently does not on
+     * others, which is the worst of both. Two prompts is honest.
+     */
+    private fun exportObj(uri: Uri) {
+        val out = Export.objSource(Export.collect(sketch), "sketch")
+        writeText(uri, out.obj, "Exported OBJ")
+        pendingMtl = out.mtl ?: return
+        startActivityForResult(
+            Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "model/mtl"
+                putExtra(Intent.EXTRA_TITLE, "sketch.mtl")
+            },
+            REQ_EXPORT_MTL,
+        )
+    }
+
+    private fun currentDocumentText(): String {
+        docTool.brush = brush
+        docTool.color = color
+        docTool.sizeMM = sizeMM
+        docTool.autoGuide = autoGuide
+        docEnv.background = renderer.background
+        return Document.toJsonText(sketch, guides, camera, docEnv, docTool, carried)
+    }
+
+    private fun writeText(uri: Uri, text: String, said: String) =
+        writeBytes(uri, text.toByteArray(Charsets.UTF_8), said)
+
+    private fun writeBytes(uri: Uri, bytes: ByteArray, said: String) {
+        io.execute {
+            val ok = runCatching {
+                contentResolver.openOutputStream(uri)?.use { it.write(bytes) } != null
+            }.getOrDefault(false)
+            main.post { toast(if (ok) "$said (${bytes.size / 1024} KB)" else "Could not write the file") }
+        }
+    }
+
+    private fun openDocument(uri: Uri) {
+        io.execute {
+            val text = runCatching {
+                contentResolver.openInputStream(uri)?.use { it.readBytes().toString(Charsets.UTF_8) }
+            }.getOrNull()
+            main.post {
+                if (text == null) { toast("Could not read the file"); return@post }
+                loadDocument(text)
+            }
+        }
+    }
+
+    /**
+     * Opening a file replaces the drawing, so it clears the history with it.
+     * An undo stack whose steps refer to curves from a document that is no
+     * longer open would put back strokes from someone else's sketch.
+     */
+    private fun loadDocument(text: String) {
+        val r = Document.restore(text, sketch, guides, camera)
+        if (!r.ok) { toast(r.reason ?: "Not a Plume sketch"); return }
+        carried = r.carried
+        brush = r.tool.brush
+        color = r.tool.color
+        sizeMM = clamp(r.tool.sizeMM, Tune.BRUSH_MIN_MM, Tune.BRUSH_MAX_MM)
+        autoGuide = r.tool.autoGuide
+        renderer.background = r.env.background
+        renderer.showGrid = r.env.grid
+        renderer.showAxis = r.env.axis
+        history.clear()
+        syncBrushControls()
+        pushCamera()
+        pushGuides()
+        refreshScene()
+        toast("Opened ${sketch.strokes.size} curves")
+    }
+
+    // ---- autosave -----------------------------------------------------------------
+
+    private fun autosaveFile() = java.io.File(filesDir, AUTOSAVE)
+
+    /**
+     * Debounced, because every stroke would otherwise serialise the whole
+     * document while the pen is still moving. Half a second of quiet is long
+     * enough to be past the end of a gesture and short enough that almost
+     * nothing is at risk.
+     */
+    private fun scheduleAutosave() {
+        if (autosavePending) return
+        autosavePending = true
+        main.postDelayed({ autosavePending = false; writeAutosave() }, 500)
+    }
+
+    private fun writeAutosave() {
+        if (sketch.strokes.isEmpty() && guides.active == null) return
+        val text = currentDocumentText()
+        io.execute {
+            runCatching { autosaveFile().writeText(text) }
+        }
+    }
+
+    private fun restoreAutosave() {
+        val f = autosaveFile()
+        if (!f.exists()) return
+        val text = runCatching { f.readText() }.getOrNull() ?: return
+        val r = Document.restore(text, sketch, guides, camera)
+        if (!r.ok) return
+        carried = r.carried
+        brush = r.tool.brush
+        color = r.tool.color
+        sizeMM = clamp(r.tool.sizeMM, Tune.BRUSH_MIN_MM, Tune.BRUSH_MAX_MM)
+        autoGuide = r.tool.autoGuide
+        renderer.background = r.env.background
+    }
+
     // ---- keeping the screen in step -------------------------------------------
 
     private fun setDocument(list: List<Stroke>) {
@@ -822,6 +1093,7 @@ class MainActivity : Activity(), Gestures.Listener {
     private fun refreshScene() {
         renderer.setStrokes(sketch.strokes)
         refreshControls()
+        scheduleAutosave()
         surface.requestRender()
     }
 
@@ -870,4 +1142,14 @@ class MainActivity : Activity(), Gestures.Listener {
 
     override fun onHover(x: Float, y: Float, pressure: Float) { /* nib preview: Phase 6 */ }
     override fun onHoverExit() { }
+
+    private companion object {
+        const val REQ_SAVE = 1
+        const val REQ_OPEN = 2
+        const val REQ_EXPORT_OBJ = 3
+        const val REQ_EXPORT_STL = 4
+        const val REQ_EXPORT_GLTF = 5
+        const val REQ_EXPORT_MTL = 6
+        const val AUTOSAVE = "autosave.plume.json"
+    }
 }
