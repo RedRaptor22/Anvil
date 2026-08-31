@@ -412,75 +412,6 @@ class DragValue(
 }
 
 /**
- * The rail's vertical slider — `.vslider input[type=range]{transform:rotate(-90deg)}`.
- *
- * Plume rotates a normal range input so the rail can stay one column wide.
- * Rotating an Android SeekBar drags its touch target out of its own bounds,
- * so this is drawn directly instead: a 4px track in --panel3 with a 16px
- * --panel thumb, which is exactly what the ::-webkit-slider rules describe.
- */
-class VSlider(
-    ctx: Context,
-    private val t: Tokens,
-    private val min: Double,
-    private val max: Double,
-    private val onChange: (Double) -> Unit,
-) : View(ctx) {
-
-    var value: Double = min
-        set(v) { field = v.coerceIn(min, max); invalidate() }
-
-    private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val rect = RectF()
-
-    init {
-        layoutParams = LinearLayout.LayoutParams(t.px(R.dimen.vsliderW), t.px(R.dimen.vsliderLen))
-    }
-
-    override fun onDraw(canvas: Canvas) {
-        val cx = width * 0.5f
-        val track = t.dpf(4f)
-        val thumb = t.dpf(8f)
-        val top = thumb
-        val bottom = height - thumb
-        paint.color = t.panel3
-        rect.set(cx - track / 2, top, cx + track / 2, bottom)
-        canvas.drawRoundRect(rect, track / 2, track / 2, paint)
-        /* the track runs bottom-to-top: more is up, as on the readout */
-        val f = ((value - min) / (max - min)).toFloat()
-        val cy = bottom - f * (bottom - top)
-        paint.color = t.shadowTint
-        paint.alpha = 60
-        canvas.drawCircle(cx, cy + t.dpf(1f), thumb, paint)
-        paint.alpha = 255
-        paint.color = t.panel
-        canvas.drawCircle(cx, cy, thumb, paint)
-    }
-
-    override fun onTouchEvent(e: MotionEvent): Boolean {
-        when (e.actionMasked) {
-            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE -> {
-                parent?.requestDisallowInterceptTouchEvent(true)
-                val thumb = t.dpf(8f)
-                val top = thumb
-                val bottom = height - thumb
-                val f = ((bottom - e.y) / (bottom - top)).coerceIn(0f, 1f)
-                value = min + f * (max - min)
-                onChange(value)
-                return true
-            }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                performClick()
-                return true
-            }
-        }
-        return super.onTouchEvent(e)
-    }
-
-    override fun performClick(): Boolean { super.performClick(); return true }
-}
-
-/**
  * `#toast` — a card that fades up from the bottom and back out.
  *
  * Deliberately not an Android Toast: on API 30+ those are drawn by the system
@@ -528,12 +459,18 @@ class ToastCard(ctx: Context, private val t: Tokens) : FrameLayout(ctx) {
 }
 
 /**
- * `input[type=range]` — the popover's horizontal slider.
+ * `input[type=range]` — every slider in the interface.
  *
- * Same parts as [VSlider] and the same CSS rules behind them: a 4px track in
- * --panel3, a 16px thumb in --panel carrying `0 1px 4px rgba(0,0,0,.28)`. It
- * is drawn rather than themed because a platform SeekBar brings a tick mark,
- * a ripple and a splash colour that belong to a different interface.
+ * The parts are the `::-webkit-slider` rules read literally: a 4px track in
+ * the panel3 tone, a 16px thumb in the panel tone carrying
+ * `0 1px 4px rgba(0,0,0,.28)`. Drawn rather than themed, because a platform
+ * SeekBar brings a tick mark, a ripple and a splash colour that belong to a
+ * different interface.
+ *
+ * There is deliberately no vertical twin. The stylesheet defines a `.vslider`
+ * that rotates a range input -90deg so the rail could stay one column wide,
+ * but nothing in the markup uses it — the rail adjusts by dragging the
+ * readout instead. Porting the class would have been porting dead code.
  */
 class HSlider(
     ctx: Context,

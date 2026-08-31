@@ -60,6 +60,8 @@
     <!-- #brush 58 wide; the colour dot 34; a vertical slider 74 long -->
     <dimen name="brushRailW">58dp</dimen>
     <dimen name="brushDot">34dp</dimen>
+    <!-- .vslider: defined in the stylesheet but used by no markup, in either
+         build. Kept because this file is the CSS transcribed. -->
     <dimen name="vsliderLen">74dp</dimen>
     <dimen name="vsliderW">32dp</dimen>
     <dimen name="brushGridLeft">78dp</dimen>

@@ -138,7 +138,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
     private lateinit var ctxHint: TextView
     private lateinit var guideBar: LinearLayout
     private lateinit var guideNameLabel: TextView
-    private lateinit var guideOpacityBar: VSlider
+    private lateinit var guideOpacityBar: HSlider
     private lateinit var sizeVal: DragValue
     private lateinit var opacityVal: DragValue
     private lateinit var colorDot: View
@@ -375,11 +375,11 @@ class Chrome(private val act: Activity, val t: Tokens) {
          * The web build's guide opacity is a horizontal range capped at 92%:
          * a guide you cannot see past is a guide you cannot draw on.
          */
-        guideOpacityBar = VSlider(act, t, 0.0, 0.92) { v ->
+        guideOpacityBar = HSlider(act, t, 0.0, 0.92) { v ->
             guideOpacity = v; onGuideOpacity(v); refresh()
         }
         guideOpacityBar.layoutParams = LinearLayout.LayoutParams(
-            t.dp(32f), t.px(R.dimen.icoSm),
+            t.dp(76f), t.dp(22f),                 // style="width:76px" on #guideOpacity
         ).apply { marginStart = t.dp(6f) }
         guideBar.addView(guideOpacityBar)
         guideBar.addView(ico("eye", Action.GUIDE_SAVE, small = true))
@@ -508,11 +508,6 @@ class Chrome(private val act: Activity, val t: Tokens) {
     ): View = LinearLayout(act).apply {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
-        /*
-         * A VSlider laid out wider than it is tall still reads bottom-to-top,
-         * so the popover uses a plain SeekBar-shaped horizontal control built
-         * from the same primitive: it is the same 4px track and 16px thumb.
-         */
         val bar = HSlider(act, t, min, max) { v -> set(v) }
         bar.value = get()
         addView(
