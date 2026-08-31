@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ======================================================================
+     Every measurement Plume's stylesheet states, in the same order the CSS
+     states them. A CSS pixel and an Android dp are both 1/96 inch at the
+     reference density, so these are the web build's numbers unchanged —
+     that is the point of the exercise, and it is why nothing here is
+     rounded to a "nicer" value.
+     ====================================================================== -->
+<resources>
+    <!-- radii: --rCard / --rBtn, and the icon button's own 12px -->
+    <dimen name="rCard">22dp</dimen>
+    <dimen name="rBtn">14dp</dimen>
+    <dimen name="rIco">12dp</dimen>
+    <dimen name="rIcoSm">10dp</dimen>
+    <dimen name="rTile">11dp</dimen>       <!-- #brushGrid button -->
+    <dimen name="rSheet">24dp</dimen>      <!-- compact sheets: 24 24 0 0 -->
+
+    <!-- .panel { box-shadow: var(--shadow) } and .shadowLg -->
+    <dimen name="elevPanel">8dp</dimen>
+    <dimen name="elevPanelLg">18dp</dimen>
+
+    <!-- .ico 38x38 with a 20px glyph; .ico.sm 32x32 with a 17px glyph -->
+    <dimen name="ico">38dp</dimen>
+    <dimen name="icoGlyph">20dp</dimen>
+    <dimen name="icoSm">32dp</dimen>
+    <dimen name="icoSmGlyph">17dp</dimen>
+    <dimen name="icoXs">28dp</dimen>       <!-- .grpRow .ico.sm -->
+
+    <!-- panel paddings: the pills use 5, the cards 12/14/18 -->
+    <dimen name="padPill">5dp</dimen>
+    <dimen name="padRail">8dp</dimen>
+    <dimen name="padPop">12dp</dimen>
+    <dimen name="padCard">14dp</dimen>
+    <dimen name="padModal">18dp</dimen>
+
+    <!-- gaps: .rowbar 2, .col/.row 8, brush rail 6 -->
+    <dimen name="gapTight">2dp</dimen>
+    <dimen name="gapRail">6dp</dimen>
+    <dimen name="gap">8dp</dimen>
+    <dimen name="gapCard">10dp</dimen>
+
+    <!-- chrome placement, all measured from the viewport edge -->
+    <dimen name="edge">12dp</dimen>
+    <dimen name="edgeCompact">8dp</dimen>
+    <dimen name="helpLeft">160dp</dimen>       <!-- #helpBtn left -->
+    <dimen name="viewInfoLeft">214dp</dimen>   <!-- #viewInfo left -->
+    <dimen name="undoBottom">14dp</dimen>
+    <dimen name="ctxBottom">14dp</dimen>
+    <dimen name="selBarBottom">78dp</dimen>
+    <dimen name="liquifyBottom">70dp</dimen>
+    <dimen name="toastBottom">74dp</dimen>
+    <dimen name="walkBottom">84dp</dimen>
+    <dimen name="stageTop">62dp</dimen>
+
+    <!-- #railTab: 20x46, rounded on its outer edge only -->
+    <dimen name="railTabW">20dp</dimen>
+    <dimen name="railTabH">46dp</dimen>
+    <dimen name="railTabGlyph">13dp</dimen>
+
+    <!-- #brush 58 wide; the colour dot 34; a vertical slider 74 long -->
+    <dimen name="brushRailW">58dp</dimen>
+    <dimen name="brushDot">34dp</dimen>
+    <dimen name="vsliderLen">74dp</dimen>
+    <dimen name="vsliderW">32dp</dimen>
+    <dimen name="brushGridLeft">78dp</dimen>
+
+    <!-- cards -->
+    <dimen name="slidePopW">212dp</dimen>
+    <dimen name="stagePanelW">264dp</dimen>
+    <dimen name="stagePanelWNarrow">244dp</dimen>
+    <dimen name="colorCardW">224dp</dimen>
+    <dimen name="sysMenuW">380dp</dimen>
+    <dimen name="walkW">440dp</dimen>
+    <dimen name="joyW">132dp</dimen>
+    <dimen name="joyPad">108dp</dimen>
+
+    <!-- the dot that marks a tool hiding a second mode -->
+    <dimen name="modeDot">3dp</dimen>
+    <dimen name="modeDotInset">5dp</dimen>
+
+    <!-- 1px rules: .div is a vertical hairline, .sep a horizontal one -->
+    <dimen name="hair">1dp</dimen>
+    <dimen name="divMarginV">6dp</dimen>
+    <dimen name="divMarginH">4dp</dimen>
+
+    <!-- type scale -->
+    <dimen name="textBody">13sp</dimen>
+    <dimen name="textSmall">12sp</dimen>
+    <dimen name="textVal">11sp</dimen>
+    <dimen name="textRailVal">9.5sp</dimen>
+    <dimen name="textLabel">10sp</dimen>
+    <dimen name="textHead">15sp</dimen>
+
+    <!-- compact: 44dp touch targets, a 60dp dock, 56dp tool tiles -->
+    <dimen name="touchCompact">44dp</dimen>
+    <dimen name="dockH">60dp</dimen>
+    <dimen name="toolTileCompact">56dp</dimen>
+    <dimen name="sheetPad">14dp</dimen>
+</resources>

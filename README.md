@@ -207,9 +207,15 @@ Roughly in the order they matter:
    could not finish.
 3. **A transform gizmo**, which is the one editing tool with no touch
    equivalent yet.
-4. **The interface.** The bottom bar is a floor, not a design. Deliberately not
-   transliterated: a phone wants a bottom sheet and a radial menu, not the
-   desktop's 58px vertical rail.
+4. **The interface** is now a port of Plume's rather than a floor of its own —
+   the same panels, in the same corners, at the same offsets, with the same
+   43 icons. The earlier note here said a phone wants bottom sheets rather
+   than "the desktop's 58px vertical rail"; reading the stylesheet properly
+   settled it, because Plume ALREADY does that: under 720px `body.compact`
+   turns the rails into bottom sheets over a permanent dock. So both layouts
+   are ported and the width picks between them, exactly as the web build does.
+   Still missing inside that chrome: the hue wheel, the transform joystick,
+   the groups and lighting panels, and the walkthrough.
 3. Document save/load, export (OBJ/STL/glTF), lighting controls, the post pass,
    symmetry, selection and the editing tools.
 

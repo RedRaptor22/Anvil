@@ -4,25 +4,17 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
 import android.graphics.Color
-import android.graphics.drawable.GradientDrawable
 import android.opengl.GLSurfaceView
 import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.view.Choreographer
-import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
-import android.widget.Button
 import android.widget.FrameLayout
-import android.widget.HorizontalScrollView
-import android.widget.LinearLayout
-import android.widget.SeekBar
-import android.widget.TextView
-import android.widget.Toast
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import art.plume.core.Camera
@@ -55,12 +47,12 @@ import art.plume.core.Vec3
 import art.plume.core.clamp
 
 /**
- * The shell: one GL surface, the gesture layer, and a tool row.
+ * The shell: one GL surface, the gesture layer, and Plume's chrome over it.
  *
- * The chrome here is still the FLOOR, not the interface — a phone wants bottom
- * sheets and a radial menu rather than a row of buttons, and that is Phase 6.
- * What it does have to be is COMPLETE: every tool needs a way to reach it, or
- * the tool may as well not be ported.
+ * The interface itself lives in [Chrome] — a view-for-view port of the web
+ * build's panels — and this file is what those panels are wired to. The split
+ * is deliberate: [Chrome] can be read as "what Plume looks like" without any
+ * strokes in it, and this file as "what the buttons do" without any pixels.
  *
  * Everything with an opinion in it — where a pixel lands, how far an eraser
  * reaches, what a pinch does to a curve — lives in `:core` and is under test.
@@ -80,7 +72,6 @@ class MainActivity : Activity(), Gestures.Listener {
     private val guides = GuideScene()
     private val sketch = Sketch()
 
-    private enum class Tool { DRAW, ERASE, VACUUM, SMOOTH, SELECT, LASSO, LIQUIFY, GUIDE, FLAT }
     private var tool = Tool.DRAW
 
     /**
@@ -118,12 +109,9 @@ class MainActivity : Activity(), Gestures.Listener {
     private var sizeMM = 14.0
     private var color = Rgba(0.106, 0.110, 0.129)
 
-    private lateinit var undoButton: Button
-    private lateinit var redoButton: Button
-    private lateinit var sizeLabel: TextView
-    private lateinit var sizeBar: SeekBar
-    private lateinit var guideButton: Button
-    private val toolButtons = HashMap<Tool, Button>()
+    private var opacity = 1.0
+
+    private lateinit var chrome: Chrome
 
     private val scratch = Vec3()
     private val penRay = Ray()
@@ -178,7 +166,35 @@ class MainActivity : Activity(), Gestures.Listener {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT,
             ),
         )
-        root.addView(buildControls())
+        val tokens = Tokens(this)
+        /*
+         * Plume follows the CANVAS background, not a system setting: applyEnv
+         * flips body.dark when the paper goes dark. Android resources work the
+         * other way round, so the system decides and the canvas follows — the
+         * two must not be allowed to disagree, or the chrome ends up light over
+         * a black page. A document that carries its own background still wins
+         * on load (see loadDocument), which is the same precedence the web
+         * build has.
+         */
+        renderer.background = if (tokens.dark) DARK_PAGE else LIGHT_PAGE
+        chrome = Chrome(this, tokens)
+        wireChrome()
+        root.addView(
+            chrome.root,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT,
+            ),
+        )
+        /*
+         * Immersive mode hides the bars but not a display cutout, so the chrome
+         * has to be inset by hand — this is `env(safe-area-inset-*)`, which the
+         * stylesheet already uses for the compact dock.
+         */
+        ViewCompat.setOnApplyWindowInsetsListener(chrome.root) { v, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            v.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+            insets
+        }
         setContentView(root)
 
         history.addListener { refreshControls() }
@@ -206,6 +222,17 @@ class MainActivity : Activity(), Gestures.Listener {
 
     override fun onDestroy() { super.onDestroy(); io.shutdown() }
 
+    /**
+     * `UI.applyMode` runs on resize in the browser; the same trigger here is a
+     * configuration change, which is what this activity already handles itself
+     * (see `configChanges` in the manifest) rather than being recreated for.
+     */
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        chrome.applyMode()
+        refreshControls()
+    }
+
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) hideSystemBars()
@@ -227,216 +254,153 @@ class MainActivity : Activity(), Gestures.Listener {
      */
     @Deprecated("Activity.onBackPressed")
     override fun onBackPressed() {
+        if (chrome.closeTop()) return
         if (sketch.selection.isNotEmpty()) { deselectAll(); return }
         if (history.canUndo()) { history.undo(); refreshScene(); return }
         super.onBackPressed()
     }
 
-    // ---- the floor of an interface ---------------------------------------
+    // ---- the chrome -------------------------------------------------------
 
-    private fun buildControls(): View {
-        val bar = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.argb(215, 20, 20, 24))
-            setPadding(dp(8), dp(6), dp(8), dp(6))
-        }
-
-        bar.addView(buildToolRow())
-        bar.addView(buildActionRow())
-
-        sizeLabel = TextView(this).apply {
-            setTextColor(Color.WHITE)
-            text = sizeText()
-        }
-        sizeBar = SeekBar(this).apply {
-            // FACT: the brush panel runs 1mm - 300mm
-            max = (Tune.BRUSH_MAX_MM - Tune.BRUSH_MIN_MM).toInt()
-            progress = (sizeMM - Tune.BRUSH_MIN_MM).toInt()
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(sb: SeekBar?, value: Int, fromUser: Boolean) {
-                    sizeMM = clamp(
-                        Tune.BRUSH_MIN_MM + value, Tune.BRUSH_MIN_MM, Tune.BRUSH_MAX_MM,
-                    )
-                    sizeLabel.text = sizeText()
-                }
-                override fun onStartTrackingTouch(sb: SeekBar?) {}
-                override fun onStopTrackingTouch(sb: SeekBar?) {}
-            })
-        }
-        bar.addView(sizeLabel)
-        bar.addView(sizeBar)
-        bar.addView(buildSwatches())
-
-        bar.layoutParams = FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
-        ).apply { gravity = Gravity.BOTTOM }
-
-        // keep the bar clear of the gesture pill and any display cutout
-        ViewCompat.setOnApplyWindowInsetsListener(bar) { v, insets ->
-            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-            v.setPadding(dp(8) + bars.left, dp(6), dp(8) + bars.right, dp(6) + bars.bottom)
-            insets
-        }
-        return bar
-    }
-
-    /** Nine tools do not fit across a phone, so the row scrolls. */
-    private fun buildToolRow(): View {
-        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        val labels = listOf(
-            Tool.DRAW to R.string.tool_draw,
-            Tool.ERASE to R.string.tool_erase,
-            Tool.VACUUM to R.string.tool_vacuum,
-            Tool.SMOOTH to R.string.tool_smooth,
-            Tool.SELECT to R.string.tool_select,
-            Tool.LASSO to R.string.tool_lasso,
-            Tool.LIQUIFY to R.string.tool_liquify,
-            Tool.GUIDE to R.string.tool_guide,
-            Tool.FLAT to R.string.tool_flat,
-        )
-        for ((t, res) in labels) {
-            val b = Button(this).apply {
-                text = getString(res)
-                setOnClickListener { setTool(t) }
-            }
-            toolButtons[t] = b
-            row.addView(b)
-        }
-        return HorizontalScrollView(this).apply {
-            isHorizontalScrollBarEnabled = false
-            addView(row)
+    /**
+     * Every panel in [Chrome] raises either a [Tool] or an [Action]; nothing in
+     * there reaches into the sketch. This is the whole of the join.
+     */
+    private fun wireChrome() {
+        chrome.onTool = { t -> setTool(t) }
+        chrome.onAction = { a -> doAction(a) }
+        chrome.onSizeMm = { mm -> sizeMM = mm }
+        chrome.onOpacity = { o -> opacity = o }
+        chrome.onBrush = { b -> brush = b }
+        chrome.onColor = { argb -> applyColorToSelectionOrBrush(rgbaOf(argb)) }
+        chrome.onGuideOpacity = { v ->
+            guides.active?.let { g -> g.opacity = v; pushGuides(); surface.requestRender() }
         }
     }
 
-    private fun buildActionRow(): View {
-        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        undoButton = Button(this).apply {
-            text = getString(R.string.undo)
-            setOnClickListener { history.undo(); refreshScene() }
+    /**
+     * `P.resetView` — frame the sketch, or go back to the default station when
+     * there is nothing to frame. Plume animates the move; this one snaps,
+     * which is the one visible difference and not a behavioural one.
+     */
+    private fun resetView() {
+        camera.theta = Math.PI * 0.25
+        camera.phi = Math.PI * 0.42
+        camera.roll = 0.0
+        camera.radius = Tune.RADIUS_DEFAULT
+        camera.pinned = false
+        var lo = Vec3(Double.MAX_VALUE, Double.MAX_VALUE, Double.MAX_VALUE)
+        var hi = Vec3(-Double.MAX_VALUE, -Double.MAX_VALUE, -Double.MAX_VALUE)
+        var any = false
+        for (st in sketch.strokes) for (sp in st.pts) {
+            any = true
+            lo = Vec3(minOf(lo.x, sp.p.x), minOf(lo.y, sp.p.y), minOf(lo.z, sp.p.z))
+            hi = Vec3(maxOf(hi.x, sp.p.x), maxOf(hi.y, sp.p.y), maxOf(hi.z, sp.p.z))
         }
-        redoButton = Button(this).apply {
-            text = getString(R.string.redo)
-            setOnClickListener { history.redo(); refreshScene() }
+        if (any) {
+            camera.pivot.set((lo.x + hi.x) / 2, (lo.y + hi.y) / 2, (lo.z + hi.z) / 2)
+            val r = 0.5 * maxOf(hi.x - lo.x, maxOf(hi.y - lo.y, hi.z - lo.z))
+            val halfFov = camera.fovFromFocal(camera.focal) * Math.PI / 360.0
+            camera.radius = clamp(r / Math.tan(halfFov) * 1.15, 1.0, 200.0)
+        } else {
+            camera.pivot.set(0.0, 0.0, 0.0)
         }
-        guideButton = Button(this).apply {
-            text = getString(R.string.close_guide)
-            setOnClickListener { closeActiveGuide() }
-        }
-        row.addView(undoButton)
-        row.addView(redoButton)
-        row.addView(guideButton)
-        row.addView(
-            Button(this).apply {
-                text = getString(R.string.fill)
-                setOnClickListener { fillActiveGuide() }
-            },
-        )
-        row.addView(
-            Button(this).apply {
-                text = getString(R.string.duplicate)
-                setOnClickListener { duplicateSelection() }
-            },
-        )
-        row.addView(
-            Button(this).apply {
-                text = getString(R.string.mirror)
-                setOnClickListener { mirrorSelection() }
-            },
-        )
-        row.addView(
-            Button(this).apply {
-                text = getString(R.string.delete)
-                setOnClickListener { deleteSelection() }
-            },
-        )
-        row.addView(
-            Button(this).apply {
-                text = getString(R.string.clear)
-                setOnClickListener { clearSketch() }
-            },
-        )
-        row.addView(
-            Button(this).apply {
-                text = getString(R.string.save)
-                setOnClickListener { chooseSaveTarget() }
-            },
-        )
-        row.addView(
-            Button(this).apply {
-                text = getString(R.string.open)
-                setOnClickListener { chooseOpenTarget() }
-            },
-        )
-        row.addView(
-            Button(this).apply {
-                text = getString(R.string.export_)
-                setOnClickListener { chooseExportFormat() }
-            },
-        )
-        return HorizontalScrollView(this).apply {
-            isHorizontalScrollBarEnabled = false
-            addView(row)
-        }
+        camera.apply()
     }
 
-    private fun buildSwatches(): View {
-        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        val inks = listOf(
-            Rgba(0.106, 0.110, 0.129),      // the default near-black ink
-            Rgba(0.98, 0.98, 0.98),
-            Rgba(0.85, 0.22, 0.26),
-            Rgba(0.95, 0.60, 0.15),
-            Rgba(0.30, 0.65, 0.35),
-            Rgba(0.25, 0.50, 0.85),
-            Rgba(0.55, 0.35, 0.75),
-        )
-        for (ink in inks) {
-            row.addView(
-                View(this).apply {
-                    background = GradientDrawable().apply {
-                        shape = GradientDrawable.OVAL
-                        setColor(
-                            Color.rgb(
-                                (ink.r * 255).toInt(), (ink.g * 255).toInt(), (ink.b * 255).toInt(),
-                            ),
-                        )
-                        setStroke(dp(1), Color.argb(120, 255, 255, 255))
-                    }
-                    layoutParams = LinearLayout.LayoutParams(dp(30), dp(30)).apply {
-                        marginEnd = dp(8)
-                    }
-                    setOnClickListener { applyColorToSelectionOrBrush(ink) }
-                },
-            )
-        }
-        return row
+    /** `Tools.sample` — the injector takes the whole brush, not just its ink. */
+    private fun sampleAt(x: Double, y: Double) {
+        val hit = Selection.hitTest(sketch, camera, x, y, mask())
+        if (hit == null) { toast(getString(R.string.nothing_under_that)); return }
+        brush = hit.brush
+        color = hit.color
+        sizeMM = hit.baseRadius * 2.0 / MM
+        opacity = hit.opacity
+        syncBrushControls()
+        toast(getString(R.string.sampled, hit.brush))
     }
 
+    /** The eye on the guide bar: keep this surface in the Resource tab. */
+    private fun saveActiveGuide() {
+        if (guides.save() == null) { toast(getString(R.string.no_guide)); return }
+        pushGuides()
+        refreshControls()
+        toast(getString(R.string.guide_saved))
+    }
+
+    /** sRGB bytes to the linear-ish 0..1 the core carries. */
+    private fun rgbaOf(argb: Int): Rgba = Rgba(
+        Color.red(argb) / 255.0, Color.green(argb) / 255.0, Color.blue(argb) / 255.0,
+    )
+
+    private fun argbOf(c: Rgba): Int = Color.rgb(
+        (c.r * 255).toInt().coerceIn(0, 255),
+        (c.g * 255).toInt().coerceIn(0, 255),
+        (c.b * 255).toInt().coerceIn(0, 255),
+    )
+
+    private fun doAction(a: Action) = when (a) {
+        Action.HOME -> { resetView(); pushCamera(); refreshControls() }
+        Action.EXPORT -> chooseExportFormat()
+        Action.MENU -> chrome.setMenu(true)
+        Action.HELP -> toast(getString(R.string.not_yet_help))
+        Action.UNDO -> { history.undo(); refreshScene() }
+        Action.REDO -> { history.redo(); refreshScene() }
+        Action.MIRROR -> mirrorSelection()
+        Action.STAGE -> chrome.toggleStage()
+        Action.GUIDE_BEND -> toast(getString(R.string.not_yet_bend))
+        Action.GUIDE_SAVE -> saveActiveGuide()
+        Action.GUIDE_CLOSE -> closeActiveGuide()
+        Action.DUPLICATE -> duplicateSelection()
+        Action.DUPLICATE_MIRROR -> mirrorSelection()
+        Action.LIQUIFY -> setTool(Tool.LIQUIFY)
+        Action.DELETE -> deleteSelection()
+        Action.PRESSURE -> toast(getString(R.string.not_yet_pressure))
+        Action.NEW -> { clearSketch(); resetView(); pushCamera() }
+        Action.SAVE -> chooseSaveTarget()
+        Action.OPEN -> chooseOpenTarget()
+        Action.CLEAR -> clearSketch()
+    }
+
+    /**
+     * The tools with no behaviour behind them yet say so. A button that looks
+     * live and does nothing is worse than one that is honest about the gap —
+     * and the gap is real: Bend, Loft and Primitives are all ported in `:core`
+     * and under test, but none of them has its interaction wired up here.
+     */
     private fun setTool(t: Tool) {
+        when (t) {
+            Tool.SHAPE -> { toast(getString(R.string.not_yet_shape)); return }
+            Tool.BEND -> { toast(getString(R.string.not_yet_bend)); return }
+            Tool.LOFT -> { toast(getString(R.string.not_yet_loft)); return }
+            Tool.PRIM -> { toast(getString(R.string.not_yet_prim)); return }
+            else -> {}
+        }
         tool = t
+        chrome.setTool(t)
         refreshControls()
     }
 
-    private fun sizeText(): String = "Brush ${sizeMM.toInt()} mm"
-
-    /** After a load the brush came from the file, so the slider has to follow. */
+    /** After a load the brush came from the file, so the rail has to follow. */
     private fun syncBrushControls() {
-        sizeLabel.text = sizeText()
-        sizeBar.progress = (sizeMM - Tune.BRUSH_MIN_MM).toInt()
+        chrome.setSize(sizeMM)
+        chrome.setOpacityValue(opacity)
+        chrome.setBrush(brush)
+        chrome.setColor(argbOf(color))
     }
 
+    /** `UI.refresh` — push the model back at the chrome and let it re-derive. */
     private fun refreshControls() {
-        undoButton.isEnabled = history.canUndo()
-        redoButton.isEnabled = history.canRedo()
-        guideButton.isEnabled = guides.active != null
-        for ((t, b) in toolButtons) {
-            b.alpha = if (t == tool) 1f else 0.55f
-        }
+        chrome.setHistory(history.canUndo(), history.canRedo())
+        val g = guides.active
+        chrome.setGuide(g != null, g?.name ?: "", g?.opacity ?: 0.42)
+        chrome.setSelection(sketch.selection.size)
+        chrome.setViewInfo(camera.focal.toInt(), !camera.ortho, sketch.strokes.size)
     }
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
 
-    private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+    private fun toast(msg: String) = chrome.toast(msg)
 
     // ---- the guide mask, which every tool honours -------------------------
 
@@ -458,7 +422,7 @@ class MainActivity : Activity(), Gestures.Listener {
         lastPen = Px(x.toDouble(), y.toDouble())
 
         when (tool) {
-            Tool.DRAW, Tool.GUIDE, Tool.FLAT -> beginStroke(x, y, pressure, tiltAz)
+            Tool.DRAW, Tool.GUIDE, Tool.FLATGUIDE -> beginStroke(x, y, pressure, tiltAz)
 
             Tool.ERASE, Tool.VACUUM -> {
                 dragStrokes = ArrayList(sketch.strokes)
@@ -497,6 +461,13 @@ class MainActivity : Activity(), Gestures.Listener {
                 Selection.appendLasso(lasso, x.toDouble(), y.toDouble())
                 pushLasso()
             }
+
+            /* Tools.begin: fill and the samplers act on the press itself and
+               have no drag of their own. */
+            Tool.FILL -> fillActiveGuide()
+            Tool.INJECT -> sampleAt(x.toDouble(), y.toDouble())
+
+            else -> {}
         }
         surface.requestRender()
     }
@@ -504,7 +475,7 @@ class MainActivity : Activity(), Gestures.Listener {
     override fun onDrawMove(x: Float, y: Float, pressure: Float, tiltAz: Float, tiltAlt: Float) {
         dragMoved = true
         when (tool) {
-            Tool.DRAW, Tool.GUIDE, Tool.FLAT -> moveStroke(x, y, pressure, tiltAz)
+            Tool.DRAW, Tool.GUIDE, Tool.FLATGUIDE -> moveStroke(x, y, pressure, tiltAz)
             Tool.ERASE, Tool.VACUUM -> stepDestructive(x.toDouble(), y.toDouble())
             Tool.SMOOTH -> stepSmooth(x.toDouble(), y.toDouble())
             Tool.LIQUIFY -> {
@@ -520,6 +491,7 @@ class MainActivity : Activity(), Gestures.Listener {
             Tool.LASSO -> {
                 if (Selection.appendLasso(lasso, x.toDouble(), y.toDouble())) pushLasso()
             }
+            else -> {}
         }
         lastPen = Px(x.toDouble(), y.toDouble())
         surface.requestRender()
@@ -527,7 +499,7 @@ class MainActivity : Activity(), Gestures.Listener {
 
     override fun onDrawEnd() {
         when (tool) {
-            Tool.DRAW, Tool.GUIDE, Tool.FLAT -> endStroke()
+            Tool.DRAW, Tool.GUIDE, Tool.FLATGUIDE -> endStroke()
             Tool.ERASE, Tool.VACUUM -> commitDocumentChange(
                 if (tool == Tool.ERASE) "Erase" else "Vacuum",
             )
@@ -536,6 +508,7 @@ class MainActivity : Activity(), Gestures.Listener {
             )
             Tool.SELECT -> endSelect()
             Tool.LASSO -> endLasso()
+            else -> {}
         }
         clearDrag()
         surface.requestRender()
@@ -836,7 +809,7 @@ class MainActivity : Activity(), Gestures.Listener {
         camera.basis(right, up, back)
 
         val g = when (tool) {
-            Tool.FLAT -> Guides.createFlatFromStroke(pts, fwd, right)
+            Tool.FLATGUIDE -> Guides.createFlatFromStroke(pts, fwd, right)
             else -> Guides.createFromStroke(pts, fwd, right, camera.radius)
         } ?: run { commitStroke(s); return }
 
@@ -1144,6 +1117,10 @@ class MainActivity : Activity(), Gestures.Listener {
     override fun onHoverExit() { }
 
     private companion object {
+        /** --bg, light and dark: the same two values as the colour resources. */
+        private val LIGHT_PAGE = Rgba(0.925, 0.918, 0.953)
+        private val DARK_PAGE = Rgba(0.082, 0.086, 0.106)
+
         const val REQ_SAVE = 1
         const val REQ_OPEN = 2
         const val REQ_EXPORT_OBJ = 3

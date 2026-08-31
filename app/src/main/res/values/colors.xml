@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ======================================================================
+     Plume's design tokens, ported verbatim from the :root block of
+     plume.html. The comment there records the language they encode:
+       · light-first — white cards floating over the canvas, no borders
+       · large radii (22px cards, 14px controls, circular swatches)
+       · soft diffuse shadow instead of outlines
+       · abstract monochrome line icons, never filled pictograms
+       · ACTIVE = a filled glyph on a soft tint, not a colour accent
+     Names are the CSS custom-property names with the -- dropped, so a
+     value here can be diffed against the web build by eye. Do not
+     "improve" one of these in isolation: they are a set.
+
+     values-night/ carries the body.dark block, and Plume switches on the
+     canvas background rather than a system setting (see applyEnv). The
+     Android side follows the system's night mode instead, because that is
+     what a resource qualifier can express; MainActivity then keeps the
+     GL clear colour in step so the two never disagree.
+     ====================================================================== -->
+<resources>
+    <color name="bg">#eceaf3</color>
+    <color name="panel">#ffffff</color>
+    <color name="panel2">#f2f2f6</color>
+    <color name="panel3">#e7e7ee</color>
+    <color name="ink">#1b1c21</color>
+    <color name="dim">#8a8b96</color>
+    <color name="dim2">#a9aab4</color>
+    <color name="line">#14121222</color>          <!-- rgba(18,18,34,.08) -->
+    <color name="active">#1b1c21</color>
+    <color name="onActive">#ffffff</color>
+    <color name="accent">#ff8a3d</color>
+    <color name="blue">#5b9dff</color>
+    <color name="green">#4cc38a</color>
+    <color name="red">#f2545b</color>
+
+    <!-- Android has one shadow colour per elevation, not a two-part CSS
+         shadow; this is the ambient term of --shadow with the alpha the
+         umbra contributes folded in, which reads the same at 8dp. -->
+    <color name="shadowTint">#161630</color>
+
+    <!-- lasso: fill rgba(91,157,255,.18), stroke var(--blue) -->
+    <color name="lassoFill">#2e5b9dff</color>
+    <color name="lassoStroke">#5b9dff</color>
+
+    <!-- scrim behind the settings modal: rgba(20,20,34,.28) -->
+    <color name="scrim">#47141422</color>
+
+    <!-- the one place the interface spends colour, per the CSS note on
+         #btnSelDelete: hover is rgba(242,84,91,.12) -->
+    <color name="redWash">#1ff2545b</color>
+</resources>

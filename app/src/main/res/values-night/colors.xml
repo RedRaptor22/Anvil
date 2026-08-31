@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- body.dark from plume.html: "the same language inverted". Only the tokens
+     the web build actually redefines are redefined here; everything else
+     (accent, blue, green, red) is deliberately shared between the two. -->
+<resources>
+    <color name="bg">#15161b</color>
+    <color name="panel">#232429</color>
+    <color name="panel2">#2b2c33</color>
+    <color name="panel3">#34353d</color>
+    <color name="ink">#f0f0f5</color>
+    <color name="dim">#9698a4</color>
+    <color name="dim2">#71737e</color>
+    <color name="line">#17ffffff</color>          <!-- rgba(255,255,255,.09) -->
+    <color name="active">#f0f0f5</color>
+    <color name="onActive">#1b1c21</color>
+
+    <!-- dark --shadow is 0 8px 26px rgba(0,0,0,.42): pure black, heavier -->
+    <color name="shadowTint">#000000</color>
+
+    <color name="scrim">#80000000</color>         <!-- rgba(0,0,0,.5) -->
+</resources>

@@ -239,19 +239,40 @@ builds. This phase gets *easier* than the web original.
 
 ---
 
-## Phase 06 — An interface built for a phone
+## Phase 06 — Plume's interface, ported
 
-*The part that must NOT be ported.*
+*This phase used to be called "the part that must NOT be ported", on the
+grounds that a phone wants bottom sheets rather than a 58px vertical rail.
+That was wrong about the web build, not about phones: Plume's own stylesheet
+carries a `body.compact` mode that does exactly this — "phones. Rails become
+bottom sheets; the dock is the only permanent chrome" — and switches to it
+under 720px. There was never a rail to spare a thumb from. So the whole
+interface is ported, both layouts included, and the width picks between them
+the way `UI.applyMode` does.*
 
-- [ ] Bottom sheets replacing the side rails
-- [ ] Radial menu on long-press — a rail costs a thumb reach
-- [ ] Brush panel: type, size, opacity, colour, pressure
+- [x] Design tokens — every `:root` and `body.dark` custom property, as
+      `values/` and `values-night/` colours and dimensions
+- [x] The icon set — 43 sprite symbols and 8 brush glyphs as VectorDrawables,
+      generated from the web build's own sprite by `tools/icons/gen.py`, in
+      hollow and filled variants because `button.on svg{fill:currentColor}`
+      outranks the hollow default
+- [x] The widget vocabulary — `.panel`, `.ico` (with its 3px partner dot),
+      `.div`, `.sep`, the draggable `.val`, the range inputs, the toast
+- [x] Desktop layout — top-left cluster, help, view readout, tool pill, brush
+      rail with its collapse tab, undo pill, guide context bar, selection bar
+- [x] Compact layout — bottom sheets over a permanent dock, at Plume's own
+      720px threshold
+- [x] Back gesture steps out; it does not exit (`UI.closeTopSheet`'s order)
+- [x] Orientation, display cutouts, window insets
+- [ ] Brush panel: type, size, opacity and pressure are wired; the **hue
+      wheel** is not — swatches stand in for it
+- [ ] The transform joystick, and with it the dock's "Move" slot
+- [ ] Scene, groups and references panels — `#stagePanel` is a shell
 - [ ] Stylus hover preview of the actual nib
-- [ ] Scene, groups and references panels
-- [ ] Back gesture steps out; it does not exit
-- [ ] Orientation, display cutouts, window insets
 - [ ] Onboarding — the web build's six-step walkthrough
 - [ ] Finger-drawing toggle and palm rejection settings
+- [ ] Interaction still missing behind buttons that exist: shape snapping on
+      the pen path, Bend, Loft, Primitives
 
 **Done when:** someone who has never seen the web build can draw on a guide
 without being told how.

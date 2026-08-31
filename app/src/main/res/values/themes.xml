@@ -1,7 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- No ActionBar: the surface is the whole app. -->
-    <style name="Theme.Anvil" parent="android:Theme.Material.NoActionBar">
-        <item name="android:windowBackground">@android:color/black</item>
+    <!--
+      No ActionBar: the surface is the whole app.
+
+      The window background is Plume's --bg rather than black, so the split
+      second before the first GL frame lands is the same paper the sketch will
+      be drawn on. values-night/ carries the dark half, which is `body.dark`.
+    -->
+    <style name="Theme.Anvil" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/bg</item>
+        <item name="android:colorForeground">@color/ink</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">true</item>
     </style>
 </resources>
