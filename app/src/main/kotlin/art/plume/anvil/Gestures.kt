@@ -41,6 +41,24 @@ class Gestures(private val listener: Listener) {
         fun onCameraEnd(dx: Float, dy: Float)
         fun onHover(x: Float, y: Float, pressure: Float)
         fun onHoverExit()
+
+        /**
+         * FACT (B.1): a one-finger double-tap snaps to the nearest of the six
+         * standard views; a three-finger double-tap toggles the projection.
+         *
+         * [fingers] is the gesture's PEAK count, not the count at the moment
+         * the last finger lifted — fingers come off one at a time, so reading
+         * the live count would report every three-finger tap as a one-finger
+         * one.
+         */
+        fun onDoubleTap(x: Float, y: Float, fingers: Int)
+
+        /**
+         * FACT (B.2/B.3): a press and hold on a curve or the grid pins the
+         * orbit point; on empty space it unpins it, or resets the view when it
+         * was not pinned.
+         */
+        fun onPressHold(x: Float, y: Float)
     }
 
     /** Finger drawing can be switched off, as on the desktop build. */
@@ -48,6 +66,35 @@ class Gestures(private val listener: Listener) {
 
     private var drawingPointer = -1
     private var gesturing = false
+
+    // ---- taps and holds ---------------------------------------------------
+
+    private val main = android.os.Handler(android.os.Looper.getMainLooper())
+    private var holdRunnable: Runnable? = null
+    private var holdX = 0f
+    private var holdY = 0f
+
+    /**
+     * A gesture spans from the first finger landing to the last one lifting,
+     * and its PEAK finger count is what identifies it.
+     */
+    private var peakFingers = 0
+    private var gestureMoved = false
+    private var gestureHeld = false
+    private var gestureStart = 0L
+    private var downX = 0f
+    private var downY = 0f
+
+    /**
+     * The tap waiting to be doubled. `fingers == 0` means nothing is pending,
+     * and it has to be an explicit sentinel rather than a zeroed timestamp:
+     * uptimeMillis is not zero at boot, but a zeroed one would still be inside
+     * the window forever after.
+     */
+    private var lastTapAt = 0L
+    private var lastTapX = 0f
+    private var lastTapY = 0f
+    private var lastTapFingers = 0
 
     private var lastCx = 0f
     private var lastCy = 0f
@@ -91,6 +138,18 @@ class Gestures(private val listener: Listener) {
 
             MotionEvent.ACTION_DOWN -> {
                 val i = 0
+                peakFingers = 1
+                gestureMoved = false
+                gestureHeld = false
+                gestureStart = ev.eventTime
+                downX = ev.getX(i); downY = ev.getY(i)
+                /*
+                 * The hold clock runs for a finger, not for the pen. A pen
+                 * resting still mid-stroke is hold-to-shape's business, and
+                 * pinning the orbit point under it as well would be two
+                 * different things happening to one gesture.
+                 */
+                if (!isStylus(ev, i)) armHold(ev.getX(i), ev.getY(i))
                 if (isStylus(ev, i) || fingerDraws) {
                     drawingPointer = ev.getPointerId(i)
                     listener.onDrawBegin(
@@ -126,6 +185,8 @@ class Gestures(private val listener: Listener) {
                 // a second finger: the first one was never a stroke, it was a camera move
                 if (ev.pointerCount >= 2) {
                     if (drawingPointer >= 0) { listener.onDrawCancel(); drawingPointer = -1 }
+                    if (ev.pointerCount > peakFingers) peakFingers = ev.pointerCount
+                    cancelHold()
                     beginGesture(ev)
                 }
             }
@@ -152,6 +213,10 @@ class Gestures(private val listener: Listener) {
                 } else if (gesturing && ev.pointerCount >= 2) {
                     stepGesture(ev)
                 }
+                /* a finger that travels is a swipe, not a tap, and never a hold */
+                val moved = hypot(ev.getX(0) - downX, ev.getY(0) - downY)
+                if (moved > TAP_SLOP) gestureMoved = true
+                if (moved > HOLD_SLOP) cancelHold()
             }
 
             MotionEvent.ACTION_POINTER_UP -> {
@@ -163,15 +228,60 @@ class Gestures(private val listener: Listener) {
 
             MotionEvent.ACTION_UP -> {
                 if (drawingPointer >= 0) { listener.onDrawEnd(); drawingPointer = -1 }
+                cancelHold()
                 endGesture()
+                /*
+                 * A tap is a gesture that did not travel, did not become a
+                 * hold, and did not linger. A one-finger tap only counts when
+                 * a finger was not drawing with it — otherwise every dot you
+                 * draw would be half of a view snap.
+                 */
+                val quick = ev.eventTime - gestureStart < TAP_MAX_MS
+                val drew = fingerDraws && peakFingers == 1
+                if (!gestureMoved && !gestureHeld && quick && !drew) {
+                    registerTap(ev.getX(0), ev.getY(0), peakFingers, ev.eventTime)
+                }
+                peakFingers = 0
             }
 
             MotionEvent.ACTION_CANCEL -> {
                 if (drawingPointer >= 0) { listener.onDrawCancel(); drawingPointer = -1 }
+                cancelHold()
                 endGesture()
+                peakFingers = 0
             }
         }
         return true
+    }
+
+    private fun armHold(x: Float, y: Float) {
+        cancelHold()
+        holdX = x; holdY = y
+        val r = Runnable {
+            holdRunnable = null
+            gestureHeld = true          // a hold is never also a tap
+            listener.onPressHold(holdX, holdY)
+        }
+        holdRunnable = r
+        main.postDelayed(r, HOLD_MS)
+    }
+
+    private fun cancelHold() {
+        holdRunnable?.let { main.removeCallbacks(it) }
+        holdRunnable = null
+    }
+
+    /** Two taps of the same finger count, close together in time and space. */
+    private fun registerTap(x: Float, y: Float, fingers: Int, now: Long) {
+        val isDouble = lastTapFingers == fingers &&
+            now - lastTapAt < TAP_MS &&
+            hypot(x - lastTapX, y - lastTapY) < TAP_SLOP
+        if (isDouble) {
+            lastTapFingers = 0          // consumed, so a third tap is not a fourth
+            listener.onDoubleTap(x, y, fingers)
+            return
+        }
+        lastTapAt = now; lastTapX = x; lastTapY = y; lastTapFingers = fingers
     }
 
     private fun beginGesture(ev: MotionEvent) {
@@ -228,4 +338,13 @@ class Gestures(private val listener: Listener) {
     private operator fun Measure.component2() = cy
     private operator fun Measure.component3() = span
     private operator fun Measure.component4() = angle
+
+    private companion object {
+        /** All four are the web build's, in the same units. */
+        const val HOLD_MS = 480L
+        const val HOLD_SLOP = 12f
+        const val TAP_MS = 300L
+        const val TAP_SLOP = 22f
+        const val TAP_MAX_MS = 420L
+    }
 }

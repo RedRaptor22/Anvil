@@ -364,3 +364,50 @@ class OrthoViewTest {
         }
     }
 }
+
+/**
+ * Pinning the orbit point.
+ *
+ * FACT (B.2/B.3): a hold on a curve or the grid pins the orbit point there.
+ * The interesting half is what must NOT happen — the viewpoint must not move.
+ */
+class PivotTest {
+
+    @Test
+    fun `moving the pivot with lookFrom leaves the eye exactly where it was`() {
+        val c = Camera().apply { resize(800, 600); radius = 4.0; theta = 0.9; phi = 1.1; apply() }
+        val eye = c.eye.copy()
+
+        c.pivot.set(1.5, 0.7, -2.0)
+        c.lookFrom(eye)
+
+        assertEquals(eye.x, c.eye.x, 1e-9)
+        assertEquals(eye.y, c.eye.y, 1e-9)
+        assertEquals(eye.z, c.eye.z, 1e-9)
+    }
+
+    /**
+     * Without it the spherical coordinates are kept and the camera swings
+     * round to satisfy them, which looks like the sketch jumping away from the
+     * finger that just touched it. This measures that it would.
+     */
+    @Test
+    fun `without lookFrom the eye would move a long way`() {
+        val c = Camera().apply { resize(800, 600); radius = 4.0; theta = 0.9; phi = 1.1; apply() }
+        val eye = c.eye.copy()
+        c.pivot.set(1.5, 0.7, -2.0)
+        c.apply()                       // the naive version: pivot moved, angles kept
+        val moved = (c.eye - eye).length()
+        assertTrue(moved > 1.0, "the eye only moved $moved; the guard would be pointless")
+    }
+
+    @Test
+    fun `a pivot on top of the eye does not collapse the radius`() {
+        val c = Camera().apply { resize(800, 600); apply() }
+        val eye = c.eye.copy()
+        c.pivot.set(eye.x, eye.y, eye.z)
+        c.lookFrom(eye)
+        assertTrue(c.radius >= Tune.RADIUS_MIN, "radius fell to ${c.radius}")
+        for (m in c.view.m) assertTrue(m.isFinite())
+    }
+}

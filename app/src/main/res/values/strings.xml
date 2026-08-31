@@ -154,6 +154,10 @@
     <string name="pressure_on">Pressure on</string>
     <string name="pressure_off">Pressure off</string>
 
+    <string name="pivot_pinned">Orbit point pinned</string>
+    <string name="pivot_released">Orbit point released</string>
+    <string name="view_reset">View reset</string>
+
     <string name="nothing_under_that">Nothing under that</string>
     <string name="bad_hex">Not a colour — six hex digits, or three</string>
     <string name="eyedrop_hint">Tap a curve to sample its colour</string>

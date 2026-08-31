@@ -10,6 +10,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.view.Choreographer
+import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
@@ -1094,6 +1095,166 @@ class MainActivity : Activity(), Gestures.Listener {
         renderer.setLive(null)
         clearDrag()
         refreshScene()
+    }
+
+    // ---- the keyboard ------------------------------------------------------
+
+    /**
+     * The web build's shortcuts, unchanged.
+     *
+     * An Android tablet with a keyboard is a real way to use this, and the
+     * letters are worth keeping identical to the browser's so one set of
+     * muscle memory covers both. `f` is View reset, which is why Fill is on
+     * `k`; `[` and `]` step the lens by 15% a press.
+     */
+    override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent): Boolean {
+        if (event.isCtrlPressed || event.isMetaPressed) {
+            when (keyCode) {
+                KeyEvent.KEYCODE_Z ->
+                    if (event.isShiftPressed) { history.redo(); refreshScene() }
+                    else { history.undo(); refreshScene() }
+                KeyEvent.KEYCODE_Y -> { history.redo(); refreshScene() }
+                else -> return super.onKeyDown(keyCode, event)
+            }
+            return true
+        }
+
+        when (keyCode) {
+            KeyEvent.KEYCODE_D -> setTool(Tool.DRAW)
+            KeyEvent.KEYCODE_R -> setTool(Tool.SHAPE)
+            KeyEvent.KEYCODE_G -> setTool(Tool.GUIDE)
+            KeyEvent.KEYCODE_B -> setTool(Tool.BEND)
+            KeyEvent.KEYCODE_E -> setTool(Tool.ERASE)
+            KeyEvent.KEYCODE_V -> setTool(Tool.VACUUM)
+            KeyEvent.KEYCODE_S -> setTool(Tool.SELECT)
+            KeyEvent.KEYCODE_L -> setTool(Tool.LASSO)
+            KeyEvent.KEYCODE_M -> setTool(Tool.SMOOTH)
+            KeyEvent.KEYCODE_K -> setTool(Tool.FILL)
+            KeyEvent.KEYCODE_O -> flipInput(InputToggle.ORTHO)
+            KeyEvent.KEYCODE_F -> {
+                resetView(); pushCamera(); toast(getString(R.string.view_reset))
+            }
+            KeyEvent.KEYCODE_LEFT_BRACKET -> stepFocal(1 / 1.15)
+            KeyEvent.KEYCODE_RIGHT_BRACKET -> stepFocal(1.15)
+            KeyEvent.KEYCODE_ESCAPE -> { cancelStaging(); setTool(Tool.DRAW) }
+            in KeyEvent.KEYCODE_1..KeyEvent.KEYCODE_6 -> {
+                val v = Camera.ORTHO_VIEWS[keyCode - KeyEvent.KEYCODE_1]
+                camera.applyOrthoView(v)
+                pushCamera()
+                toast(getString(R.string.view_snapped, v.name))
+            }
+            else -> return super.onKeyDown(keyCode, event)
+        }
+        return true
+    }
+
+    private fun stepFocal(by: Double) {
+        camera.focal = clamp(camera.focal * by, Tune.FOCAL_MIN, Tune.FOCAL_MAX)
+        camera.apply()
+        pushCamera()
+        pushSettings()
+    }
+
+    // ---- taps and holds ---------------------------------------------------
+
+    /**
+     * FACT (B.1): a one-finger double-tap snaps to the nearest of the six
+     * standard views; a three-finger double-tap toggles the projection.
+     */
+    override fun onDoubleTap(x: Float, y: Float, fingers: Int) {
+        /* the first thing a double-tap does when the chrome is hidden is bring
+           it back — that is the only way back from Hide UI */
+        if (hideUi) { flipInput(InputToggle.HIDE_UI); return }
+        when (fingers) {
+            1 -> {
+                val v = camera.nearestOrthoView()
+                camera.applyOrthoView(v)
+                pushCamera()
+                toast(getString(R.string.view_snapped, v.name))
+            }
+            3 -> {
+                camera.ortho = !camera.ortho
+                camera.apply(); pushCamera(); pushSettings()
+                toast(
+                    getString(
+                        if (camera.ortho) R.string.projection_ortho
+                        else R.string.projection_persp,
+                    ),
+                )
+            }
+        }
+    }
+
+    /**
+     * FACT (B.2/B.3): a hold on a curve, the guide or the grid pins the orbit
+     * point there; on empty space it unpins, or resets the view when it was
+     * not pinned.
+     *
+     * The eye is held still across the change. Moving the pivot without it
+     * would swing the camera round to keep its spherical coordinates, which
+     * looks like the sketch jumping away from the finger that just touched it.
+     */
+    override fun onPressHold(x: Float, y: Float) {
+        val eye = camera.eye.copy()
+        camera.rayFrom(x.toDouble(), y.toDouble(), penRay)
+
+        val hit = Selection.hitTest(sketch, camera, x.toDouble(), y.toDouble(), mask())
+        val point = when {
+            hit != null -> nearestPointOn(hit)
+            else -> guides.active?.let { g ->
+                GuidePainting.project(g, penRay, clampOffSurface = false)?.point
+            } ?: groundPoint()
+        }
+
+        if (point != null) {
+            camera.pivot.set(point)
+            camera.pinned = true
+            camera.lookFrom(eye)
+            pushCamera()
+            pushSettings()
+            toast(getString(R.string.pivot_pinned))
+            return
+        }
+
+        if (camera.pinned) {
+            camera.pinned = false
+            camera.pivot.set(0.0, 0.0, 0.0)
+            camera.lookFrom(eye)
+            pushCamera()
+            toast(getString(R.string.pivot_released))
+        } else {
+            resetView()
+            pushCamera()
+            toast(getString(R.string.view_reset))
+        }
+    }
+
+    /** Where the ray passes closest to a curve it hit. */
+    private fun nearestPointOn(s: Stroke): Vec3? {
+        var best: Vec3? = null
+        var bestT = Double.MAX_VALUE
+        val tmp = Vec3()
+        for (pt in s.pts) {
+            penRay.closestPointTo(pt.p, tmp)
+            val t = (tmp - penRay.origin) dot penRay.direction
+            val d = (tmp - pt.p).lengthSq()
+            if (t > 0 && d < bestT) { bestT = d; best = pt.p.copy() }
+        }
+        return best
+    }
+
+    /** The grid, but only where it is drawn — 20 units either side of centre. */
+    private fun groundPoint(): Vec3? {
+        if (!docEnv.grid) return null
+        val out = Vec3()
+        val t = -penRay.origin.y / penRay.direction.y
+        if (!t.isFinite() || t <= 0) return null
+        out.set(
+            penRay.origin.x + penRay.direction.x * t,
+            0.0,
+            penRay.origin.z + penRay.direction.z * t,
+        )
+        return if (kotlin.math.abs(out.x) < 20 && kotlin.math.abs(out.z) < 20) out else null
     }
 
     private fun clearDrag() {

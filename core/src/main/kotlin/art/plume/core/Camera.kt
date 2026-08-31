@@ -1,7 +1,9 @@
 package art.plume.core
 
 import kotlin.math.abs
+import kotlin.math.acos
 import kotlin.math.atan
+import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.exp
 import kotlin.math.max
@@ -150,6 +152,23 @@ class Camera {
         inverseOk = Mat4.invert(viewProjection, inverseViewProjection)
         refreshDrawPlane(null)
         return this
+    }
+
+    /**
+     * Re-derive theta, phi and radius so the eye stays exactly where it is
+     * while the pivot moves.
+     *
+     * Pinning the orbit point without this would keep the spherical
+     * coordinates and swing the camera round to satisfy them — which looks
+     * like the sketch jumping away from the finger that just touched it. The
+     * pivot is what moved; the viewpoint should not.
+     */
+    fun lookFrom(eye: Vec3): Camera {
+        val d = eye - pivot
+        radius = max(Tune.RADIUS_MIN, d.length())
+        phi = acos(clamp(d.y / radius, -1.0, 1.0))
+        theta = atan2(d.x, d.z)
+        return apply()
     }
 
     /**
