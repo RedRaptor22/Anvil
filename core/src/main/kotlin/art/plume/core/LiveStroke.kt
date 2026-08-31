@@ -113,10 +113,21 @@ class LiveStroke {
     /** Where the rewrite window started on the previous append. */
     private var windowStart = 0
 
+    /**
+     * The brush the live stroke is being drawn with.
+     *
+     * Kept because the preview has to be shaded, blended and gritted the same
+     * way the committed stroke will be: a glow that only starts glowing on
+     * release is a preview that lies about what you are drawing.
+     */
+    var cfg: Brush = Brushes.resolve("pen")
+        private set
+
     // ---- lifecycle ------------------------------------------------------
 
     fun begin(stroke: Stroke) {
         seg = StrokeGeometry.segmentsFor(stroke)
+        cfg = stroke.cfg
         // a live stroke is open by definition — it has not been closed yet, and
         // commit re-runs the batch build, which detects a loop and welds it
         caps = stroke.cfg.caps

@@ -17,6 +17,7 @@ import android.view.WindowManager
 import android.widget.FrameLayout
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import art.plume.core.Bounds
 import art.plume.core.Camera
 import art.plume.core.Dedupe
 import art.plume.core.Document
@@ -176,7 +177,9 @@ class MainActivity : Activity(), Gestures.Listener {
          * on load (see loadDocument), which is the same precedence the web
          * build has.
          */
-        renderer.background = if (tokens.dark) DARK_PAGE else LIGHT_PAGE
+        docEnv.background = if (tokens.dark) DARK_PAGE else LIGHT_PAGE
+        renderer.setEnvironment(docEnv)
+        renderer.setDensity(resources.displayMetrics.density)
         chrome = Chrome(this, tokens)
         wireChrome()
         root.addView(
@@ -289,19 +292,20 @@ class MainActivity : Activity(), Gestures.Listener {
         camera.roll = 0.0
         camera.radius = Tune.RADIUS_DEFAULT
         camera.pinned = false
-        var lo = Vec3(Double.MAX_VALUE, Double.MAX_VALUE, Double.MAX_VALUE)
-        var hi = Vec3(-Double.MAX_VALUE, -Double.MAX_VALUE, -Double.MAX_VALUE)
-        var any = false
-        for (st in sketch.strokes) for (sp in st.pts) {
-            any = true
-            lo = Vec3(minOf(lo.x, sp.p.x), minOf(lo.y, sp.p.y), minOf(lo.z, sp.p.z))
-            hi = Vec3(maxOf(hi.x, sp.p.x), maxOf(hi.y, sp.p.y), maxOf(hi.z, sp.p.z))
-        }
-        if (any) {
-            camera.pivot.set((lo.x + hi.x) / 2, (lo.y + hi.y) / 2, (lo.z + hi.z) / 2)
-            val r = 0.5 * maxOf(hi.x - lo.x, maxOf(hi.y - lo.y, hi.z - lo.z))
+        /*
+         * The BOUNDING SPHERE's radius, not the longest side. Framing to the
+         * longest side leaves a sketch that is long on the diagonal poking out
+         * of the corners of the view — the web build asks the box for its
+         * sphere for exactly this reason, and now that core has a Bounds so
+         * can this.
+         */
+        val b = Bounds.of(sketch)
+        if (!b.empty) {
+            b.centre(camera.pivot)
             val halfFov = camera.fovFromFocal(camera.focal) * Math.PI / 360.0
-            camera.radius = clamp(r / Math.tan(halfFov) * 1.15, 1.0, 200.0)
+            camera.radius = clamp(
+                maxOf(b.radius(), 0.05) / Math.tan(halfFov) * 1.15, 1.0, 200.0,
+            )
         } else {
             camera.pivot.set(0.0, 0.0, 0.0)
         }
@@ -1001,7 +1005,6 @@ class MainActivity : Activity(), Gestures.Listener {
         docTool.sizeMM = sizeMM
         docTool.opacity = opacity
         docTool.autoGuide = autoGuide
-        docEnv.background = renderer.background
         return Document.toJsonText(sketch, guides, camera, docEnv, docTool, carried)
     }
 
@@ -1043,7 +1046,7 @@ class MainActivity : Activity(), Gestures.Listener {
         sizeMM = clamp(r.tool.sizeMM, Tune.BRUSH_MIN_MM, Tune.BRUSH_MAX_MM)
         opacity = clamp(r.tool.opacity, 0.05, 1.0)
         autoGuide = r.tool.autoGuide
-        renderer.background = r.env.background
+        applyEnvironment(r.env)
         renderer.showGrid = r.env.grid
         renderer.showAxis = r.env.axis
         history.clear()
@@ -1090,7 +1093,7 @@ class MainActivity : Activity(), Gestures.Listener {
         sizeMM = clamp(r.tool.sizeMM, Tune.BRUSH_MIN_MM, Tune.BRUSH_MAX_MM)
         opacity = clamp(r.tool.opacity, 0.05, 1.0)
         autoGuide = r.tool.autoGuide
-        renderer.background = r.env.background
+        applyEnvironment(r.env)
     }
 
     // ---- keeping the screen in step -------------------------------------------

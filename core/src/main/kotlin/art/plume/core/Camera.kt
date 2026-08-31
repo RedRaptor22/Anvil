@@ -141,12 +141,9 @@ class Camera {
         if (ortho) {
             val h = viewHeight() / 2.0
             val w = h * aspect
-            // the ortho near plane goes NEGATIVE so geometry behind the pivot
-            // is not clipped away when the projection has no perspective to
-            // push it off screen
-            Mat4.orthographic(-w, w, -h, h, -4000.0, 8000.0, projection)
+            Mat4.orthographic(-w, w, -h, h, near, far, projection)
         } else {
-            Mat4.perspective(fovFromFocal(focal), aspect, 0.02, 8000.0, projection)
+            Mat4.perspective(fovFromFocal(focal), aspect, near, far, projection)
         }
 
         Mat4.multiply(projection, view, viewProjection)
@@ -154,6 +151,22 @@ class Camera {
         refreshDrawPlane(null)
         return this
     }
+
+    /**
+     * The clip planes the projection was built with.
+     *
+     * Exposed rather than left as literals inside [apply] because the post pass
+     * has to undo the projection to compare distances, and it can only do that
+     * with the same two numbers. A depth buffer read back against the wrong
+     * near plane gives distances that are wrong by a factor of hundreds, and
+     * the symptom is a depth of field that focuses on nothing.
+     *
+     * The ortho near plane goes NEGATIVE so geometry behind the pivot is not
+     * clipped away when the projection has no perspective to push it off
+     * screen.
+     */
+    val near: Double get() = if (ortho) -4000.0 else 0.02
+    val far: Double get() = 8000.0
 
     /** Right, up and backward, the three columns of the camera's world matrix. */
     fun basis(right: Vec3, up: Vec3, backward: Vec3) {
