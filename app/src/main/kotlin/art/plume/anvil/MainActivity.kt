@@ -1001,14 +1001,25 @@ class MainActivity : Activity(), Gestures.Listener {
     }
 
     private fun chooseExportFormat() {
-        if (sketch.strokes.isEmpty()) { toast("Nothing to export"); return }
-        val names = arrayOf("OBJ + MTL (mm)", "STL binary (mm)", "glTF 2.0 (metres)")
+        /*
+         * A PNG is a picture of the VIEW, so it is offered even with nothing
+         * drawn — an empty page under a chosen background and grid is a
+         * legitimate thing to want. The mesh formats are not: an OBJ with no
+         * geometry in it is a file that will not open anywhere.
+         */
+        val names = arrayOf(
+            "PNG snapshot", "OBJ + MTL (mm)", "STL binary (mm)", "glTF 2.0 (metres)",
+        )
         AlertDialog.Builder(this)
             .setTitle(R.string.export_)
             .setItems(names) { _, which ->
+                if (which > 0 && sketch.strokes.isEmpty()) {
+                    toast(getString(R.string.nothing_to_export)); return@setItems
+                }
                 val (req, ext, mime) = when (which) {
-                    0 -> Triple(REQ_EXPORT_OBJ, "obj", "model/obj")
-                    1 -> Triple(REQ_EXPORT_STL, "stl", "model/stl")
+                    0 -> Triple(REQ_EXPORT_PNG, "png", "image/png")
+                    1 -> Triple(REQ_EXPORT_OBJ, "obj", "model/obj")
+                    2 -> Triple(REQ_EXPORT_STL, "stl", "model/stl")
                     else -> Triple(REQ_EXPORT_GLTF, "gltf", "model/gltf+json")
                 }
                 startActivityForResult(
@@ -1043,6 +1054,7 @@ class MainActivity : Activity(), Gestures.Listener {
                 val text = Export.gltfSource(Export.collect(sketch, scale = 1.0), "sketch")
                 if (text == null) toast("Nothing to export") else writeText(uri, text, "Exported glTF")
             }
+            REQ_EXPORT_PNG -> exportPng(uri)
         }
     }
 
@@ -1055,6 +1067,38 @@ class MainActivity : Activity(), Gestures.Listener {
      * will work — it happens to on some providers and silently does not on
      * others, which is the worst of both. Two prompts is honest.
      */
+    /**
+     * A PNG of what is on screen.
+     *
+     * The frame has to be taken by the GL thread, so this asks and waits: the
+     * renderer answers at the end of its next frame, and the compress and the
+     * write then go to the IO thread because both are slow enough to drop a
+     * frame if they ran there.
+     */
+    private fun exportPng(uri: Uri) {
+        renderer.requestSnapshot { bitmap ->
+            if (bitmap == null) {
+                main.post { toast(getString(R.string.snapshot_failed)) }
+                return@requestSnapshot
+            }
+            io.execute {
+                val ok = runCatching {
+                    contentResolver.openOutputStream(uri)?.use { out ->
+                        bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
+                    } ?: false
+                }.getOrDefault(false)
+                bitmap.recycle()
+                main.post {
+                    toast(
+                        if (ok) getString(R.string.snapshot_saved)
+                        else getString(R.string.could_not_write),
+                    )
+                }
+            }
+        }
+        surface.requestRender()
+    }
+
     private fun exportObj(uri: Uri) {
         val out = Export.objSource(Export.collect(sketch), "sketch")
         writeText(uri, out.obj, "Exported OBJ")
@@ -1237,6 +1281,7 @@ class MainActivity : Activity(), Gestures.Listener {
         const val REQ_EXPORT_STL = 4
         const val REQ_EXPORT_GLTF = 5
         const val REQ_EXPORT_MTL = 6
+        const val REQ_EXPORT_PNG = 7
         const val AUTOSAVE = "autosave.plume.json"
     }
 }

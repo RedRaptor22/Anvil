@@ -177,6 +177,9 @@ class SketchRenderer : GLSurfaceView.Renderer {
     private var postW = 0
     private var postH = 0
 
+    /** A PNG asked for, taken at the end of the next frame. See [requestSnapshot]. */
+    private var snapshotWanted: ((android.graphics.Bitmap?) -> Unit)? = null
+
     /** Camera figures the post pass needs, snapshotted with the matrices. */
     private var camNear = 0.02
     private var camFar = 8000.0
@@ -364,6 +367,65 @@ class SketchRenderer : GLSurfaceView.Renderer {
          * an SVG overlay outside the canvas entirely.
          */
         drawOverlay()
+
+        takeSnapshotIfAsked()
+    }
+
+    // ---- the picture ------------------------------------------------------
+
+    /**
+     * `renderer.domElement.toDataURL('image/png')`, which on this side means
+     * reading the framebuffer back.
+     *
+     * Deferred to the END of a frame rather than taken on demand, because
+     * glReadPixels is only legal on the GL thread with a current context and
+     * only meaningful once the frame is finished. The caller asks, the next
+     * frame answers, and [callback] arrives on the GL thread — whatever it
+     * does with the bitmap must be safe there or must hop threads itself.
+     *
+     * It reads the DEFAULT framebuffer, so it captures the post pass: a PNG of
+     * a render-mode scene comes out with its defocus and grain, which is the
+     * picture that was asked for. The lasso is in it too if one is being drawn,
+     * and that is the same as the web build, where the overlay is a separate
+     * SVG the canvas capture cannot see — a difference worth knowing about
+     * rather than one worth pretending away.
+     */
+    fun requestSnapshot(callback: (android.graphics.Bitmap?) -> Unit) {
+        synchronized(matrixLock) { snapshotWanted = callback }
+    }
+
+    private fun takeSnapshotIfAsked() {
+        val cb = synchronized(matrixLock) { snapshotWanted.also { snapshotWanted = null } } ?: return
+        val w = viewW
+        val h = viewH
+        if (w <= 0 || h <= 0) { cb(null); return }
+
+        val buf = ByteBuffer.allocateDirect(w * h * 4).order(ByteOrder.nativeOrder())
+        GLES30.glReadPixels(0, 0, w, h, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, buf)
+        buf.rewind()
+
+        /*
+         * GL reads bottom-up and a Bitmap is top-down, so the rows are copied
+         * back to front. Reading straight into the bitmap gives a picture that
+         * is upside down, which is the classic way to get this wrong.
+         */
+        val row = IntArray(w)
+        val pixels = IntArray(w * h)
+        for (y in 0 until h) {
+            for (x in 0 until w) {
+                val i = (y * w + x) * 4
+                val r = buf.get(i).toInt() and 0xFF
+                val g = buf.get(i + 1).toInt() and 0xFF
+                val b = buf.get(i + 2).toInt() and 0xFF
+                row[x] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+            }
+            System.arraycopy(row, 0, pixels, (h - 1 - y) * w, w)
+        }
+        cb(
+            android.graphics.Bitmap.createBitmap(
+                pixels, w, h, android.graphics.Bitmap.Config.ARGB_8888,
+            ),
+        )
     }
 
     // ---- the post pass ---------------------------------------------------

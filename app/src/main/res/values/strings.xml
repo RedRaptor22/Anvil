@@ -78,6 +78,10 @@
     <string name="not_yet_import">Importing a photo or a model to trace over is not wired up yet. OBJ and STL both read, and an imported mesh becomes a guide you can paint on.</string>
 
     <string name="nothing_under_that">Nothing under that</string>
+    <string name="nothing_to_export">Nothing to export</string>
+    <string name="snapshot_saved">Snapshot saved</string>
+    <string name="snapshot_failed">Could not read the frame</string>
+    <string name="could_not_write">Could not write the file</string>
     <string name="sampled">Picked up the %1$s brush</string>
     <string name="no_guide">No guide to save</string>
     <string name="guide_saved">Guide saved</string>

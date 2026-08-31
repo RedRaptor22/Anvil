@@ -225,17 +225,32 @@ coming out as 100 in one path and 0.1 in the other.
 
 *Lighting and the render pass. Mostly shader work, and GL ES helps.*
 
-- [ ] Key light: direction, colour, intensity, ambient — `P.LIGHT`
-- [ ] Toon banding — `uToon`, `uToonStep`
-- [ ] Render mode split — fast while drawing, full on demand
-- [ ] Ground shadow — projected silhouette pass
-- [ ] Depth of field — **real depth textures here**, not the packed RGBA the web
-      build needs
-- [ ] Film grain and pixelate
-- [ ] Background colour and fog
+- [x] Key light: direction, colour, intensity, ambient — `P.LIGHT`
+- [x] Toon banding — `uToon`, `uToonStep`
+- [x] Render mode split — fast while drawing, full on demand
+- [x] Ground shadow — projected silhouette pass
+- [x] Depth of field — **real depth textures here**, not the packed RGBA the web
+      build needs. It did get easier: `DEPTH_COMPONENT24` is sampleable off the
+      attachment the scene already wrote, so the packing, the unpack constants
+      and the web build's second geometry pass all go.
+- [x] Film grain and pixelate
+- [x] Background colour and fog
+- [x] The Scene tab that drives all of it
+- [x] PNG snapshot (deferred here from Phase 4)
+- [ ] Image references (also deferred from Phase 4) — an imported photo as a
+      guide to trace over. OBJ and STL import already build a guide; a texture
+      needs the sampler the guide shader does not have yet.
 
 **Done when:** the same sketch under the same light reads the same on both
-builds. This phase gets *easier* than the web original.
+builds.
+
+**NOT done, and this is the same shape as Phase 4's.** Everything above is
+written, and the half that can be checked without a GPU is under test: the
+light's defaults, the shadow camera's fit, the aperture's direction, and the
+document round trip. But no frame of any of it has been rendered — there is no
+GPU in the build environment, and CI compiles the APK rather than running it.
+"Reads the same on both builds" needs the two side by side, and until someone
+does that this phase is code complete rather than verified.
 
 ---
 
