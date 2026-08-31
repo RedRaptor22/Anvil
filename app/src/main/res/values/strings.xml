@@ -87,6 +87,7 @@
 
     <!-- the four tools -->
     <string name="bend_needs_guide">Bend needs an active guide</string>
+    <string name="bend_hint">Orbit, then draw the new sweep path</string>
     <string name="loft_needs_two">Select two or more curves to loft</string>
     <string name="loft_made">Loft guide created</string>
     <string name="prim_made">Primitive guide created</string>

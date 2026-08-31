@@ -402,7 +402,7 @@ class MainActivity : Activity(), Gestures.Listener {
         Action.REDO -> { history.redo(); refreshScene() }
         Action.MIRROR -> mirrorSelection()
         Action.STAGE -> chrome.toggleStage()
-        Action.GUIDE_BEND -> setTool(Tool.BEND)
+        Action.GUIDE_BEND -> { setTool(Tool.BEND); toast(getString(R.string.bend_hint)) }
         Action.GUIDE_SAVE -> saveActiveGuide()
         Action.GUIDE_CLOSE -> closeActiveGuide()
         Action.DUPLICATE -> duplicateSelection()
@@ -479,7 +479,7 @@ class MainActivity : Activity(), Gestures.Listener {
                 Tool.LOFT -> Chrome.Staging(
                     getString(R.string.tension),
                     loftTension,
-                    String.format("%.1f", loftTension),
+                    String.format("%.2f", loftTension),
                 )
                 Tool.PRIM -> Chrome.Staging(
                     getString(R.string.segments),
@@ -509,8 +509,9 @@ class MainActivity : Activity(), Gestures.Listener {
     }
 
     private fun cancelStaging() {
+        if (stagedGuide == null && loftSel.isEmpty()) return
         stagedGuide = null
-        for (st in loftSel) st.selected = false
+        for (st in loftSel) sketch.setSelected(st, false)
         loftSel.clear()
         chrome.setStaging(null)
         pushGuides()
@@ -522,7 +523,7 @@ class MainActivity : Activity(), Gestures.Listener {
         val g = stagedGuide ?: return
         val previous = guides.active
         stagedGuide = null
-        for (st in loftSel) st.selected = false
+        for (st in loftSel) sketch.setSelected(st, false)
         loftSel.clear()
         chrome.setStaging(null)
         val label = if (tool == Tool.LOFT) "Loft" else "Primitive"
@@ -540,8 +541,8 @@ class MainActivity : Activity(), Gestures.Listener {
     /** Tapping a curve under Loft adds or removes it from the set. */
     private fun loftPick(x: Double, y: Double) {
         val hit = Selection.hitTest(sketch, camera, x, y, mask()) ?: return
-        if (loftSel.remove(hit)) hit.selected = false
-        else { loftSel.add(hit); hit.selected = true }
+        if (loftSel.remove(hit)) sketch.setSelected(hit, false)
+        else { loftSel.add(hit); sketch.setSelected(hit, true) }
         if (loftSel.size >= 2) previewLoft() else { stagedGuide = null; pushGuides() }
         refreshScene()
     }
@@ -1026,8 +1027,16 @@ class MainActivity : Activity(), Gestures.Listener {
         Dedupe.clean(s)
         if (s.pts.size < 2) return
 
-        val wantsGuide = tool != Tool.DRAW ||
-            (autoGuide && guides.active == null && sketch.strokes.isEmpty())
+        /*
+         * Which tools make a guide, matching `role` in Tools.begin. Shape is
+         * NOT one of them: it is Draw with the fit turned on, so a shape
+         * stroke is a curve. Only Draw gets the autoGuide rule — the
+         * documented premise (C.1) that with nothing active your first stroke
+         * becomes the guide.
+         */
+        val wantsGuide = tool == Tool.GUIDE || tool == Tool.FLATGUIDE ||
+            (tool == Tool.DRAW && autoGuide && guides.active == null &&
+                sketch.strokes.isEmpty())
         if (wantsGuide) makeGuideFrom(s) else commitStroke(s)
     }
 
@@ -1040,7 +1049,7 @@ class MainActivity : Activity(), Gestures.Listener {
         s: Stroke, px: Double, py: Double, pressure: Float, az: Float,
     ): Boolean {
         val active = guides.active
-        if (active != null && tool == Tool.DRAW) {
+        if (active != null && (tool == Tool.DRAW || tool == Tool.SHAPE)) {
             camera.rayFrom(px, py, penRay)
             val hit = GuidePainting.project(active, penRay, clampOffSurface = true) ?: return false
             s.pts.lastOrNull()?.let { if (it.p.distanceTo(hit.point) < 0.0005) return false }
@@ -1313,7 +1322,7 @@ class MainActivity : Activity(), Gestures.Listener {
                 onUndo = { guides.setActive(previous); pushGuides() },
             ),
         )
-        if (tool != Tool.DRAW) setTool(Tool.DRAW)
+        if (tool == Tool.GUIDE || tool == Tool.FLATGUIDE) setTool(Tool.DRAW)
     }
 
     private fun closeActiveGuide() {
