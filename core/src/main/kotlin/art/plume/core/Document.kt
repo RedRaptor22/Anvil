@@ -16,8 +16,17 @@ class DocumentEnv {
     var axis = false
     var fog = false
     var shaded = true
+
+    /**
+     * FACT: Feather shows lighting, shadows and effects accurately only in
+     * rendering mode. Drawing stays cheap; you ask for the picture.
+     */
     var render = false
     var groundShadow = true
+
+    /** Both belong to the sketch, and both travel with it. See the note in serialize. */
+    val light = Light()
+    val fx = Fx()
 }
 
 class DocumentTool {
@@ -364,7 +373,14 @@ object Document {
 
     /**
      * Sections this build does not model yet, kept verbatim so a round trip
-     * through the phone does not silently strip a browser sketch's lighting.
+     * through the phone does not silently strip anything a browser sketch
+     * carried.
+     *
+     * `env` used to be here because the light and the post effects had nothing
+     * to be applied to; Phase 5 models both, so what is still carried is
+     * whatever ELSE a future web version might add to these two objects. The
+     * modelled keys are overwritten on the way out, so carrying them costs
+     * nothing and covers the fields nobody has thought of yet.
      */
     class Carried(val env: JsonObject?, val tool: JsonObject?)
 
@@ -398,6 +414,33 @@ object Document {
         envOut.put("grid", env.grid).put("axis", env.axis).put("fog", env.fog)
         envOut.put("shaded", env.shaded).put("render", env.render)
         envOut.put("groundShadow", env.groundShadow)
+        /*
+         * The light belongs to the SKETCH, not to the app: a drawing lit from
+         * the left is a different drawing, and reopening it under the default
+         * sun would be a change nobody asked for. The same argument applies to
+         * the post effects — a sketch shot at f/2.8 through heavy grain is a
+         * different picture from the same curves rendered clean.
+         *
+         * These two blocks used to be CARRIED: copied through untouched
+         * because there was nothing here to apply them to. There is now.
+         */
+        envOut.put(
+            "light",
+            JsonObject()
+                .put("az", q(env.light.az)).put("alt", q(env.light.alt))
+                .put("color", packColor(env.light.color))
+                .put("intensity", q(env.light.intensity))
+                .put("ambient", q(env.light.ambient))
+                .put("toon", env.light.toon)
+                .put("toonSteps", env.light.toonSteps),
+        )
+        envOut.put(
+            "fx",
+            JsonObject()
+                .put("dof", env.fx.dofOn).put("fstop", q(env.fx.fstop))
+                .put("grain", env.fx.grainOn).put("grainLevel", q(env.fx.grain))
+                .put("pixel", env.fx.pixelOn).put("pixelSize", q(env.fx.pixel)),
+        )
         doc.put("env", envOut)
 
         val toolOut = carried?.tool ?: JsonObject()
@@ -500,6 +543,30 @@ object Document {
             env.shaded = e.bool("shaded", true)
             env.render = e.bool("render", false)
             env.groundShadow = e.bool("groundShadow", true)
+
+            /*
+             * A key absent from the file keeps the DEFAULT rather than becoming
+             * zero. A v1 sketch has no light block at all, and a light of
+             * intensity 0 at ambient 0 is a black drawing — the failure would
+             * look like a corrupt file rather than a missing field.
+             */
+            e.obj("light")?.let { l ->
+                env.light.az = l.num("az", env.light.az)
+                env.light.alt = l.num("alt", env.light.alt)
+                env.light.color = unpackColor(l.str("color"), env.light.color)
+                env.light.intensity = l.num("intensity", env.light.intensity)
+                env.light.ambient = l.num("ambient", env.light.ambient)
+                env.light.toon = l.bool("toon", false)
+                env.light.toonSteps = l.int("toonSteps", env.light.toonSteps)
+            }
+            e.obj("fx")?.let { x ->
+                env.fx.dofOn = x.bool("dof", false)
+                env.fx.grainOn = x.bool("grain", false)
+                env.fx.pixelOn = x.bool("pixel", false)
+                env.fx.fstop = x.num("fstop", env.fx.fstop)
+                env.fx.grain = x.num("grainLevel", env.fx.grain)
+                env.fx.pixel = x.num("pixelSize", env.fx.pixel)
+            }
         }
 
         val tool = DocumentTool()

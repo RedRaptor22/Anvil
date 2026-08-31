@@ -266,10 +266,16 @@ class DocumentTest {
     @Test
     fun `a browser sketch keeps its lighting through a round trip on the phone`() {
         /*
-         * Anvil does not model the light or the post effects yet — that is
-         * Phase 5. They belong to the SKETCH, so dropping them would mean a
-         * file that went through the phone came back re-lit, which is a change
-         * nobody asked for. They travel untouched instead.
+         * The light and the post effects belong to the SKETCH, so dropping them
+         * would mean a file that went through the phone came back re-lit, which
+         * is a change nobody asked for.
+         *
+         * This test predates Phase 5, when they were carried through as opaque
+         * JSON because there was nothing here to apply them to. They are read
+         * and written properly now, and the test is deliberately unchanged in
+         * what it demands: the same file, the same values out. What it gained
+         * is the assertions below, which check the values actually reached the
+         * model rather than merely surviving as text.
          */
         val fromWeb = """
         {"format":"plume","version":2,
@@ -297,6 +303,16 @@ class DocumentTest {
         assertEquals("#ffeedd", light.str("color"))
         val fx = assertNotNull(back.obj("env")?.obj("fx"), "the post effects were dropped")
         assertEquals(2.8, fx.num("fstop", 0.0), 1e-9)
+
+        // and they were UNDERSTOOD, not just copied
+        assertEquals(1.1, r.env.light.az, 1e-9)
+        assertEquals(0.6, r.env.light.alt, 1e-9)
+        assertEquals(1.4, r.env.light.intensity, 1e-9)
+        assertEquals(0.2, r.env.light.ambient, 1e-9)
+        assertEquals(1.0, r.env.light.color.r, 1e-3)
+        assertEquals(0xdd / 255.0, r.env.light.color.b, 1e-3)
+        assertTrue(r.env.fx.dofOn && r.env.fx.grainOn)
+        assertFalse(r.env.fx.pixelOn, "absent means off, not on")
 
         // and the parts this build DOES model still round-trip
         assertEquals("sketch", back.obj("tool")?.str("brush"))

@@ -96,6 +96,28 @@ object Tune {
 
     /** One grid unit is 1000 mm (FACT); the helper spans 40 of them. */
     const val GRID_EXTENT = 40.0
+
+    // ---- environment ----------------------------------------------------
+
+    /**
+     * Fog range in world units, i.e. metres.
+     *
+     * FACT: the docs note the grid's focal reference is 100 m, so a sketch that
+     * strays far outside it should fade rather than hang in clear air at the
+     * horizon. Ported from `new THREE.Fog(bg, 30, 110)` in applyEnv.
+     */
+    const val FOG_NEAR = 30.0
+    const val FOG_FAR = 110.0
+
+    /** GUESS: the silhouette target is square and this is its side, in texels. */
+    const val SHADOW_SIZE = 1024
+
+    /** How dark the ground goes under the sketch, and how far the taps reach. */
+    const val SHADOW_STRENGTH = 0.30
+    const val SHADOW_SOFT_TEXELS = 1.5
+
+    /** The shadow tint: the page colour pulled most of the way to black. */
+    const val SHADOW_MIX = 0.85
     const val GRID_DIVISIONS = 40
     const val AXIS_LENGTH = 20.0
 }
