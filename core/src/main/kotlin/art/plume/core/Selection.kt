@@ -271,6 +271,23 @@ object Selection {
         return copies
     }
 
+    /**
+     * Duplicate the selection reflected across a world plane.
+     *
+     * Not the same as duplicate-then-mirror by hand: the copy lands in place
+     * rather than offset, because a mirrored copy has somewhere it belongs and
+     * nudging it 24px sideways would be wrong.
+     */
+    fun mirroredDuplicate(sketch: Sketch, axis: String): List<Stroke> {
+        val sel = sketch.selection
+        if (sel.isEmpty()) return emptyList()
+        val m = mirrorMatrix(axis)
+        val copies = sel.map { transformedCopy(it, m) }
+        sketch.clearSelection()
+        for (c in copies) { sketch.add(c); sketch.setSelected(c, true) }
+        return copies
+    }
+
     /** FACT (C.10): live symmetry on X, and from v1.5 on Z. */
     fun mirrorMatrix(axis: String, out: Mat4 = Mat4()): Mat4 =
         if (axis == "x") Mat4.scale(-1.0, 1.0, 1.0, out)

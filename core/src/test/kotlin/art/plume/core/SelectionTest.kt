@@ -178,6 +178,26 @@ class SelectionTest {
     }
 
     @Test
+    fun `a mirrored duplicate lands in place, not offset`() {
+        val cam = camera()
+        val sketch = Sketch()
+        val a = line(cam, 500.0)
+        sketch.add(a)
+        sketch.setSelected(a, true)
+        val was = a.pts.map { it.p.copy() }
+
+        val copies = Selection.mirroredDuplicate(sketch, "x")
+        assertEquals(1, copies.size)
+        assertEquals(copies, sketch.selection)
+        for (j in was.indices) {
+            // reflected across x, and otherwise exactly where it was
+            assertEquals(-was[j].x, copies[0].pts[j].p.x, 1e-12)
+            assertEquals(was[j].y, copies[0].pts[j].p.y, 1e-12)
+            assertEquals(was[j].z, copies[0].pts[j].p.z, 1e-12)
+        }
+    }
+
+    @Test
     fun `a uniform scale scales the brush, a stretch does not`() {
         /*
          * A non-uniform scale would need a cross-section the data model cannot
