@@ -287,3 +287,80 @@ class CameraTest {
         assertTrue(c.planePoint(540.0, 1200.0, Vec3()) != null)
     }
 }
+
+/**
+ * The six standard views, and the snap onto them.
+ *
+ * FACT (B.1): a one-finger double-tap snaps to the nearest of the six.
+ */
+class OrthoViewTest {
+
+    private fun cam(theta: Double, phi: Double) = Camera().apply {
+        resize(800, 600); this.theta = theta; this.phi = phi; apply()
+    }
+
+    @Test
+    fun `each standard view snaps to itself`() {
+        for (v in Camera.ORTHO_VIEWS) {
+            val c = cam(v.theta, v.phi)
+            assertEquals(v.name, c.nearestOrthoView().name, "at ${v.name}")
+        }
+    }
+
+    /**
+     * The snap compares DIRECTIONS, not angles. Theta is circular, and two
+     * angles a hair either side of the wrap are as close as can be while their
+     * numbers are as far apart as they get — comparing the numbers would send
+     * a view just past Back all the way round to Front.
+     */
+    @Test
+    fun `a view just past the azimuth wrap still snaps to Back`() {
+        val justOver = cam(Math.PI + 0.05, Math.PI / 2)
+        assertEquals("Back", justOver.nearestOrthoView().name)
+        val justUnder = cam(-Math.PI + 0.05, Math.PI / 2)
+        assertEquals("Back", justUnder.nearestOrthoView().name, "and from the other side")
+    }
+
+    @Test
+    fun `looking down snaps to Top and up snaps to Bottom`() {
+        assertEquals("Top", cam(1.1, 0.2).nearestOrthoView().name)
+        assertEquals("Bottom", cam(1.1, Math.PI - 0.2).nearestOrthoView().name)
+    }
+
+    /**
+     * Looking straight down, theta only decides which way up the sketch is, so
+     * snapping it to zero would spin the drawing for no reason anyone asked
+     * for.
+     */
+    @Test
+    fun `snapping to Top keeps the azimuth`() {
+        val c = cam(1.1, 0.2)
+        c.applyOrthoView(Camera.ORTHO_VIEWS.first { it.name == "Top" })
+        assertEquals(1.1, c.theta, 1e-12, "the azimuth was kept")
+        assertEquals(0.0025, c.phi, 1e-12)
+
+        c.theta = 1.1
+        c.applyOrthoView(Camera.ORTHO_VIEWS.first { it.name == "Front" })
+        assertEquals(0.0, c.theta, 1e-12, "but a side view does set it")
+    }
+
+    /** A snap always levels the roll: a tilted standard view is not standard. */
+    @Test
+    fun `snapping levels the roll`() {
+        val c = cam(0.3, 1.2)
+        c.roll = 0.7
+        c.applyOrthoView(c.nearestOrthoView())
+        assertEquals(0.0, c.roll, 1e-12)
+    }
+
+    /** Top and Bottom are off the pole, or the view matrix degenerates. */
+    @Test
+    fun `the polar views stay off the pole`() {
+        for (name in listOf("Top", "Bottom")) {
+            val v = Camera.ORTHO_VIEWS.first { it.name == name }
+            val c = cam(0.0, v.phi)
+            c.applyOrthoView(v)
+            for (m in c.view.m) assertTrue(m.isFinite(), "$name produced $m")
+        }
+    }
+}

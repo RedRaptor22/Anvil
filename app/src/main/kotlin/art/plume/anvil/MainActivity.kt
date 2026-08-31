@@ -27,6 +27,7 @@ import art.plume.core.DocumentTool
 import art.plume.core.Editing
 import art.plume.core.Export
 import art.plume.core.Fill
+import art.plume.core.Grid
 import art.plume.core.Guide
 import art.plume.core.GuideEditing
 import art.plume.core.GuidePainting
@@ -89,7 +90,46 @@ class MainActivity : Activity(), Gestures.Listener {
     /** `TOOL.shapeHold` — Hold shape, in the settings modal. */
     private var shapeHoldOn = true
 
+    /**
+     * FACT (A.9): curves the guide hides from where you are standing are
+     * protected from the eraser and from selection. Isolate is that rule, and
+     * it can be turned off.
+     */
+    private var isolate = true
+
+    /** FACT: a stroke that leaves the guide clamps to its nearest point. */
+    private var clampOff = true
+
+    /** FACT (C.2): Stable Stroke is a stabiliser on the input, adjustable. */
+    private var stableOn = true
+    private var stableAmount = Tune.STABLE_DEFAULT
+
+    /** Radial symmetry: 1 is off. */
+    private var radial = 1
+
+    private var hideUi = false
+
+    /**
+     * `TOOL.mirror` — null, "x" or "z". A MODE, not a one-shot: every stroke
+     * drawn while it is on gets its reflection, which is what makes symmetry
+     * useful for drawing rather than just for copying afterwards. The tool
+     * pill's button cycles X, Z, off.
+     */
+    private var mirror: String? = null
+
     private val liquifyCfg = Liquify.Settings()
+
+    /**
+     * The disc's radius as the panel shows it, in screen pixels.
+     *
+     * Held separately from [Liquify.Settings.size] because that one is
+     * recomputed from the brush at the start of every gesture: at the moment
+     * the slider is first read the camera may not have been laid out, and a
+     * disc sized against a 1x1 viewport is a tool that does nothing at all.
+     * A number the user has actually set overrides that.
+     */
+    private var liquifySize = 120.0
+    private var liquifySizeSet = false
 
     // ---- files ------------------------------------------------------------
 
@@ -234,6 +274,8 @@ class MainActivity : Activity(), Gestures.Listener {
         history.addListener { refreshControls() }
         restoreAutosave()
         refreshGroups()
+        pushLiquify()
+        pushSettings()
         refreshControls()
         syncBrushControls()
         renderer.setStrokes(sketch.strokes)
@@ -348,6 +390,46 @@ class MainActivity : Activity(), Gestures.Listener {
             sketch.selectOnly(sketch.editable())
             commitSelectionChange("Select all", before)
         }
+        chrome.onInput = { t -> flipInput(t) }
+        chrome.onStable = { v -> stableAmount = v; stabilizer.amount = v; scheduleAutosave() }
+        chrome.onRadial = { n ->
+            radial = n
+            chrome.setSymmetry(mirror != null || radial > 1)
+            scheduleAutosave()
+        }
+        chrome.onFocal = { mm ->
+            camera.focal = clamp(mm, Tune.FOCAL_MIN, Tune.FOCAL_MAX)
+            camera.apply(); pushCamera(); refreshControls()
+        }
+        chrome.onView = { i ->
+            val v = Camera.ORTHO_VIEWS[i]
+            camera.applyOrthoView(v)
+            pushCamera()
+            toast(getString(R.string.view_snapped, v.name))
+        }
+        chrome.onLiquifyMode = { m ->
+            liquifyCfg.mode = when (m) {
+                "pinch" -> Liquify.Mode.PINCH
+                "comb" -> Liquify.Mode.COMB
+                else -> Liquify.Mode.PUSH
+            }
+            pushLiquify()
+        }
+        chrome.onLiquifyValue = { which, v ->
+            when (which) {
+                "size" -> { liquifySize = v; liquifySizeSet = true }
+                "range" -> liquifyCfg.range = v
+                else -> liquifyCfg.strength = v
+            }
+        }
+        /*
+         * Apply just puts the tool away. Liquify has already changed the
+         * curves — each drag is its own history step — so there is nothing
+         * held back waiting to be committed, and a button that pretended
+         * otherwise would suggest the work could still be cancelled.
+         */
+        chrome.onLiquifyApply = { setTool(Tool.DRAW); toast(getString(R.string.liquify_done)) }
+        chrome.onLiquifyClose = { setTool(Tool.DRAW) }
         chrome.onStageValue = { which, v -> stageValue(which, v) }
         chrome.onPrimKind = { k -> primKind = k; previewPrimitive() }
         chrome.onStageDone = { commitStaging() }
@@ -454,7 +536,7 @@ class MainActivity : Activity(), Gestures.Listener {
         Action.HELP -> toast(getString(R.string.not_yet_help))
         Action.UNDO -> { history.undo(); refreshScene() }
         Action.REDO -> { history.redo(); refreshScene() }
-        Action.MIRROR -> mirrorSelection()
+        Action.MIRROR -> cycleMirror()
         Action.STAGE -> chrome.toggleStage()
         Action.GUIDE_BEND -> { setTool(Tool.BEND); toast(getString(R.string.bend_hint)) }
         Action.GUIDE_SAVE -> saveActiveGuide()
@@ -666,6 +748,71 @@ class MainActivity : Activity(), Gestures.Listener {
     // ---- groups (C.8) ------------------------------------------------------
 
     /** The Curves tab, rebuilt from the sketch. */
+    /**
+     * A settings switch. Like the environment, none of these is undoable: they
+     * are how you are working rather than part of the drawing, and undoing
+     * twice should not turn the stabiliser back on and lose your last stroke.
+     */
+    private fun flipInput(which: InputToggle) {
+        when (which) {
+            InputToggle.FINGER -> gestures.fingerDraws = !gestures.fingerDraws
+            InputToggle.AUTO_GUIDE -> autoGuide = !autoGuide
+            InputToggle.ISOLATE -> isolate = !isolate
+            InputToggle.CLAMP -> clampOff = !clampOff
+            InputToggle.HOLD_SHAPE -> shapeHoldOn = !shapeHoldOn
+            InputToggle.STABLE -> {
+                stableOn = !stableOn
+                stabilizer.amount = if (stableOn) stableAmount else 0.0
+            }
+            InputToggle.ORTHO -> {
+                camera.ortho = !camera.ortho
+                camera.apply(); pushCamera()
+                toast(
+                    getString(
+                        if (camera.ortho) R.string.projection_ortho
+                        else R.string.projection_persp,
+                    ),
+                )
+            }
+            /*
+             * The theme follows the page in the web build (applyEnv flips
+             * body.dark), and follows the system here — a resource qualifier
+             * is what Android gives you. Toggling it flips the PAGE, which the
+             * chrome then follows, so the control means the same thing.
+             */
+            InputToggle.THEME -> {
+                docEnv.background =
+                    if (Grid.luminance(docEnv.background) > 0.5) DARK_PAGE else LIGHT_PAGE
+                pushEnvironment()
+                scheduleAutosave()
+            }
+            InputToggle.HIDE_UI -> {
+                hideUi = !hideUi
+                chrome.root.visibility = if (hideUi) View.GONE else View.VISIBLE
+                if (hideUi) { chrome.setMenu(false); toast(getString(R.string.hideui_hint)) }
+            }
+        }
+        pushSettings()
+        scheduleAutosave()
+    }
+
+    private fun pushSettings() {
+        chrome.setSettings(
+            gestures.fingerDraws, autoGuide, isolate, clampOff, shapeHoldOn,
+            stableOn, stableAmount, radial, camera.focal, camera.ortho, hideUi,
+            getString(R.string.autosaves_here),
+        )
+    }
+
+    private fun pushLiquify() {
+        chrome.setLiquify(
+            liquifyCfg.mode.name.lowercase(),
+            if (liquifySizeSet) liquifySize else liquifyCfg.size,
+            liquifyCfg.range,
+            liquifyCfg.strength,
+        )
+    }
+
     private fun refreshGroups() {
         sketch.ensureGroup()
         chrome.setGroups(
@@ -792,6 +939,7 @@ class MainActivity : Activity(), Gestures.Listener {
      * protected from the eraser and from selection alike.
      */
     private fun mask(): (Vec3) -> Boolean {
+        if (!isolate) return Editing.NO_MASK
         val g = guides.active ?: return Editing.NO_MASK
         val eye = camera.eye.copy()
         return { p -> GuidePainting.isMasked(g, eye, p) }
@@ -843,7 +991,9 @@ class MainActivity : Activity(), Gestures.Listener {
                  * been laid out yet, and a disc sized against a 1x1 viewport is
                  * a tool that does nothing until you touch the slider again.
                  */
-                liquifyCfg.size = maxOf(24.0, camera.worldToPx(sizeMM * MM * 0.5) * 4)
+                liquifyCfg.size =
+                    if (liquifySizeSet) liquifySize
+                    else maxOf(24.0, camera.worldToPx(sizeMM * MM * 0.5) * 4)
                 dragTargets = sel
                 dragPositions = Editing.snapshot(sel)
             }
@@ -1216,7 +1366,8 @@ class MainActivity : Activity(), Gestures.Listener {
         val active = guides.active
         if (active != null && (tool == Tool.DRAW || tool == Tool.SHAPE)) {
             camera.rayFrom(px, py, penRay)
-            val hit = GuidePainting.project(active, penRay, clampOffSurface = true) ?: return false
+            val hit = GuidePainting.project(active, penRay, clampOffSurface = clampOff)
+                ?: return false
             s.pts.lastOrNull()?.let { if (it.p.distanceTo(hit.point) < 0.0005) return false }
             s.pts.add(
                 StrokePoint(
@@ -1235,11 +1386,16 @@ class MainActivity : Activity(), Gestures.Listener {
     }
 
     private fun commitStroke(s: Stroke) {
+        /* the stroke and everything the current symmetry owes it, as ONE step:
+           undoing a mirrored stroke should not leave its reflection behind */
+        val copies = symmetryCopies(s)
+        for (c in copies) c.group = s.group
+        val all = listOf(s) + copies
         history.run(
             Step(
-                "Draw", cost = s.pts.size,
-                onRedo = { sketch.add(s); refreshScene() },
-                onUndo = { sketch.remove(s); refreshScene() },
+                "Draw", cost = s.pts.size * all.size,
+                onRedo = { for (c in all) sketch.add(c); refreshScene() },
+                onUndo = { for (c in all) sketch.remove(c); refreshScene() },
             ),
         )
     }
@@ -1356,6 +1512,35 @@ class MainActivity : Activity(), Gestures.Listener {
         if (before.isEmpty()) { toast("Nothing selected"); return }
         val copies = Selection.duplicate(sketch, camera)
         pushReversible("Duplicate", copies, before)
+    }
+
+    /** X, then Z, then off — the cycle the web build's button walks. */
+    private fun cycleMirror() {
+        mirror = when (mirror) {
+            null -> "x"
+            "x" -> "z"
+            else -> null
+        }
+        chrome.setSymmetry(mirror != null || radial > 1)
+        toast(
+            mirror?.let { getString(R.string.mirror_on, it.uppercase()) }
+                ?: getString(R.string.mirror_off),
+        )
+        scheduleAutosave()
+    }
+
+    /**
+     * Every copy the current symmetry owes a stroke, committed with it.
+     *
+     * Mirror and radial COMPOSE: with both on each of the n sectors carries
+     * the stroke and its reflection, which is a rosette rather than a
+     * pinwheel. The identity is never in the list — that is the stroke you
+     * actually drew.
+     */
+    private fun symmetryCopies(s: Stroke): List<Stroke> {
+        val mats = Selection.symmetryMatrices(mirror, radial)
+        if (mats.isEmpty()) return emptyList()
+        return mats.map { m -> Selection.transformedCopy(s, m) }
     }
 
     private fun mirrorSelection() {
@@ -1687,6 +1872,11 @@ class MainActivity : Activity(), Gestures.Listener {
         docTool.color = color
         docTool.sizeMM = sizeMM
         docTool.opacity = opacity
+        docTool.mirror = mirror
+        docTool.radial = radial
+        docTool.stableOn = stableOn
+        docTool.stable = stableAmount
+        docTool.autoGuide = autoGuide
         docTool.autoGuide = autoGuide
         return Document.toJsonText(sketch, guides, camera, docEnv, docTool, carried)
     }
@@ -1728,6 +1918,14 @@ class MainActivity : Activity(), Gestures.Listener {
         color = r.tool.color
         sizeMM = clamp(r.tool.sizeMM, Tune.BRUSH_MIN_MM, Tune.BRUSH_MAX_MM)
         opacity = clamp(r.tool.opacity, 0.05, 1.0)
+        mirror = r.tool.mirror
+        radial = maxOf(1, r.tool.radial)
+        stableOn = r.tool.stableOn
+        stableAmount = clamp(r.tool.stable, 0.0, Tune.STABLE_MAX)
+        stabilizer.amount = if (stableOn) stableAmount else 0.0
+        autoGuide = r.tool.autoGuide
+        chrome.setSymmetry(mirror != null || radial > 1)
+        pushSettings()
         autoGuide = r.tool.autoGuide
         applyEnvironment(r.env)
         refreshGroups()
@@ -1776,6 +1974,14 @@ class MainActivity : Activity(), Gestures.Listener {
         color = r.tool.color
         sizeMM = clamp(r.tool.sizeMM, Tune.BRUSH_MIN_MM, Tune.BRUSH_MAX_MM)
         opacity = clamp(r.tool.opacity, 0.05, 1.0)
+        mirror = r.tool.mirror
+        radial = maxOf(1, r.tool.radial)
+        stableOn = r.tool.stableOn
+        stableAmount = clamp(r.tool.stable, 0.0, Tune.STABLE_MAX)
+        stabilizer.amount = if (stableOn) stableAmount else 0.0
+        autoGuide = r.tool.autoGuide
+        chrome.setSymmetry(mirror != null || radial > 1)
+        pushSettings()
         autoGuide = r.tool.autoGuide
         applyEnvironment(r.env)
         refreshGroups()

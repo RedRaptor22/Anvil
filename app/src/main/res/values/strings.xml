@@ -107,6 +107,46 @@
     <string name="group_deleted">Group deleted, %1$d curves kept</string>
     <string name="last_group">The last group cannot be deleted</string>
 
+    <!-- the liquify strip -->
+    <string name="liquify">Liquify</string>
+    <string name="lq_size">Size</string>
+    <string name="lq_range">Range</string>
+    <string name="lq_strength">Strength</string>
+    <string name="apply">Apply</string>
+    <string name="liquify_done">Liquify finished</string>
+
+    <!-- the settings modal -->
+    <string name="input">Input</string>
+    <string name="view">View</string>
+    <string name="file">File</string>
+    <string name="stable_stroke">Stable stroke</string>
+    <string name="radial">Radial</string>
+    <string name="radial_off">Off</string>
+    <string name="mirror_on">Mirror %1$s</string>
+    <string name="mirror_off">Mirror off</string>
+    <string name="lens">Lens</string>
+    <string name="opt_finger">Finger</string>
+    <string name="opt_autoguide">Auto guide</string>
+    <string name="opt_isolate">Isolate</string>
+    <string name="opt_clamp">Clamp</string>
+    <string name="opt_holdshape">Hold shape</string>
+    <string name="opt_stable">Stabiliser</string>
+    <string name="opt_ortho">Ortho</string>
+    <string name="opt_theme">Theme</string>
+    <string name="opt_hideui">Hide UI</string>
+    <string name="opt_guide">Guide</string>
+    <string name="view_front">Front</string>
+    <string name="view_back">Back</string>
+    <string name="view_right">Right</string>
+    <string name="view_left">Left</string>
+    <string name="view_top">Top</string>
+    <string name="view_bottom">Btm</string>
+    <string name="autosaves_here">Autosaves to this device.</string>
+    <string name="view_snapped">%1$s view</string>
+    <string name="projection_persp">Perspective</string>
+    <string name="projection_ortho">Orthographic</string>
+    <string name="hideui_hint">Double-tap the canvas to bring it back</string>
+
     <string name="nothing_under_that">Nothing under that</string>
     <string name="bad_hex">Not a colour — six hex digits, or three</string>
     <string name="eyedrop_hint">Tap a curve to sample its colour</string>

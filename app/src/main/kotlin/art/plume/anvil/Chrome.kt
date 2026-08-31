@@ -53,6 +53,11 @@ enum class Tool(val key: String, val icon: String) {
  */
 enum class EnvToggle { GRID, AXIS, FOG, SHADED, RENDER, SHADOW, TOON, DOF, GRAIN, PIXEL }
 
+/** The settings modal's switches — input behaviour and the view. */
+enum class InputToggle {
+    FINGER, AUTO_GUIDE, ISOLATE, CLAMP, HOLD_SHAPE, STABLE, ORTHO, THEME, HIDE_UI,
+}
+
 /** Everything a chrome button asks for that is not a change of tool. */
 enum class Action {
     HOME, EXPORT, MENU, HELP,
@@ -118,6 +123,19 @@ class Chrome(private val act: Activity, val t: Tokens) {
     var onGroupDuplicate: () -> Unit = {}
     var onGroupDelete: () -> Unit = {}
     var onSelectAll: () -> Unit = {}
+
+    /** The liquify strip. Its three numbers are dragged, like everything else. */
+    var onLiquifyMode: (String) -> Unit = {}
+    var onLiquifyValue: (which: String, value: Double) -> Unit = { _, _ -> }
+    var onLiquifyApply: () -> Unit = {}
+    var onLiquifyClose: () -> Unit = {}
+
+    /** The settings modal. */
+    var onInput: (InputToggle) -> Unit = {}
+    var onStable: (Double) -> Unit = {}
+    var onRadial: (Int) -> Unit = {}
+    var onFocal: (Double) -> Unit = {}
+    var onView: (Int) -> Unit = {}
 
     /** The staging bar: Loft's tension, a primitive's segments and taper. */
     var onStageValue: (which: Int, value: Double) -> Unit = { _, _ -> }
@@ -187,6 +205,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
     private val undoPill = panel(act, t)
     private val ctxBar = panel(act, t)
     private val selBar = panel(act, t)
+    private val liquifyPanel = panel(act, t)
     private val stagePanel = panel(act, t, large = true)
     private val brushGrid = panel(act, t, large = true)
     private val slidePop = panel(act, t, large = true)
@@ -233,9 +252,41 @@ class Chrome(private val act: Activity, val t: Tokens) {
     private lateinit var hexField: EditText
     private lateinit var colorWheel: ColorWheel
     private lateinit var groupList: LinearLayout
+    private lateinit var lqSize: DragValue
+    private lateinit var lqRange: DragValue
+    private lateinit var lqStrength: DragValue
+    private val lqModes = HashMap<String, IcoButton>()
+    private var lqMode = "push"
+    private var lqSizeV = 120.0
+    private var lqRangeV = 60.0
+    private var lqStrengthV = 55.0
+
+    /* the settings modal's model */
+    private var optFinger = true
+    private var optAutoGuide = true
+    private var optIsolate = true
+    private var optClamp = true
+    private var optHoldShape = true
+    private var optStable = true
+    private var optOrtho = false
+    private var optHideUi = false
+    private var stableAmt = Tune.STABLE_DEFAULT
+    private var radialAmt = 1
+    private var focalMm = 50.0
+    private var saveText = ""
+    private var symmetryOn = false
 
     /** The group being renamed, so a refresh cannot yank the field away. */
     private var renaming: Int? = null
+    private lateinit var inputGrid: OptionGrid
+    private lateinit var viewGrid: OptionGrid
+    private lateinit var stableBar: HSlider
+    private lateinit var radialBar: HSlider
+    private lateinit var focalBar: HSlider
+    private lateinit var stableValue: TextView
+    private lateinit var radialValue: TextView
+    private lateinit var focalValue: TextView
+    private lateinit var saveState: TextView
     private lateinit var stageBar: LinearLayout
     private lateinit var stageRow2: LinearLayout
     private lateinit var primKinds: LinearLayout
@@ -265,6 +316,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
         buildUndoPill()
         buildCtxBar()
         buildSelBar()
+        buildLiquifyPanel()
         buildStagePanel()
         buildDock()
         buildBrushGrid()
@@ -609,6 +661,91 @@ class Chrome(private val act: Activity, val t: Tokens) {
      * what is missing rather than showing an empty list, because a Curves tab
      * with nothing in it looks like a sketch with no curves in it.
      */
+    /**
+     * `#liquifyPanel` — a strip above the context bar rather than a card at
+     * the right, and the stylesheet says why: liquify always has a selection,
+     * and a selection always has the transform panel, which lives on the right.
+     */
+    private fun buildLiquifyPanel() {
+        liquifyPanel.setPadding(t.dp(10f), t.dp(8f), t.dp(10f), t.dp(8f))
+        liquifyPanel.addView(
+            TextView(act).apply {
+                text = act.getString(R.string.liquify)
+                setTextColor(t.dim2)
+                textSize = 10f
+                letterSpacing = 0.1f
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+                setPadding(0, 0, t.dp(6f), 0)
+            },
+        )
+        for ((key, icon) in listOf(
+            "push" to "lq_push", "pinch" to "lq_pinch", "comb" to "lq_comb",
+        )) {
+            val b = IcoButton(act, t).icon(icon).apply {
+                setOnClickListener { onLiquifyMode(key) }
+                layoutParams = LinearLayout.LayoutParams(t.dp(40f), t.dp(34f))
+                    .apply { marginEnd = t.dp(4f) }
+            }
+            lqModes[key] = b
+            liquifyPanel.addView(b)
+        }
+        /*
+         * FACT: size, range and strength are each "adjusted by sliding up or
+         * down". Size is a screen radius so it moves geometrically like the
+         * brush; the other two are percentages and move linearly.
+         */
+        lqSize = DragValue(
+            act, t, logarithmic = true, rate = 0.011,
+            get = { lqSizeV },
+            set = { v -> lqSizeV = v.coerceIn(8.0, 600.0); onLiquifyValue("size", lqSizeV); refresh() },
+        )
+        lqRange = DragValue(
+            act, t, logarithmic = false, rate = 0.4,
+            get = { lqRangeV },
+            set = { v -> lqRangeV = v.coerceIn(0.0, 100.0); onLiquifyValue("range", lqRangeV); refresh() },
+        )
+        lqStrength = DragValue(
+            act, t, logarithmic = false, rate = 0.4,
+            get = { lqStrengthV },
+            set = { v ->
+                lqStrengthV = v.coerceIn(1.0, 100.0)
+                onLiquifyValue("strength", lqStrengthV); refresh()
+            },
+        )
+        for ((label, value) in listOf(
+            R.string.lq_size to lqSize, R.string.lq_range to lqRange,
+            R.string.lq_strength to lqStrength,
+        )) {
+            liquifyPanel.addView(
+                TextView(act).apply {
+                    text = act.getString(label)
+                    setTextColor(t.dim)
+                    textSize = 11f
+                    setPadding(t.dp(6f), 0, t.dp(4f), 0)
+                },
+            )
+            value.layoutParams = LinearLayout.LayoutParams(
+                t.dp(38f), ViewGroup.LayoutParams.WRAP_CONTENT,
+            )
+            liquifyPanel.addView(value)
+        }
+        liquifyPanel.addView(
+            TextButton(act, t, filled = true, small = true).apply {
+                text = act.getString(R.string.apply)
+                setOnClickListener { onLiquifyApply() }
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { marginStart = t.dp(8f) }
+            },
+        )
+        liquifyPanel.addView(
+            IcoButton(act, t, IcoButton.SIZE_SMALL).icon("close").apply {
+                setOnClickListener { onLiquifyClose() }
+            },
+        )
+        liquifyPanel.visibility = View.GONE
+    }
+
     private fun buildStagePanel() {
         stagePanel.orientation = LinearLayout.VERTICAL
         val p = t.px(R.dimen.padCard)
@@ -1147,6 +1284,13 @@ class Chrome(private val act: Activity, val t: Tokens) {
         popovers.add(colorCard)
     }
 
+    /**
+     * `#sysMenu` — Input, View and File.
+     *
+     * A centred modal rather than a left-anchored popover, and the stylesheet
+     * says why: anchored to the menu button it sat exactly on top of the brush
+     * rail.
+     */
     private fun buildSysMenu() {
         scrim.setBackgroundColor(t.scrim)
         /*
@@ -1157,10 +1301,67 @@ class Chrome(private val act: Activity, val t: Tokens) {
         scrim.elevation = t.dpf(17f)
         scrim.visibility = View.GONE
         scrim.setOnClickListener { setMenu(false) }
+
         sysMenu.orientation = LinearLayout.VERTICAL
         val p = t.px(R.dimen.padModal)
         sysMenu.setPadding(p, p, p, p)
         sysMenu.addView(head(act.getString(R.string.settings)) { setMenu(false) })
+
+        val body = LinearLayout(act).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            )
+        }
+
+        body.addView(h4(R.string.input))
+        inputGrid = OptionGrid(act, t, 3)
+            .option("finger", act.getString(R.string.opt_finger)) { onInput(InputToggle.FINGER) }
+            .option("autoguide", act.getString(R.string.opt_autoguide)) { onInput(InputToggle.AUTO_GUIDE) }
+            .option("isolate", act.getString(R.string.opt_isolate)) { onInput(InputToggle.ISOLATE) }
+            .option("clamp", act.getString(R.string.opt_clamp)) { onInput(InputToggle.CLAMP) }
+            .option("holdshape", act.getString(R.string.opt_holdshape)) { onInput(InputToggle.HOLD_SHAPE) }
+            .option("stable", act.getString(R.string.opt_stable)) { onInput(InputToggle.STABLE) }
+        body.addView(inputGrid, matchWrap(t.dp(4f)))
+
+        stableBar = HSlider(act, t, 0.0, Tune.STABLE_MAX) { v -> onStable(v); refresh() }
+        stableValue = pairValue()
+        body.addView(pairRow(R.string.stable_stroke, stableBar, stableValue))
+
+        /*
+         * Radial runs 1..16, and 1 reads "Off" rather than "1": one copy of a
+         * stroke is no symmetry at all, and a control that says 1 invites you
+         * to wonder what it is doing.
+         */
+        radialBar = HSlider(act, t, 1.0, 16.0) { v -> onRadial(v.toInt()); refresh() }
+        radialValue = pairValue()
+        body.addView(pairRow(R.string.radial, radialBar, radialValue))
+
+        body.addView(sep())
+        body.addView(h4(R.string.view))
+        focalBar = HSlider(act, t, Tune.FOCAL_MIN, Tune.FOCAL_MAX) { v -> onFocal(v); refresh() }
+        focalValue = pairValue()
+        body.addView(pairRow(R.string.lens, focalBar, focalValue))
+
+        viewGrid = OptionGrid(act, t, 4)
+            .option("proj", act.getString(R.string.opt_ortho)) { onInput(InputToggle.ORTHO) }
+            .option("theme", act.getString(R.string.opt_theme)) { onInput(InputToggle.THEME) }
+            .option("hideui", act.getString(R.string.opt_hideui)) { onInput(InputToggle.HIDE_UI) }
+            .option("walk", act.getString(R.string.opt_guide)) { onAction(Action.HELP) }
+        body.addView(viewGrid, matchWrap(t.dp(4f)))
+
+        val views = OptionGrid(act, t, 6)
+        for ((i, name) in listOf(
+            R.string.view_front, R.string.view_back, R.string.view_right,
+            R.string.view_left, R.string.view_top, R.string.view_bottom,
+        ).withIndex()) {
+            views.option("v$i", act.getString(name)) { onView(i) }
+        }
+        body.addView(views, matchWrap(t.dp(4f)))
+
+        body.addView(sep())
+        body.addView(h4(R.string.file))
+        val files = OptionGrid(act, t, 3)
         for ((label, a) in listOf(
             R.string.new_sketch to Action.NEW,
             R.string.save to Action.SAVE,
@@ -1168,18 +1369,78 @@ class Chrome(private val act: Activity, val t: Tokens) {
             R.string.export_ to Action.EXPORT,
             R.string.clear to Action.CLEAR,
         )) {
-            sysMenu.addView(
-                TextButton(act, t, filled = true).apply {
+            files.option(act.getString(label), act.getString(label)) {
+                setMenu(false); onAction(a)
+            }
+        }
+        body.addView(files, matchWrap(t.dp(4f)))
+
+        saveState = TextView(act).apply {
+            setTextColor(t.dim2)
+            textSize = 11f
+            setPadding(t.dp(1f), t.dp(6f), 0, 0)
+        }
+        body.addView(saveState)
+
+        /* the modal is taller than a phone, so it scrolls inside its card */
+        sysMenu.addView(
+            android.widget.ScrollView(act).apply {
+                isFillViewport = true
+                addView(body)
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                )
+            },
+        )
+        sysMenu.visibility = View.GONE
+    }
+
+    /** `h4` — the small uppercase section heading. */
+    private fun h4(res: Int) = TextView(act).apply {
+        text = act.getString(res)
+        setTextColor(t.dim2)
+        textSize = 10f
+        letterSpacing = 0.1f
+        setTypeface(typeface, android.graphics.Typeface.BOLD)
+        layoutParams = matchWrap(t.dp(8f))
+    }
+
+    /** `.sep` — a horizontal rule between sections. */
+    private fun sep() = View(act).apply {
+        setBackgroundColor(t.line)
+        layoutParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, t.px(R.dimen.hair),
+        ).apply { topMargin = t.dp(10f) }
+    }
+
+    /** `.pair` — a caption, a slider and a readout on one tinted row. */
+    private fun pairRow(label: Int, bar: HSlider, value: TextView): View =
+        LinearLayout(act).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = GradientDrawable().apply {
+                setColor(t.panel2); cornerRadius = t.dpf(12f)
+            }
+            setPadding(t.dp(10f), t.dp(3f), t.dp(3f), t.dp(3f))
+            addView(
+                TextView(act).apply {
                     text = act.getString(label)
-                    gravity = Gravity.START or Gravity.CENTER_VERTICAL
-                    setOnClickListener { setMenu(false); onAction(a) }
-                    layoutParams = LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ).apply { topMargin = t.dp(4f) }
+                    setTextColor(t.ink)
+                    textSize = 12f
+                    minWidth = t.dp(78f)
                 },
             )
+            addView(bar, LinearLayout.LayoutParams(0, t.dp(22f), 1f))
+            addView(value)
+            layoutParams = matchWrap(t.dp(6f))
         }
-        sysMenu.visibility = View.GONE
+
+    private fun pairValue() = TextView(act).apply {
+        setTextColor(t.dim)
+        textSize = 11f
+        minWidth = t.dp(42f)
+        gravity = Gravity.END
+        setPadding(t.dp(4f), 0, t.dp(6f), 0)
     }
 
     /** `#dock` — the only permanent chrome on a phone. */
@@ -1242,6 +1503,13 @@ class Chrome(private val act: Activity, val t: Tokens) {
                 width = t.px(R.dimen.railTabW), height = t.px(R.dimen.railTabH),
             ),
         )
+        root.addView(
+            liquifyPanel,
+            lp(
+                Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL,
+                bottom = t.px(R.dimen.liquifyBottom),
+            ),
+        )
         root.addView(dock, lp(Gravity.BOTTOM, width = ViewGroup.LayoutParams.MATCH_PARENT))
         root.addView(brushGrid, lp(Gravity.START or Gravity.CENTER_VERTICAL, left = t.px(R.dimen.brushGridLeft)))
         root.addView(stagePanel, lp(Gravity.TOP or Gravity.END, top = t.px(R.dimen.stageTop), right = e, width = t.px(R.dimen.stagePanelW)))
@@ -1293,10 +1561,18 @@ class Chrome(private val act: Activity, val t: Tokens) {
                 Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL,
                 bottom = t.px(R.dimen.dockH) + t.dp(18f),
             )
+            liquifyPanel.layoutParams = lp(
+                Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL,
+                left = e, right = e, bottom = t.px(R.dimen.dockH) + t.dp(4f),
+            )
         } else {
             ctxBar.layoutParams = lp(Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL, bottom = t.px(R.dimen.ctxBottom))
             toastCard.layoutParams = lp(Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL, bottom = t.px(R.dimen.toastBottom))
             selBar.layoutParams = lp(Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL, bottom = t.px(R.dimen.selBarBottom))
+            liquifyPanel.layoutParams = lp(
+                Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL,
+                bottom = t.px(R.dimen.liquifyBottom),
+            )
         }
         refresh()
     }
@@ -1555,6 +1831,27 @@ class Chrome(private val act: Activity, val t: Tokens) {
 
     fun setStaging(s: Staging?) { staging = s; refresh() }
 
+    /** Everything the settings modal shows, from the tool and the camera. */
+    fun setSettings(
+        finger: Boolean, autoGuide: Boolean, isolate: Boolean, clamp: Boolean,
+        holdShape: Boolean, stableOn: Boolean, stable: Double, radial: Int,
+        focal: Double, ortho: Boolean, hideUi: Boolean, save: String,
+    ) {
+        optFinger = finger; optAutoGuide = autoGuide; optIsolate = isolate
+        optClamp = clamp; optHoldShape = holdShape; optStable = stableOn
+        stableAmt = stable; radialAmt = radial; focalMm = focal
+        optOrtho = ortho; optHideUi = hideUi; saveText = save
+        refresh()
+    }
+
+    /** The tool pill's Mirror button lights for either kind of symmetry. */
+    fun setSymmetry(on: Boolean) { symmetryOn = on; refresh() }
+
+    fun setLiquify(mode: String, size: Double, range: Double, strength: Double) {
+        lqMode = mode; lqSizeV = size; lqRangeV = range; lqStrengthV = strength
+        refresh()
+    }
+
     /** The whole Scene tab, from the document. */
     fun setEnvironment(env: DocumentEnv) {
         envGrid = env.grid
@@ -1643,7 +1940,20 @@ class Chrome(private val act: Activity, val t: Tokens) {
             if (guideActive) R.string.hint_guide_active else R.string.hint_draw_a_stroke,
         )
         ctxHint.visibility = if (guideActive || st != null) View.GONE else View.VISIBLE
-        selBar.visibility = if (selectionCount > 0) View.VISIBLE else View.GONE
+        selBar.visibility = if (selectionCount > 0 && tool != Tool.LIQUIFY) {
+            View.VISIBLE
+        } else {
+            View.GONE
+        }
+        /* the strip only exists while the tool does, and it always has a
+           selection to work on — that is what it is for */
+        liquifyPanel.visibility =
+            if (tool == Tool.LIQUIFY && selectionCount > 0) View.VISIBLE else View.GONE
+        for ((k, b) in lqModes) b.on = k == lqMode
+        lqSize.text = lqSizeV.toInt().toString()
+        lqRange.text = lqRangeV.toInt().toString()
+        lqStrength.text = lqStrengthV.toInt().toString()
+        icons["mirror"]?.on = symmetryOn
         icons["stage"]?.on =
             if (compact) isSheetOpen(stagePanel) else stagePanel.visibility == View.VISIBLE
 
@@ -1674,6 +1984,25 @@ class Chrome(private val act: Activity, val t: Tokens) {
         fstopVal.text = "f/" + ((Math.round(fstop * 10.0)) / 10.0).toString()
         grainVal.text = "${grainLevel.toInt()}%"
         pixelVal.text = "${pixelSize.toInt()}px"
+        inputGrid.setOn("finger", optFinger)
+        inputGrid.setOn("autoguide", optAutoGuide)
+        inputGrid.setOn("isolate", optIsolate)
+        inputGrid.setOn("clamp", optClamp)
+        inputGrid.setOn("holdshape", optHoldShape)
+        inputGrid.setOn("stable", optStable)
+        viewGrid.setOn("proj", optOrtho)
+        viewGrid.setOn("hideui", optHideUi)
+        stableBar.value = stableAmt
+        stableValue.text = (stableAmt * 100).toInt().toString()
+        radialBar.value = radialAmt.toDouble()
+        /* 1 reads "Off": one copy of a stroke is no symmetry at all, and a
+           control that says 1 invites you to wonder what it is doing */
+        radialValue.text =
+            if (radialAmt <= 1) act.getString(R.string.radial_off) else radialAmt.toString()
+        focalBar.value = focalMm
+        focalValue.text = "${focalMm.toInt()}mm"
+        saveState.text = saveText
+
         swatch(bgSwatch, backgroundColor)
         swatch(lightSwatch, lightColor)
 

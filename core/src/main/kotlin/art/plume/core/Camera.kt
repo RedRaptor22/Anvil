@@ -153,6 +153,54 @@ class Camera {
     }
 
     /**
+     * The six standard views.
+     *
+     * FACT (B.1): a one-finger double-tap snaps to the nearest of them.
+     * Top and Bottom sit a hair off the pole rather than on it, because at
+     * phi exactly 0 the view direction is parallel to +Y and the view matrix
+     * degenerates — the same reason orbit clamps phi away from the poles.
+     */
+    class OrthoView(val name: String, val theta: Double, val phi: Double)
+
+    /**
+     * Where the eye sits for a (theta, phi), as a unit vector. Public because
+     * the snap compares directions rather than angles: theta is circular and
+     * two angles a hair either side of the wrap are as close as can be while
+     * their numbers are as far apart as they get.
+     */
+    fun eyeDirection(theta: Double, phi: Double, out: Vec3 = Vec3()): Vec3 {
+        val sp = sin(phi)
+        return out.set(sp * sin(theta), cos(phi), sp * cos(theta))
+    }
+
+    /**
+     * The standard view nearest to where the camera is now.
+     *
+     * The azimuth is KEPT for Top and Bottom: looking straight down, theta
+     * only decides which way up the sketch is, so snapping it to zero would
+     * spin the drawing for no reason the user asked for.
+     */
+    fun nearestOrthoView(): OrthoView {
+        val cur = eyeDirection(theta, phi)
+        var best = ORTHO_VIEWS[0]
+        var bestDot = -2.0
+        val d = Vec3()
+        for (v in ORTHO_VIEWS) {
+            val dot = eyeDirection(v.theta, v.phi, d) dot cur
+            if (dot > bestDot) { bestDot = dot; best = v }
+        }
+        return best
+    }
+
+    /** Move to [v], keeping the azimuth when it does not matter. */
+    fun applyOrthoView(v: OrthoView): Camera {
+        if (v.name != "Top" && v.name != "Bottom") theta = v.theta
+        phi = v.phi
+        roll = 0.0
+        return apply()
+    }
+
+    /**
      * The clip planes the projection was built with.
      *
      * Exposed rather than left as literals inside [apply] because the post pass
@@ -299,7 +347,23 @@ class Camera {
         return true
     }
 
-    private companion object {
-        val UP = Vec3(0.0, 1.0, 0.0)
+    companion object {
+        private val UP = Vec3(0.0, 1.0, 0.0)
+
+        /**
+         * The six standard views, as (theta, phi) pairs.
+         *
+         * Top and Bottom sit a hair off the pole rather than on it, because at
+         * phi exactly 0 the view direction is parallel to +Y and lookAt
+         * degenerates — the same reason orbit clamps phi away from the poles.
+         */
+        val ORTHO_VIEWS = listOf(
+            OrthoView("Front", 0.0, Math.PI / 2),
+            OrthoView("Back", Math.PI, Math.PI / 2),
+            OrthoView("Right", Math.PI / 2, Math.PI / 2),
+            OrthoView("Left", -Math.PI / 2, Math.PI / 2),
+            OrthoView("Top", 0.0, 0.0025),
+            OrthoView("Bottom", 0.0, Math.PI - 0.0025),
+        )
     }
 }
