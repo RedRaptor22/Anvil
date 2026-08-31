@@ -44,7 +44,6 @@
 
     <!-- tools whose behaviour is not ported yet: the button exists and says
          so rather than doing nothing. -->
-    <string name="not_yet_pressure">Pressure curve settings not wired yet</string>
     <string name="not_yet_help">Walkthrough not ported yet</string>
     <string name="not_yet_colour_wheel">The colour wheel is not built yet</string>
 
@@ -146,6 +145,14 @@
     <string name="projection_persp">Perspective</string>
     <string name="projection_ortho">Orthographic</string>
     <string name="hideui_hint">Double-tap the canvas to bring it back</string>
+
+    <!-- #pressSeg -->
+    <string name="press_size">Size</string>
+    <string name="press_opacity">Opac</string>
+    <string name="press_both">Both</string>
+    <string name="press_colour">Col</string>
+    <string name="pressure_on">Pressure on</string>
+    <string name="pressure_off">Pressure off</string>
 
     <string name="nothing_under_that">Nothing under that</string>
     <string name="bad_hex">Not a colour — six hex digits, or three</string>

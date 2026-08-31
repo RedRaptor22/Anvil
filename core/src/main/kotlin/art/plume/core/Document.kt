@@ -192,7 +192,9 @@ object Document {
         o.put("color", packColor(st.color))
         o.put("radius", q(st.baseRadius))
         o.put("opacity", q(st.opacity))
-        o.put("pressureTarget", "size")
+        /* was hardcoded while nothing read it; a stroke drawn with pressure
+           on opacity has to keep looking like that after a reload */
+        o.put("pressureTarget", st.pressureTarget)
         st.group?.let { o.put("group", it) }
         return o
     }
@@ -203,6 +205,7 @@ object Document {
             color = unpackColor(d.str("color"), Rgba(0.1, 0.1, 0.13)),
             baseRadius = d.num("radius", 7.0 * MM),
             opacity = d.num("opacity", 1.0),
+            pressureTarget = d.str("pressureTarget") ?: "size",
         )
         s.group = d["group"]?.asInt()
         s.pts.addAll(unpackPoints(d))

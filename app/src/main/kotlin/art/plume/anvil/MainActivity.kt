@@ -117,6 +117,10 @@ class MainActivity : Activity(), Gestures.Listener {
      */
     private var mirror: String? = null
 
+    /** FACT (C.3): the pressure toggle lives in the Brush Panel. */
+    private var pressureOn = true
+    private var pressureTarget = "size"
+
     private val liquifyCfg = Liquify.Settings()
 
     /**
@@ -390,6 +394,12 @@ class MainActivity : Activity(), Gestures.Listener {
             sketch.selectOnly(sketch.editable())
             commitSelectionChange("Select all", before)
         }
+        chrome.onPressure = { togglePressure() }
+        chrome.onPressureTarget = { target ->
+            pressureTarget = target
+            chrome.setPressure(pressureOn, pressureTarget)
+            scheduleAutosave()
+        }
         chrome.onInput = { t -> flipInput(t) }
         chrome.onStable = { v -> stableAmount = v; stabilizer.amount = v; scheduleAutosave() }
         chrome.onRadial = { n ->
@@ -500,6 +510,7 @@ class MainActivity : Activity(), Gestures.Listener {
             brush = hit.brush
             sizeMM = hit.baseRadius * 2.0 / MM
             opacity = hit.opacity
+            if (hit.pressureTarget != "none") pressureTarget = hit.pressureTarget
         }
         syncBrushControls()
         toast(
@@ -545,7 +556,7 @@ class MainActivity : Activity(), Gestures.Listener {
         Action.DUPLICATE_MIRROR -> mirrorSelection()
         Action.LIQUIFY -> setTool(Tool.LIQUIFY)
         Action.DELETE -> deleteSelection()
-        Action.PRESSURE -> toast(getString(R.string.not_yet_pressure))
+        Action.PRESSURE -> togglePressure()
         Action.NEW -> { clearSketch(); resetView(); pushCamera() }
         Action.SAVE -> chooseSaveTarget()
         Action.OPEN -> chooseOpenTarget()
@@ -689,6 +700,7 @@ class MainActivity : Activity(), Gestures.Listener {
         chrome.setOpacityValue(opacity)
         chrome.setBrush(brush)
         chrome.setColor(argbOf(color))
+        chrome.setPressure(pressureOn, pressureTarget)
     }
 
     /**
@@ -793,6 +805,13 @@ class MainActivity : Activity(), Gestures.Listener {
             }
         }
         pushSettings()
+        scheduleAutosave()
+    }
+
+    private fun togglePressure() {
+        pressureOn = !pressureOn
+        chrome.setPressure(pressureOn, pressureTarget)
+        toast(getString(if (pressureOn) R.string.pressure_on else R.string.pressure_off))
         scheduleAutosave()
     }
 
@@ -1093,6 +1112,13 @@ class MainActivity : Activity(), Gestures.Listener {
         val s = Stroke(
             brush = brush, color = color, baseRadius = sizeMM * MM * 0.5, opacity = opacity,
         )
+        /*
+         * The target is stamped onto the STROKE rather than read from the tool
+         * at draw time: a curve drawn with pressure on opacity has to keep
+         * looking like that after the setting changes for the next one. Off
+         * means "none" — the geometry then ignores pressure entirely.
+         */
+        s.pressureTarget = if (pressureOn) pressureTarget else "none"
         s.group = sketch.ensureGroup().id
         stabilizer.reset()
         stabilizer.next(x.toDouble(), y.toDouble())
@@ -1872,6 +1898,8 @@ class MainActivity : Activity(), Gestures.Listener {
         docTool.color = color
         docTool.sizeMM = sizeMM
         docTool.opacity = opacity
+        docTool.pressureOn = pressureOn
+        docTool.pressureTarget = pressureTarget
         docTool.mirror = mirror
         docTool.radial = radial
         docTool.stableOn = stableOn
@@ -1918,6 +1946,8 @@ class MainActivity : Activity(), Gestures.Listener {
         color = r.tool.color
         sizeMM = clamp(r.tool.sizeMM, Tune.BRUSH_MIN_MM, Tune.BRUSH_MAX_MM)
         opacity = clamp(r.tool.opacity, 0.05, 1.0)
+        pressureOn = r.tool.pressureOn
+        pressureTarget = r.tool.pressureTarget
         mirror = r.tool.mirror
         radial = maxOf(1, r.tool.radial)
         stableOn = r.tool.stableOn
@@ -1925,6 +1955,7 @@ class MainActivity : Activity(), Gestures.Listener {
         stabilizer.amount = if (stableOn) stableAmount else 0.0
         autoGuide = r.tool.autoGuide
         chrome.setSymmetry(mirror != null || radial > 1)
+        chrome.setPressure(pressureOn, pressureTarget)
         pushSettings()
         autoGuide = r.tool.autoGuide
         applyEnvironment(r.env)
@@ -1974,6 +2005,8 @@ class MainActivity : Activity(), Gestures.Listener {
         color = r.tool.color
         sizeMM = clamp(r.tool.sizeMM, Tune.BRUSH_MIN_MM, Tune.BRUSH_MAX_MM)
         opacity = clamp(r.tool.opacity, 0.05, 1.0)
+        pressureOn = r.tool.pressureOn
+        pressureTarget = r.tool.pressureTarget
         mirror = r.tool.mirror
         radial = maxOf(1, r.tool.radial)
         stableOn = r.tool.stableOn
@@ -1981,6 +2014,7 @@ class MainActivity : Activity(), Gestures.Listener {
         stabilizer.amount = if (stableOn) stableAmount else 0.0
         autoGuide = r.tool.autoGuide
         chrome.setSymmetry(mirror != null || radial > 1)
+        chrome.setPressure(pressureOn, pressureTarget)
         pushSettings()
         autoGuide = r.tool.autoGuide
         applyEnvironment(r.env)

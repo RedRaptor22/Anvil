@@ -36,12 +36,25 @@ data class Brush(
     val grit: Boolean = false,
     val halfWidthMM: Double? = null,
     val thickMM: Double? = null,
+    /**
+     * How much of the chosen opacity ONE pass deposits.
+     *
+     * A brush that builds up cannot lay full strength at once, or a second
+     * pass over the same ground would have nowhere to go — the rest arrives by
+     * going over it again, which is how shading with a pencil actually works.
+     */
+    val tone: Double = 1.0,
+    /** A brush that insists on a pressure target regardless of the setting. */
+    val pressure: String? = null,
 )
 
 object Brushes {
     val table: Map<String, Brush> = listOf(
         Brush("pen", 1.00, 0.00, 0.0, 0.00, true, 1.00),
-        Brush("sketch", 0.34, 0.00, 0.0, 0.00, true, 1.15, grit = true, paint = true),
+        Brush(
+            "sketch", 0.34, 0.00, 0.0, 0.00, true, 1.15, grit = true, paint = true,
+            tone = 0.5, pressure = "opacity",
+        ),
         Brush("taper", 1.00, 0.00, 9.0, 0.04, true, 1.00),
         Brush("rectangle", 1.00, 1.00, 0.0, 0.00, true, 1.60, paint = true, halfWidthMM = 11.2),
         Brush("cube", 1.00, 1.00, 0.0, 0.00, true, 1.00, rise = true, paint = true),
@@ -78,6 +91,15 @@ class Stroke(
     var color: Rgba = Rgba(0.1, 0.1, 0.13),
     var baseRadius: Double = 7.0 * MM,
     var opacity: Double = 1.0,
+    /**
+     * What pressure drives: "size", "opacity", "both", "color", or "none".
+     *
+     * FACT (C.3): the pressure toggle lives in the Brush Panel. It is stored
+     * on the STROKE rather than read from the tool at draw time, because a
+     * curve drawn with pressure on size has to keep looking like that after
+     * the setting is changed for the next one.
+     */
+    var pressureTarget: String = "size",
     /** the guide this was painted onto, so tools can put points back on it */
     var guideId: Int? = null,
 ) {
@@ -101,7 +123,7 @@ class Stroke(
 
     /** A copy carrying [points] instead of this stroke's own. */
     fun withPoints(points: List<StrokePoint>): Stroke {
-        val out = Stroke(brush, color, baseRadius, opacity, guideId)
+        val out = Stroke(brush, color, baseRadius, opacity, pressureTarget, guideId)
         out.group = group
         out.seedRef = seedRef?.copy()
         for (q in points) {
@@ -188,6 +210,44 @@ object StrokeGeometry {
     }
 
     /** Taper factor at arc position [s] of [total], in nib radii from each end. */
+    /**
+     * What one sample of a stroke actually deposits: how wide, how opaque, and
+     * how far the ink is lifted towards white.
+     *
+     * Ported from `shadeAt` in js/strokes.js. Pressure is clamped to 0.02 at
+     * the bottom rather than 0: a sample with no pressure at all would be a
+     * ring of zero radius, which is a pinch in the tube rather than a light
+     * touch.
+     *
+     * The four targets are the four the brush panel offers, and each is a
+     * different claim about what a harder press means. Size makes a wider
+     * mark, opacity a darker one, both together, and colour a DARKER one by
+     * lifting a light press towards the page — which is what a pencil does,
+     * and the only one of the four that changes the colour rather than the
+     * ink.
+     */
+    class Shade(val radius: Double, val alpha: Double, val lift: Double)
+
+    fun shadeAt(stroke: Stroke, index: Int, arcS: Double, total: Double): Shade {
+        val cfg = stroke.cfg
+        val pr = clamp(stroke.pts[index].pressure, 0.02, 1.0)
+        /* a brush may insist on a target: the sketch pencil is an opacity
+           brush whatever the panel says, because a pencil that got WIDER
+           under the hand would not read as a pencil */
+        val mode = cfg.pressure ?: stroke.pressureTarget
+
+        var rMul = 1.0
+        var alpha = stroke.opacity
+        var lift = 0.0
+        if (mode == "size" || mode == "both") rMul *= 0.25 + 0.75 * pr
+        if (mode == "opacity" || mode == "both") alpha = stroke.opacity * (0.18 + 0.82 * pr)
+        if (mode == "color") lift = (1 - pr) * 0.55
+
+        rMul *= taperAt(stroke, arcS, total)
+        alpha *= cfg.tone
+        return Shade(stroke.baseRadius * rMul, alpha, lift)
+    }
+
     internal fun taperAt(stroke: Stroke, s: Double, total: Double): Double {
         val cfg = stroke.cfg
         if (cfg.taper <= 0.0) return 1.0
@@ -285,9 +345,15 @@ object StrokeGeometry {
     ) {
         val cfg = stroke.cfg
         val pt = stroke.pts[ptIndex]
-        val k = taperAt(stroke, arcS, total)
-        val rx = max(halfWidth(stroke, stroke.baseRadius * k), 1e-5)
-        val ry = max(halfThick(stroke, stroke.baseRadius * k), 1e-5)
+        val sh = shadeAt(stroke, ptIndex, arcS, total)
+        val rx = max(halfWidth(stroke, sh.radius), 1e-5)
+        val ry = max(halfThick(stroke, sh.radius), 1e-5)
+        /* colour mode lifts a light press towards the page rather than
+           changing the ink, which is what a pencil does */
+        val inkR = (stroke.color.r + (1.0 - stroke.color.r) * sh.lift).toFloat()
+        val inkG = (stroke.color.g + (1.0 - stroke.color.g) * sh.lift).toFloat()
+        val inkB = (stroke.color.b + (1.0 - stroke.color.b) * sh.lift).toFloat()
+        val inkA = sh.alpha.toFloat()
 
         // roll the reference frame, then build an orthonormal section basis
         val ca = cos(pt.roll); val sa = sin(pt.roll)
@@ -323,23 +389,27 @@ object StrokeGeometry {
             val o = (2 + ringSlot * seg + j)
             pos[o * 3] = s.world.x.toFloat(); pos[o * 3 + 1] = s.world.y.toFloat(); pos[o * 3 + 2] = s.world.z.toFloat()
             nor[o * 3] = s.normal.x.toFloat(); nor[o * 3 + 1] = s.normal.y.toFloat(); nor[o * 3 + 2] = s.normal.z.toFloat()
-            col[o * 4] = stroke.color.r.toFloat(); col[o * 4 + 1] = stroke.color.g.toFloat()
-            col[o * 4 + 2] = stroke.color.b.toFloat(); col[o * 4 + 3] = stroke.opacity.toFloat()
+            col[o * 4] = inkR; col[o * 4 + 1] = inkG
+            col[o * 4 + 2] = inkB; col[o * 4 + 3] = inkA
         }
     }
 
     internal fun writeCapCentre(
         stroke: Stroke, i: Int, t: Vec3, sign: Double,
         pos: FloatArray, nor: FloatArray, col: FloatArray,
+        arcS: Double = 0.0, total: Double = 0.0,
     ) {
+        val sh = shadeAt(stroke, i, arcS, total)
         val slot = if (sign < 0) 0 else 1
         val p = stroke.pts[i].p
         pos[slot * 3] = p.x.toFloat(); pos[slot * 3 + 1] = p.y.toFloat(); pos[slot * 3 + 2] = p.z.toFloat()
         nor[slot * 3] = (t.x * sign).toFloat()
         nor[slot * 3 + 1] = (t.y * sign).toFloat()
         nor[slot * 3 + 2] = (t.z * sign).toFloat()
-        col[slot * 4] = stroke.color.r.toFloat(); col[slot * 4 + 1] = stroke.color.g.toFloat()
-        col[slot * 4 + 2] = stroke.color.b.toFloat(); col[slot * 4 + 3] = stroke.opacity.toFloat()
+        col[slot * 4] = (stroke.color.r + (1.0 - stroke.color.r) * sh.lift).toFloat()
+        col[slot * 4 + 1] = (stroke.color.g + (1.0 - stroke.color.g) * sh.lift).toFloat()
+        col[slot * 4 + 2] = (stroke.color.b + (1.0 - stroke.color.b) * sh.lift).toFloat()
+        col[slot * 4 + 3] = sh.alpha.toFloat()
     }
 
     /** One band of quads between two rings; a closed loop wraps its last onto 0. */

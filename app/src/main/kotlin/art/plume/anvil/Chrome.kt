@@ -137,6 +137,10 @@ class Chrome(private val act: Activity, val t: Tokens) {
     var onFocal: (Double) -> Unit = {}
     var onView: (Int) -> Unit = {}
 
+    /** `#pressSeg` — the brush rail's pressure toggle and its target. */
+    var onPressure: () -> Unit = {}
+    var onPressureTarget: (String) -> Unit = {}
+
     /** The staging bar: Loft's tension, a primitive's segments and taper. */
     var onStageValue: (which: Int, value: Double) -> Unit = { _, _ -> }
     var onPrimKind: (String) -> Unit = {}
@@ -220,6 +224,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
     private val icons = HashMap<String, IcoButton>()
     private val dockButtons = HashMap<String, TextButton>()
     private val primButtons = HashMap<String, TextButton>()
+    private val pressButtons = HashMap<String, TextButton>()
 
     /* Declared up here, not beside sliderRow: init{} builds the popover, and a
        property initialiser that runs after init{} would still be null then. */
@@ -287,6 +292,9 @@ class Chrome(private val act: Activity, val t: Tokens) {
     private lateinit var radialValue: TextView
     private lateinit var focalValue: TextView
     private lateinit var saveState: TextView
+    private lateinit var pressRow: LinearLayout
+    private var pressureOn = true
+    private var pressureTarget = "size"
     private lateinit var stageBar: LinearLayout
     private lateinit var stageRow2: LinearLayout
     private lateinit var primKinds: LinearLayout
@@ -462,7 +470,11 @@ class Chrome(private val act: Activity, val t: Tokens) {
         brushRail.addView(opacityVal, railValueParams())
 
         brushRail.addView(separator(act, t))
-        brushRail.addView(ico("brush", Action.PRESSURE, small = true).also { icons["pressure"] = it })
+        val press = IcoButton(act, t, IcoButton.SIZE_SMALL).icon("brush").apply {
+            setOnClickListener { onPressure() }
+        }
+        icons["pressure"] = press
+        brushRail.addView(press)
         val inject = IcoButton(act, t, IcoButton.SIZE_SMALL).icon("inject")
         inject.setOnClickListener { select(Tool.INJECT) }
         brushRail.addView(inject)
@@ -1169,6 +1181,34 @@ class Chrome(private val act: Activity, val t: Tokens) {
                 opacity = v; onOpacity(v); refresh()
             },
         )
+        /*
+         * `#pressSeg` — which of the four a harder press drives. It lives in
+         * this popover rather than on the rail because it is a setting you
+         * choose once, not a control you reach for mid-stroke.
+         */
+        pressRow = LinearLayout(act).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { topMargin = t.dp(8f) }
+        }
+        for ((key, label) in listOf(
+            "size" to R.string.press_size, "opacity" to R.string.press_opacity,
+            "both" to R.string.press_both, "color" to R.string.press_colour,
+        )) {
+            val b = TextButton(act, t, filled = true, small = true).apply {
+                text = act.getString(label)
+                setOnClickListener { onPressureTarget(key) }
+                layoutParams = LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f,
+                ).apply { marginEnd = t.dp(3f) }
+            }
+            pressButtons[key] = b
+            pressRow.addView(b)
+        }
+        slidePop.addView(pressRow)
+
         slidePop.visibility = View.GONE
         popovers.add(slidePop)
     }
@@ -1847,6 +1887,10 @@ class Chrome(private val act: Activity, val t: Tokens) {
     /** The tool pill's Mirror button lights for either kind of symmetry. */
     fun setSymmetry(on: Boolean) { symmetryOn = on; refresh() }
 
+    fun setPressure(on: Boolean, target: String) {
+        pressureOn = on; pressureTarget = target; refresh()
+    }
+
     fun setLiquify(mode: String, size: Double, range: Double, strength: Double) {
         lqMode = mode; lqSizeV = size; lqRangeV = range; lqStrengthV = strength
         refresh()
@@ -1953,6 +1997,11 @@ class Chrome(private val act: Activity, val t: Tokens) {
         lqSize.text = lqSizeV.toInt().toString()
         lqRange.text = lqRangeV.toInt().toString()
         lqStrength.text = lqStrengthV.toInt().toString()
+        icons["pressure"]?.on = pressureOn
+        for ((k, b) in pressButtons) b.on = k == pressureTarget
+        /* with pressure off there is nothing for the target to target */
+        pressRow.alpha = if (pressureOn) 1f else 0.3f
+        for (b in pressButtons.values) b.isEnabled = pressureOn
         icons["mirror"]?.on = symmetryOn
         icons["stage"]?.on =
             if (compact) isSheetOpen(stagePanel) else stagePanel.visibility == View.VISIBLE
