@@ -5,7 +5,7 @@ genuinely depends on what. Each phase ends with something you can hold in your
 hand — not a milestone on paper — and each one's logic goes into the tested
 core before anything draws it.
 
-**62 items · 27 complete · ~10,800 lines of web build to port · ~65% of it is
+**62 items · 38 complete · ~10,800 lines of web build to port · ~65% of it is
 pure logic that transfers with tests.**
 
 ---
@@ -130,26 +130,54 @@ there is now a test that states the fact outright.
 
 ---
 
-## Phase 03 — Editing tools
+## Phase 03 — Editing tools `11 OF 13`
 
 *Everything that changes a curve after it is drawn.*
 
-- [ ] Erase, with splitting — `eraseScreen`, `eraseSphere`
-- [ ] Vacuum — `vacuumAt`
-- [ ] Smooth — `stepSmooth` + reprojection
-- [ ] Liquify: push, pinch, comb — `liquifyApply`
-- [ ] Select: tap, sweep, long-press — `tapSelect`, `sweepSelect`
-- [ ] Lasso, with a visible boundary — `stepLasso`
-- [ ] Transform — needs a touch gizmo, not the desktop joystick
-- [ ] Duplicate, mirrored duplicate — `duplicateSelection`
-- [ ] Groups: create, delete, rename, hide, assign
-- [ ] Restyle a selection from the brush panel — `S.restyle`
-- [ ] Fill a whole guide — `fillGuide`
-- [ ] Shape snapping: line, curve, circle; hold-to-adjust; press-hold circle
-- [ ] Symmetry: mirror X/Z, radial n-fold, fold indicator
+- [x] Erase, with splitting — `eraseScreen`, `eraseSphere`
+- [x] Vacuum — `vacuumAt`
+- [x] Smooth — `stepSmooth` + reprojection
+- [x] Liquify: push, pinch, comb — `liquifyApply`
+- [x] Select: tap and sweep — `tapSelect`, `sweepSelect` (long-press on a group row is Phase 6)
+- [x] Lasso, with a visible boundary — `stepLasso`
+- [ ] Transform — the maths is done; it still needs a touch gizmo, not the desktop joystick
+- [x] Duplicate, mirrored duplicate — `duplicateSelection`
+- [x] Groups: create, delete, rename, hide, assign (no panel yet — Phase 6)
+- [x] Restyle a selection from the brush panel — `S.restyle`
+- [x] Fill a whole guide — `fillGuide`
+- [x] Shape snapping: line, curve, circle; hold-to-adjust (not on the pen path yet)
+- [x] Symmetry: mirror X/Z, radial n-fold (the fold indicator is a render pass, Phase 5)
 
 **Done when:** every tool in the web toolbar has a touch equivalent, and each
 one is undoable in a single step.
+
+**Where it stands.** Eleven of thirteen, and the "undoable in a single step"
+half is met: a sweep of the eraser that cuts a line into six pieces undoes in
+one tap, and a minute of pushing with Liquify undoes at once. 165 core tests, up
+from 112.
+
+Two are genuinely not done. **Transform** has its maths — the matrix carries the
+frozen frame so a rotated curve keeps its shape, and a uniform scale scales the
+nib while a stretch does not — but no touch gizmo to drive it, and the desktop
+joystick is exactly what must not be ported. **Shape snapping** is fitted and
+tested but is not on the pen path yet: it needs the press-and-hold timer wired
+into the stroke, which is interaction rather than logic. Groups and the fold
+indicator have their logic and want a panel and a render pass respectively.
+
+Three things the tests turned up:
+
+- **The sweep never tested the press point itself.** Stepping from the origin
+  starts one whole step past it, so a curve lying exactly under the finger is
+  sampled 4px away and missed whenever the tube is thinner than that — about
+  3.6px for a 14mm brush at a normal zoom. That is the very stroke a sweep is
+  meant to begin with. **The web build has the same gap**, hidden because a real
+  hand moves slowly at the start.
+- **`setStrokes` re-uploaded every stroke's GL buffers.** Harmless while only
+  undo called it; the eraser calls it on every pointer sample, so a drag across
+  two hundred curves re-uploaded all two hundred at 120 Hz.
+- A test that laid its stroke along the guide's **ruled** direction proved
+  nothing, because a swept surface is dead straight that way and smoothing could
+  never pull the stroke off it.
 
 ---
 

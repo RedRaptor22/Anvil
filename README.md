@@ -27,7 +27,7 @@ someone's phone drawing differently.
 |---|---|---|
 | language | ES5 JavaScript | Kotlin |
 | renderer | Three.js r128 (WebGL) | OpenGL ES 3.0, direct |
-| tests | 584 in-browser checks | 112 JVM unit tests |
+| tests | 584 in-browser checks | 165 JVM unit tests |
 | ships as | a URL | an APK |
 
 ## Modules
@@ -69,7 +69,7 @@ echo "sdk.dir=/path/to/Android/sdk" > local.properties
 
 ## What actually works
 
-Verified by `./gradlew :core:test` — 112 tests, all passing:
+Verified by `./gradlew :core:test` — 165 tests, all passing:
 
 - **Rotation-minimising frames** by double reflection (Wang et al. 2008), the
   same algorithm as the web build. Orthonormal along a helix to 1e-9, finite and
@@ -112,6 +112,14 @@ Verified by `./gradlew :core:test` — 112 tests, all passing:
   one would; a stroke running off the edge clamps back and is lit the same way
   a hit is; and on a flat guide the nib is trimmed against the outline you drew
   rather than its bounding box.
+- **The editing tools.** The eraser clips its disc against the centreline as a
+  continuous polyline, so a thin eraser cuts a segment it crosses even when no
+  sample is inside the disc — there is a test that builds exactly that case.
+  Smoothing pins the ends and reprojects onto the guide, so paint stays where it
+  was painted. Liquify's pinch cannot overshoot the cursor. A fill rounds its
+  row count UP, because rounding down leaves a groove down every seam, and
+  breaks a row into separate strokes where it leaves the shape and comes back.
+  Draw Shape refuses to close an arc into the circle it happens to fit.
 - **Bend and Loft.** A bent guide follows the stroke whichever way it was drawn
   — four primitives are bent along three directions each and checked to lean the
   way the pen went, because the web build's version deformed along local +X
@@ -167,17 +175,24 @@ On an empty page the first stroke becomes a **guide** — a translucent,
 grid-lined surface extruded away from you along the view. Orbit, and you are
 looking at a sheet you can draw on; the pen then paints onto that surface
 rather than onto the screen plane, clamping back to the nearest point if you
-run off the edge. There is no brush picker and no file handling yet — that is
-the current state, not a fault. Artifacts expire after 90 days.
+run off the edge.
+
+A scrolling tool row reaches draw, erase, vacuum, smooth, select, lasso,
+liquify and the two guide kinds; beside it, fill, duplicate, mirror and delete.
+Every gesture undoes in one step. There is no brush picker, no transform gizmo
+and no file handling yet — that is the current state, not a fault. Artifacts
+expire after 90 days.
 
 ## Not yet ported
 
 Roughly in the order they matter:
 
-1. **The editing tools** — erase, smooth, liquify, select, lasso, transform,
-   fill, symmetry. These are what "a stroke stays on its guide under every
-   tool" actually means, and none of them exist yet.
-2. **The interface.** The bottom bar is a floor, not a design. Deliberately not
+1. **Files** — save and load, and the same format the web build reads. Until a
+   sketch can move between the two, "measures identically in both builds" is
+   untested.
+2. **A transform gizmo**, which is the one editing tool with no touch
+   equivalent yet.
+3. **The interface.** The bottom bar is a floor, not a design. Deliberately not
    transliterated: a phone wants a bottom sheet and a radial menu, not the
    desktop's 58px vertical rail.
 3. Document save/load, export (OBJ/STL/glTF), lighting controls, the post pass,
