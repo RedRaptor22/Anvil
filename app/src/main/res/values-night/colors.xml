@@ -14,7 +14,7 @@
     <color name="active">#f0f0f5</color>
     <color name="onActive">#1b1c21</color>
 
-    <!-- dark --shadow is 0 8px 26px rgba(0,0,0,.42): pure black, heavier -->
+    <!-- dark shadow is 0 8px 26px rgba(0,0,0,.42): pure black, heavier -->
     <color name="shadowTint">#000000</color>
 
     <color name="scrim">#80000000</color>         <!-- rgba(0,0,0,.5) -->

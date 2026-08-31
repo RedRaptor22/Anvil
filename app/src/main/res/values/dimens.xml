@@ -7,7 +7,7 @@
      rounded to a "nicer" value.
      ====================================================================== -->
 <resources>
-    <!-- radii: --rCard / --rBtn, and the icon button's own 12px -->
+    <!-- radii: rCard / rBtn, and the icon button's own 12px -->
     <dimen name="rCard">22dp</dimen>
     <dimen name="rBtn">14dp</dimen>
     <dimen name="rIco">12dp</dimen>
@@ -15,7 +15,7 @@
     <dimen name="rTile">11dp</dimen>       <!-- #brushGrid button -->
     <dimen name="rSheet">24dp</dimen>      <!-- compact sheets: 24 24 0 0 -->
 
-    <!-- .panel { box-shadow: var(--shadow) } and .shadowLg -->
+    <!-- .panel { box-shadow: var(shadow) } and .shadowLg -->
     <dimen name="elevPanel">8dp</dimen>
     <dimen name="elevPanelLg">18dp</dimen>
 

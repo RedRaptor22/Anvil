@@ -270,7 +270,7 @@ class MainActivity : Activity(), Gestures.Listener {
         chrome.onTool = { t -> setTool(t) }
         chrome.onAction = { a -> doAction(a) }
         chrome.onSizeMm = { mm -> sizeMM = mm }
-        chrome.onOpacity = { o -> opacity = o }
+        chrome.onOpacity = { o -> applyOpacityToSelectionOrBrush(o) }
         chrome.onBrush = { b -> brush = b }
         chrome.onColor = { argb -> applyColorToSelectionOrBrush(rgbaOf(argb)) }
         chrome.onGuideOpacity = { v ->
@@ -538,7 +538,9 @@ class MainActivity : Activity(), Gestures.Listener {
     // ---- drawing -----------------------------------------------------------
 
     private fun beginStroke(x: Float, y: Float, pressure: Float, tiltAz: Float) {
-        val s = Stroke(brush = brush, color = color, baseRadius = sizeMM * MM * 0.5)
+        val s = Stroke(
+            brush = brush, color = color, baseRadius = sizeMM * MM * 0.5, opacity = opacity,
+        )
         stabilizer.reset()
         stabilizer.next(x.toDouble(), y.toDouble())
         synchronized(liveBuffer) {
@@ -763,6 +765,36 @@ class MainActivity : Activity(), Gestures.Listener {
         )
     }
 
+    /**
+     * The same rule as the colour swatches, and for the same reason: in the web
+     * build the brush panel restyles a live selection rather than only setting
+     * what the next stroke will be (`applyStyle({opacity: …})` in dragValue).
+     *
+     * Committed on release rather than on every sample of the drag — the value
+     * is read off the ORIGINAL opacities each time, so a slide that passes
+     * through 40% on its way to 10% still undoes in one step back to where it
+     * started, and cannot compound.
+     */
+    private fun applyOpacityToSelectionOrBrush(o: Double) {
+        opacity = o
+        val sel = sketch.selection
+        if (sel.isEmpty()) return
+        val was = sel.map { it.opacity }
+        history.run(
+            Step(
+                "Opacity",
+                onRedo = {
+                    Selection.restyle(sel, StyleChange(opacity = o))
+                    refreshScene()
+                },
+                onUndo = {
+                    for (i in sel.indices) sel[i].opacity = was[i]
+                    refreshScene()
+                },
+            ),
+        )
+    }
+
     private fun applyColorToSelectionOrBrush(ink: Rgba) {
         color = ink
         val sel = sketch.selection
@@ -837,7 +869,9 @@ class MainActivity : Activity(), Gestures.Listener {
 
     private fun fillActiveGuide() {
         val g = guides.active ?: run { toast("Select a guide to fill"); return }
-        val proto = Stroke(brush = brush, color = color, baseRadius = sizeMM * MM * 0.5)
+        val proto = Stroke(
+            brush = brush, color = color, baseRadius = sizeMM * MM * 0.5, opacity = opacity,
+        )
         when (val r = Fill.fillGuide(g, proto)) {
             is Fill.Result.Refused -> toast(r.reason)
             is Fill.Result.Filled -> {
@@ -965,6 +999,7 @@ class MainActivity : Activity(), Gestures.Listener {
         docTool.brush = brush
         docTool.color = color
         docTool.sizeMM = sizeMM
+        docTool.opacity = opacity
         docTool.autoGuide = autoGuide
         docEnv.background = renderer.background
         return Document.toJsonText(sketch, guides, camera, docEnv, docTool, carried)
@@ -1006,6 +1041,7 @@ class MainActivity : Activity(), Gestures.Listener {
         brush = r.tool.brush
         color = r.tool.color
         sizeMM = clamp(r.tool.sizeMM, Tune.BRUSH_MIN_MM, Tune.BRUSH_MAX_MM)
+        opacity = clamp(r.tool.opacity, 0.05, 1.0)
         autoGuide = r.tool.autoGuide
         renderer.background = r.env.background
         renderer.showGrid = r.env.grid
@@ -1052,6 +1088,7 @@ class MainActivity : Activity(), Gestures.Listener {
         brush = r.tool.brush
         color = r.tool.color
         sizeMM = clamp(r.tool.sizeMM, Tune.BRUSH_MIN_MM, Tune.BRUSH_MAX_MM)
+        opacity = clamp(r.tool.opacity, 0.05, 1.0)
         autoGuide = r.tool.autoGuide
         renderer.background = r.env.background
     }

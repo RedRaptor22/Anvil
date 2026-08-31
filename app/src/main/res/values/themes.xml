@@ -3,7 +3,7 @@
     <!--
       No ActionBar: the surface is the whole app.
 
-      The window background is Plume's --bg rather than black, so the split
+      The window background is Plume's page colour rather than black, so the split
       second before the first GL frame lands is the same paper the sketch will
       be drawn on. values-night/ carries the dark half, which is `body.dark`.
     -->

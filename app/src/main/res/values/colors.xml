@@ -7,8 +7,8 @@
        · soft diffuse shadow instead of outlines
        · abstract monochrome line icons, never filled pictograms
        · ACTIVE = a filled glyph on a soft tint, not a colour accent
-     Names are the CSS custom-property names with the -- dropped, so a
-     value here can be diffed against the web build by eye. Do not
+     Names are the CSS custom-property names with the leading dashes
+     dropped, so a value here can be diffed against the web build by eye. Do not
      "improve" one of these in isolation: they are a set.
 
      values-night/ carries the body.dark block, and Plume switches on the
@@ -34,11 +34,11 @@
     <color name="red">#f2545b</color>
 
     <!-- Android has one shadow colour per elevation, not a two-part CSS
-         shadow; this is the ambient term of --shadow with the alpha the
-         umbra contributes folded in, which reads the same at 8dp. -->
+         shadow; this is the ambient term of the shadow token,
+         with the alpha the umbra contributes folded in, which reads the same at 8dp. -->
     <color name="shadowTint">#161630</color>
 
-    <!-- lasso: fill rgba(91,157,255,.18), stroke var(--blue) -->
+    <!-- lasso: fill rgba(91,157,255,.18), stroke the blue token -->
     <color name="lassoFill">#2e5b9dff</color>
     <color name="lassoStroke">#5b9dff</color>
 
