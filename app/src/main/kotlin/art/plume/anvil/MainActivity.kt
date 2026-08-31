@@ -233,6 +233,7 @@ class MainActivity : Activity(), Gestures.Listener {
 
         history.addListener { refreshControls() }
         restoreAutosave()
+        refreshGroups()
         refreshControls()
         syncBrushControls()
         renderer.setStrokes(sketch.strokes)
@@ -318,6 +319,34 @@ class MainActivity : Activity(), Gestures.Listener {
             chrome.closePopovers()
             setTool(Tool.EYEDROP)
             toast(getString(R.string.eyedrop_hint))
+        }
+        chrome.onGroupPick = { id -> sketch.setActiveGroup(id); refreshGroups() }
+        chrome.onGroupRename = { id, name ->
+            sketch.groupById(id)?.let { g ->
+                val was = g.name
+                history.run(
+                    Step(
+                        "Rename group",
+                        onRedo = { g.name = name; refreshGroups() },
+                        onUndo = { g.name = was; refreshGroups() },
+                    ),
+                )
+            }
+        }
+        chrome.onGroupSelect = { id ->
+            val before = sketch.selection
+            sketch.selectOnly(sketch.membersOf(id))
+            commitSelectionChange("Select group", before)
+        }
+        chrome.onGroupAssign = { id -> assignSelectionTo(id) }
+        chrome.onGroupVisible = { id, visible -> setGroupVisible(id, visible) }
+        chrome.onGroupNew = { newGroup() }
+        chrome.onGroupDuplicate = { duplicateActiveGroup() }
+        chrome.onGroupDelete = { deleteActiveGroup() }
+        chrome.onSelectAll = {
+            val before = sketch.selection
+            sketch.selectOnly(sketch.editable())
+            commitSelectionChange("Select all", before)
         }
         chrome.onStageValue = { which, v -> stageValue(which, v) }
         chrome.onPrimKind = { k -> primKind = k; previewPrimitive() }
@@ -634,6 +663,115 @@ class MainActivity : Activity(), Gestures.Listener {
         surface.requestRender()
     }
 
+    // ---- groups (C.8) ------------------------------------------------------
+
+    /** The Curves tab, rebuilt from the sketch. */
+    private fun refreshGroups() {
+        sketch.ensureGroup()
+        chrome.setGroups(
+            sketch.groups.map { g ->
+                Chrome.GroupRow(
+                    g.id, g.name, sketch.membersOf(g.id).size, g.visible,
+                    g.id == sketch.activeGroup,
+                )
+            },
+        )
+        refreshControls()
+    }
+
+    private fun newGroup() {
+        val g = sketch.newGroup(getString(R.string.group_new, sketch.groups.size + 1))
+        val previous = sketch.activeGroup
+        history.run(
+            Step(
+                "New group",
+                onRedo = { sketch.setActiveGroup(g.id); refreshGroups() },
+                onUndo = { sketch.setActiveGroup(previous); refreshGroups() },
+            ),
+        )
+    }
+
+    /**
+     * Hiding a group hides its curves, so the meshes have to be rebuilt: the
+     * renderer draws what it is given rather than asking whether each stroke
+     * is visible.
+     */
+    private fun setGroupVisible(id: Int, visible: Boolean) {
+        val g = sketch.groupById(id) ?: return
+        history.run(
+            Step(
+                if (visible) "Show group" else "Hide group",
+                onRedo = { g.visible = visible; refreshScene(); refreshGroups() },
+                onUndo = { g.visible = !visible; refreshScene(); refreshGroups() },
+            ),
+        )
+    }
+
+    private fun assignSelectionTo(id: Int) {
+        val sel = sketch.selection
+        if (sel.isEmpty()) { toast(getString(R.string.nothing_selected)); return }
+        val g = sketch.groupById(id) ?: return
+        val was = sel.map { it.group }
+        history.run(
+            Step(
+                "Move to group",
+                onRedo = { for (s in sel) sketch.assign(s, g); refreshScene(); refreshGroups() },
+                onUndo = {
+                    for (i in sel.indices) sel[i].group = was[i]
+                    refreshScene(); refreshGroups()
+                },
+            ),
+        )
+        toast(getString(R.string.moved_to_group, sel.size, g.name))
+    }
+
+    private fun duplicateActiveGroup() {
+        val g = sketch.groupById(sketch.activeGroup) ?: return
+        val (copy, copies) = sketch.duplicateGroup(g)
+        val previous = sketch.activeGroup
+        history.run(
+            Step(
+                "Duplicate group", cost = copies.sumOf { it.pts.size },
+                onRedo = {
+                    for (c in copies) if (sketch.indexOf(c) < 0) sketch.add(c)
+                    sketch.setActiveGroup(copy.id); refreshScene(); refreshGroups()
+                },
+                onUndo = {
+                    for (c in copies) sketch.remove(c)
+                    sketch.setActiveGroup(previous); refreshScene(); refreshGroups()
+                },
+            ),
+        )
+        toast(getString(R.string.group_duplicated, copies.size))
+    }
+
+    /**
+     * FACT (C.8): deleting a group frees its curves rather than taking them
+     * with it. Removing a folder should not remove the work in it, and there
+     * is no undo prompt that makes the other reading safe.
+     */
+    private fun deleteActiveGroup() {
+        val g = sketch.groupById(sketch.activeGroup) ?: return
+        if (sketch.groups.size <= 1) { toast(getString(R.string.last_group)); return }
+        val members = sketch.membersOf(g.id)
+        val previous = sketch.activeGroup
+        history.run(
+            Step(
+                "Delete group",
+                onRedo = {
+                    sketch.deleteGroup(g)
+                    sketch.setActiveGroup(null); refreshScene(); refreshGroups()
+                },
+                onUndo = {
+                    sketch.restoreGroup(g)
+                    for (s in members) s.group = g.id
+                    sketch.setActiveGroup(previous); refreshScene(); refreshGroups()
+                },
+            ),
+        )
+        toast(getString(R.string.group_deleted, members.size))
+    }
+
     /** `UI.refresh` — push the model back at the chrome and let it re-derive. */
     private fun refreshControls() {
         chrome.setHistory(history.canUndo(), history.canRedo())
@@ -805,6 +943,7 @@ class MainActivity : Activity(), Gestures.Listener {
         val s = Stroke(
             brush = brush, color = color, baseRadius = sizeMM * MM * 0.5, opacity = opacity,
         )
+        s.group = sketch.ensureGroup().id
         stabilizer.reset()
         stabilizer.next(x.toDouble(), y.toDouble())
         liveScreen.clear()
@@ -1591,6 +1730,7 @@ class MainActivity : Activity(), Gestures.Listener {
         opacity = clamp(r.tool.opacity, 0.05, 1.0)
         autoGuide = r.tool.autoGuide
         applyEnvironment(r.env)
+        refreshGroups()
         renderer.showGrid = r.env.grid
         renderer.showAxis = r.env.axis
         history.clear()
@@ -1638,6 +1778,7 @@ class MainActivity : Activity(), Gestures.Listener {
         opacity = clamp(r.tool.opacity, 0.05, 1.0)
         autoGuide = r.tool.autoGuide
         applyEnvironment(r.env)
+        refreshGroups()
     }
 
     // ---- keeping the screen in step -------------------------------------------

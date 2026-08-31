@@ -70,7 +70,6 @@
     <string name="opt_dof">DOF</string>
     <string name="opt_grain">Grain</string>
     <string name="opt_pixel">Pixel</string>
-    <string name="not_yet_groups">The groups panel is not built yet. Grouping, hiding and reordering all work in the engine and are under test; only the list is missing.</string>
     <string name="not_yet_import">Importing a photo or a model to trace over is not wired up yet. OBJ and STL both read, and an imported mesh becomes a guide you can paint on.</string>
 
     <!-- the staging bar -->
@@ -96,6 +95,17 @@
     <string name="shape_circle">Circle%1$s — drag to size it</string>
     <string name="shape_line">Straight%1$s — drag the end</string>
     <string name="shape_curve">Smoothed%1$s — drag to bend it</string>
+
+    <!-- the Curves tab -->
+    <string name="select_all">Select all</string>
+    <string name="group_hint">Tap a row to draw into it, its name to rename · hold to select its curves · the arrow moves the selection in</string>
+    <string name="group_new">Group %1$d</string>
+
+    <string name="nothing_selected">Nothing selected</string>
+    <string name="moved_to_group">Moved %1$d into %2$s</string>
+    <string name="group_duplicated">Duplicated %1$d curves</string>
+    <string name="group_deleted">Group deleted, %1$d curves kept</string>
+    <string name="last_group">The last group cannot be deleted</string>
 
     <string name="nothing_under_that">Nothing under that</string>
     <string name="bad_hex">Not a colour — six hex digits, or three</string>

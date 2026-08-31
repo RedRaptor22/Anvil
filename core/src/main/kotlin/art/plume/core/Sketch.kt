@@ -75,6 +75,63 @@ class Sketch {
 
     fun assign(s: Stroke, g: StrokeGroup?) { s.group = g?.id }
 
+    /**
+     * Put a deleted group back where it was, for undo. Its curves are
+     * re-pointed at it by the caller, which is the only party that still knows
+     * which ones they were.
+     */
+    fun restoreGroup(g: StrokeGroup, at: Int = groupList.size) {
+        if (groupList.any { it.id == g.id }) return
+        groupList.add(clamp(at, 0, groupList.size), g)
+    }
+
+    /** Every curve in a group, in draw order. */
+    fun membersOf(id: Int?): List<Stroke> = list.filter { it.group == id }
+
+    /**
+     * The group new curves are drawn into.
+     *
+     * Null means the default group, which [ensureGroup] guarantees exists —
+     * the panel needs a row to show even for a sketch nobody has organised,
+     * and "ungrouped" as a special case that behaves almost but not quite like
+     * a group is worse than a group called Group 1.
+     */
+    var activeGroup: Int? = null
+        private set
+
+    fun setActiveGroup(id: Int?) {
+        activeGroup = if (id != null && groupById(id) != null) id else null
+    }
+
+    /** There is always at least one group, and always an active one. */
+    fun ensureGroup(): StrokeGroup {
+        if (groupList.isEmpty()) {
+            val g = newGroup("Group 1")
+            /* everything drawn before there were groups belongs to the first */
+            for (s in list) if (s.group == null) s.group = g.id
+        }
+        val active = groupById(activeGroup)
+        if (active == null) activeGroup = groupList[0].id
+        return groupById(activeGroup)!!
+    }
+
+    /**
+     * A copy of the group and of every curve in it.
+     *
+     * The copies go in AFTER the originals rather than at the end of the
+     * document, so a duplicated group stays next to what it was copied from in
+     * draw order — which is what decides who is on top.
+     */
+    fun duplicateGroup(g: StrokeGroup): Pair<StrokeGroup, List<Stroke>> {
+        val copy = newGroup(g.name + " copy")
+        copy.visible = g.visible
+        val members = membersOf(g.id)
+        val copies = members.map { m -> m.copyStroke().also { c -> c.group = copy.id } }
+        var at = members.lastOrNull()?.let { list.indexOf(it) + 1 } ?: list.size
+        for (c in copies) { list.add(clamp(at, 0, list.size), c); at++ }
+        return copy to copies
+    }
+
     /** A curve is visible unless the group holding it is hidden. */
     fun visible(s: Stroke): Boolean = groupById(s.group)?.visible ?: true
 

@@ -108,6 +108,17 @@ class Chrome(private val act: Activity, val t: Tokens) {
     var onWheel: (Rgba) -> Unit = {}
     var onEyedrop: () -> Unit = {}
 
+    /** The Curves tab. */
+    var onGroupPick: (Int) -> Unit = {}
+    var onGroupRename: (id: Int, name: String) -> Unit = { _, _ -> }
+    var onGroupSelect: (Int) -> Unit = {}
+    var onGroupAssign: (Int) -> Unit = {}
+    var onGroupVisible: (id: Int, visible: Boolean) -> Unit = { _, _ -> }
+    var onGroupNew: () -> Unit = {}
+    var onGroupDuplicate: () -> Unit = {}
+    var onGroupDelete: () -> Unit = {}
+    var onSelectAll: () -> Unit = {}
+
     /** The staging bar: Loft's tension, a primitive's segments and taper. */
     var onStageValue: (which: Int, value: Double) -> Unit = { _, _ -> }
     var onPrimKind: (String) -> Unit = {}
@@ -221,6 +232,10 @@ class Chrome(private val act: Activity, val t: Tokens) {
     private lateinit var lightSwatch: View
     private lateinit var hexField: EditText
     private lateinit var colorWheel: ColorWheel
+    private lateinit var groupList: LinearLayout
+
+    /** The group being renamed, so a refresh cannot yank the field away. */
+    private var renaming: Int? = null
     private lateinit var stageBar: LinearLayout
     private lateinit var stageRow2: LinearLayout
     private lateinit var primKinds: LinearLayout
@@ -616,7 +631,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
             ).apply { bottomMargin = t.dp(10f) },
         )
 
-        bodies.add(gap(R.string.not_yet_groups))
+        bodies.add(buildCurvesTab())
         bodies.add(gap(R.string.not_yet_import))
         bodies.add(buildSceneTab())
         for ((i, b) in bodies.withIndex()) {
@@ -637,6 +652,190 @@ class Chrome(private val act: Activity, val t: Tokens) {
         layoutParams = LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
         )
+    }
+
+    /**
+     * `#bodyGroup` — one row per group: the name, how many curves are in it,
+     * the arrow that moves the selection in, and the eye.
+     */
+    private fun buildCurvesTab(): View {
+        val col = LinearLayout(act).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            )
+        }
+        val head = LinearLayout(act).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        head.addView(
+            IcoButton(act, t, IcoButton.SIZE_SMALL).icon("trash").apply {
+                danger = true
+                setOnClickListener { onGroupDelete() }
+            },
+        )
+        head.addView(
+            IcoButton(act, t, IcoButton.SIZE_SMALL).icon("dup").apply {
+                setOnClickListener { onGroupDuplicate() }
+            },
+        )
+        head.addView(
+            View(act),
+            LinearLayout.LayoutParams(0, 1, 1f),
+        )
+        head.addView(
+            IcoButton(act, t, IcoButton.SIZE_SMALL).icon("plus").apply {
+                setOnClickListener { onGroupNew() }
+            },
+        )
+        col.addView(head, matchWrap(0))
+
+        groupList = LinearLayout(act).apply { orientation = LinearLayout.VERTICAL }
+        col.addView(groupList, matchWrap(t.dp(6f)))
+
+        col.addView(gap(R.string.group_hint))
+
+        val row = LinearLayout(act).apply { orientation = LinearLayout.HORIZONTAL }
+        for ((label, click) in listOf<Pair<Int, () -> Unit>>(
+            R.string.select_all to { onSelectAll() },
+            R.string.duplicate to { onAction(Action.DUPLICATE) },
+            R.string.delete to { onAction(Action.DELETE) },
+        )) {
+            row.addView(
+                TextButton(act, t, filled = true, small = true).apply {
+                    text = act.getString(label)
+                    setOnClickListener { click() }
+                    layoutParams = LinearLayout.LayoutParams(
+                        0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f,
+                    ).apply { marginEnd = t.dp(4f) }
+                },
+            )
+        }
+        col.addView(row, matchWrap(t.dp(6f)))
+        return col
+    }
+
+    /** What the Curves tab is showing. */
+    class GroupRow(
+        val id: Int,
+        val name: String,
+        val count: Int,
+        val visible: Boolean,
+        val active: Boolean,
+    )
+
+    fun setGroups(rows: List<GroupRow>) {
+        if (renaming != null) return          // never yank the box out mid-rename
+        groupList.removeAllViews()
+        for (g in rows) groupList.addView(groupRow(g))
+    }
+
+    /** `.grpRow` — the active one is outlined, a hidden one is dimmed. */
+    private fun groupRow(g: Chrome.GroupRow): View {
+        val row = LinearLayout(act).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = GradientDrawable().apply {
+                setColor(if (g.active) t.panel3 else t.panel2)
+                cornerRadius = t.dpf(12f)
+                setStroke(t.dp(1.5f), if (g.active) t.ink else 0x00000000)
+            }
+            setPadding(t.dp(8f), t.dp(5f), t.dp(4f), t.dp(5f))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { topMargin = t.dp(4f) }
+        }
+
+        val name = TextView(act).apply {
+            text = g.name
+            setTextColor(t.ink)
+            textSize = 13f
+            alpha = if (g.visible) 1f else 0.45f
+            isSingleLine = true
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            setPadding(t.dp(2f), t.dp(3f), t.dp(2f), t.dp(3f))
+            layoutParams = LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f,
+            )
+            /*
+             * Tap the name of the group you are IN to rename it. On any other
+             * row a tap selects that row first — the same slow double-tap
+             * every file list uses, and it leaves the whole row as a target
+             * for switching groups rather than a sliver beside the name.
+             */
+            setOnClickListener {
+                if (g.active) beginRename(row, this, g) else onGroupPick(g.id)
+            }
+        }
+        row.addView(name)
+
+        row.addView(
+            TextView(act).apply {
+                text = if (g.count > 0) g.count.toString() else ""
+                setTextColor(t.dim2)
+                textSize = 10f
+                alpha = if (g.visible) 1f else 0.45f
+                setPadding(t.dp(2f), 0, t.dp(2f), 0)
+            },
+        )
+        row.addView(
+            IcoButton(act, t, IcoButton.SIZE_TINY).icon("enter").apply {
+                setOnClickListener { onGroupAssign(g.id) }
+            },
+        )
+        row.addView(
+            IcoButton(act, t, IcoButton.SIZE_TINY)
+                .icon(if (g.visible) "eye" else "eye_off").apply {
+                    if (!g.visible) {
+                        imageTintList = android.content.res.ColorStateList.valueOf(t.dim2)
+                    }
+                    setOnClickListener { onGroupVisible(g.id, !g.visible) }
+                },
+        )
+
+        /* tap the row to make it active, hold to select everything in it */
+        row.setOnClickListener { onGroupPick(g.id) }
+        row.setOnLongClickListener { onGroupSelect(g.id); true }
+        return row
+    }
+
+    /** Rename in place: the label becomes a field, and Done commits it. */
+    private fun beginRename(row: LinearLayout, label: TextView, g: Chrome.GroupRow) {
+        renaming = g.id
+        val at = row.indexOfChild(label)
+        val field = EditText(act).apply {
+            setText(g.name)
+            setSelection(g.name.length)
+            setTextColor(t.ink)
+            textSize = 13f
+            isSingleLine = true
+            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_DONE
+            background = GradientDrawable().apply {
+                setColor(t.panel)
+                cornerRadius = t.dpf(7f)
+                setStroke(t.dp(1.5f), t.ink)
+            }
+            setPadding(t.dp(4f), t.dp(3f), t.dp(4f), t.dp(3f))
+            layoutParams = LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f,
+            )
+        }
+        fun finish() {
+            if (renaming == null) return
+            renaming = null
+            val text = field.text.toString().trim()
+            row.removeView(field)
+            row.addView(label, at)
+            /* an empty name is not a rename: a row you cannot read is worse
+               than the name you were trying to replace */
+            if (text.isNotEmpty() && text != g.name) onGroupRename(g.id, text)
+        }
+        field.setOnEditorActionListener { _, _, _ -> finish(); true }
+        field.setOnFocusChangeListener { _, has -> if (!has) finish() }
+        row.removeView(label)
+        row.addView(field, at)
+        field.requestFocus()
     }
 
     private fun buildSceneTab(): View {
