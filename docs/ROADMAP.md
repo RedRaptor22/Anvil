@@ -333,6 +333,39 @@ comment justifying it.
 The lesson for what is left: a comment explaining why this port differs from
 the reference is a place to look first, not a decision that has been made.
 
+### A second round, and a second kind of fault
+
+Three more came back from the device. Two were the same shape as the ten
+above:
+
+- **The long press with Select did nothing**, because `longPressSelect` was
+  never ported and the hold clock only ran for a pointer that was not
+  drawing — so with Select in hand there was no hold to fire. Fixing it
+  meant building what the toast promised as well: a guide had no way to be
+  moved at all, since the web build parks a matrix on its scene object and
+  this build has no scene graph.
+- **The joystick's panel was 112dp because the CSS says 112px.** A CSS pixel
+  of Plume's 11px UI font is not a dp of Android's system font, and the
+  three labels that fit in the browser came out stacked two lines high.
+  Transcribing a measurement is not the same as transcribing a fit.
+
+The third is a category this file did not have, and it is worth naming
+because it changes where to look:
+
+**PLUME IS NOT ALWAYS FEATHER.** Finger drawing was a checkbox in the Input
+list here because it is a checkbox in Plume — and Plume is a desktop-first
+web build where the default pointer is a mouse and the setting is set once.
+Feather's own docs put a Finger-Pen button *at the bottom of the screen*
+and describe it as a mode you flip: "tap Finger-Pen again to deactivate it
+and return to navigation". On a tablet it is flipped constantly, and four
+taps through a menu to orbit the thing you just drew is what made finger
+navigation tiring.
+
+So a faithful port of Plume can still be the wrong Android app. Where Plume
+made a choice that its own medium forced, check what Feather did before
+copying it — and the tell is any control that a tablet user would reach for
+far more often than a laptop user would.
+
 ---
 
 ## Phase 07 — Ship it
