@@ -226,3 +226,73 @@ class TransformTest {
         )
     }
 }
+
+/** Where the symmetry folds, and why it is a plane rather than a line. */
+class SymmetryFoldTest {
+
+    private fun boundsOf(vararg p: Vec3) = Bounds().also { for (v in p) it.add(v) }
+
+    @Test
+    fun `no symmetry means nothing to draw`() {
+        assertNull(Symmetry.fold(boundsOf(Vec3()), null, 1))
+    }
+
+    @Test
+    fun `a mirror gives a quad and its edges`() {
+        val f = assertNotNull(Symmetry.fold(boundsOf(Vec3(-1.0, 0.0, -1.0), Vec3(1.0, 2.0, 1.0)), "x", 1))
+        assertEquals(18, f.fill.size, "two triangles")
+        assertEquals(24, f.edges.size, "four segments")
+        assertEquals(0, f.axisLine.size, "radial is off")
+    }
+
+    /**
+     * Mirroring across X leaves the Z axis lying IN the plane, so every corner
+     * of the quad has x = 0. Getting this the other way round draws the fold
+     * at ninety degrees to where the strokes actually meet.
+     */
+    @Test
+    fun `the plane lies where the reflection meets its original`() {
+        val b = boundsOf(Vec3(-1.0, 0.0, -3.0), Vec3(1.0, 2.0, 3.0))
+        val x = assertNotNull(Symmetry.fold(b, "x", 1))
+        for (i in x.fill.indices step 3) assertEquals(0f, x.fill[i], 1e-6f, "x at $i")
+        val z = assertNotNull(Symmetry.fold(b, "z", 1))
+        for (i in 2 until z.fill.size step 3) assertEquals(0f, z.fill[i], 1e-6f, "z at $i")
+    }
+
+    /** Radial folds about a LINE, so that one is a line. */
+    @Test
+    fun `radial alone gives the upright axis and no plane`() {
+        val f = assertNotNull(Symmetry.fold(boundsOf(Vec3(0.0, 0.0, 0.0), Vec3(1.0, 4.0, 1.0)), null, 6))
+        assertEquals(0, f.fill.size)
+        assertEquals(6, f.axisLine.size)
+        assertEquals(0f, f.axisLine[0], 1e-6f)
+        assertEquals(0f, f.axisLine[2], 1e-6f)
+        assertTrue(f.axisLine[4] > f.axisLine[1], "it runs upwards")
+    }
+
+    /**
+     * A minimum SIZE centred on the work, not a minimum reach from the origin.
+     * Forcing it to straddle zero left the fold hanging below a sketch that
+     * happened to sit above it, pointing at nothing.
+     */
+    @Test
+    fun `the fold is centred on the work, not on the origin`() {
+        val high = boundsOf(Vec3(-0.1, 8.0, -0.1), Vec3(0.1, 8.4, 0.1))
+        val f = assertNotNull(Symmetry.fold(high, "x", 1))
+        var lo = Float.MAX_VALUE
+        var hi = -Float.MAX_VALUE
+        for (i in 1 until f.fill.size step 3) { lo = minOf(lo, f.fill[i]); hi = maxOf(hi, f.fill[i]) }
+        assertTrue(lo > 7.0f, "the fold started at $lo, far below the work")
+        assertTrue(hi > 8.0f)
+    }
+
+    /** And it is still there when there is nothing on the page. */
+    @Test
+    fun `an empty sketch still shows a fold`() {
+        val f = assertNotNull(Symmetry.fold(Bounds(), "x", 1))
+        assertEquals(18, f.fill.size)
+        var hi = -Float.MAX_VALUE
+        for (i in 1 until f.fill.size step 3) hi = maxOf(hi, f.fill[i])
+        assertTrue(hi >= Symmetry.MIN_HALF.toFloat() - 1e-6f)
+    }
+}

@@ -279,15 +279,16 @@ the way `UI.applyMode` does.*
       720px threshold
 - [x] Back gesture steps out; it does not exit (`UI.closeTopSheet`'s order)
 - [x] Orientation, display cutouts, window insets
-- [ ] Brush panel: type, size, opacity and pressure are wired; the **hue
-      wheel** is not — swatches stand in for it
-- [ ] The transform joystick, and with it the dock's "Move" slot
-- [ ] Scene, groups and references panels — `#stagePanel` is a shell
+- [x] Brush panel: type, size, opacity, pressure and the hue wheel
+- [x] The transform joystick, and with it the dock's "Move" slot
+- [x] Scene, Curves and Import panels
+- [x] Onboarding — the web build's six-step walkthrough
+- [x] Finger-drawing toggle
+- [x] Bend, Loft, Primitives and hold-to-shape, all reachable
+- [x] Tooltips on stylus hover and long press; the keyboard map; the numeric
+      keypad; the input readout; the save state; the symmetry fold indicator
 - [ ] Stylus hover preview of the actual nib
-- [ ] Onboarding — the web build's six-step walkthrough
-- [ ] Finger-drawing toggle and palm rejection settings
-- [ ] Interaction still missing behind buttons that exist: shape snapping on
-      the pen path, Bend, Loft, Primitives
+- [ ] Palm rejection settings beyond "a pen outranks a finger"
 
 **Done when:** someone who has never seen the web build can draw on a guide
 without being told how.

@@ -19,6 +19,7 @@ import art.plume.core.Rgba
 import art.plume.core.ShadowFit
 import art.plume.core.Stroke
 import art.plume.core.StrokeGeometry
+import art.plume.core.Symmetry
 import art.plume.core.Tune
 import art.plume.core.Vec3
 import java.nio.ByteBuffer
@@ -123,6 +124,21 @@ class SketchRenderer : GLSurfaceView.Renderer {
     private var gridBuffers: LineBuffers? = null
     private var axisBuffers: LineBuffers? = null
     private var gridSignature = ""
+
+    /**
+     * Where the symmetry folds, when there is any. Rebuilt on the UI thread
+     * whenever the mirror, the radial count or the sketch's extent changes.
+     */
+    private var fold: Symmetry.Fold? = null
+    private var foldFill: LineBuffers? = null
+    private var foldEdge: LineBuffers? = null
+    private var foldAxis: LineBuffers? = null
+    private var foldDirty = false
+
+    fun setFold(f: Symmetry.Fold?): Unit = synchronized(strokes) {
+        fold = f
+        foldDirty = true
+    }
 
     /** A screen-space polyline drawn over everything: the lasso boundary. */
     private var overlay: FloatArray? = null
@@ -352,6 +368,10 @@ class SketchRenderer : GLSurfaceView.Renderer {
         /* over the grid, under the ink — the same render order the web build
            gives the shadow plane */
         drawGroundShadow(m)
+
+        /* the fold is BEHIND the sketch and never over it: it is a thing you
+           glance at to place a stroke, not a thing you look at */
+        drawFold(m)
 
         drawStrokePass(m, e)
 
@@ -795,6 +815,83 @@ class SketchRenderer : GLSurfaceView.Renderer {
         val ids = IntArray(1)
         GLES30.glGenBuffers(1, ids, 0)
         groundVbo = ids[0]
+    }
+
+    // ---- the symmetry fold ------------------------------------------------
+
+    /**
+     * Faint means faint. The fill is barely a tint and the rim only just holds
+     * its edge; seen face-on the two stack into the one legible line down the
+     * middle they are meant to be.
+     */
+    private fun drawFold(m: FloatArray) {
+        val f = synchronized(strokes) {
+            if (foldDirty) { releaseFold(); foldDirty = false }
+            fold
+        } ?: return
+
+        val bg = synchronized(matrixLock) { background }
+        /* the fold takes the ink's own contrast against the page, so it stays
+           legible whichever way round the theme is */
+        val lum = Grid.luminance(bg)
+        val c = if (lum > 0.5) 0f else 1f
+
+        if (f.fill.isNotEmpty()) {
+            val b = foldFill ?: uploadFlat(f.fill, c, 0.035f).also { foldFill = it }
+            drawFlat(m, b, GLES30.GL_TRIANGLES)
+        }
+        if (f.edges.isNotEmpty()) {
+            val b = foldEdge ?: uploadFlat(f.edges, c, 0.20f).also { foldEdge = it }
+            drawFlat(m, b, GLES30.GL_LINES)
+        }
+        if (f.axisLine.isNotEmpty()) {
+            val b = foldAxis ?: uploadFlat(f.axisLine, c, 0.38f).also { foldAxis = it }
+            drawFlat(m, b, GLES30.GL_LINES)
+        }
+    }
+
+    private fun uploadFlat(pos: FloatArray, grey: Float, alpha: Float): LineBuffers {
+        val n = pos.size / 3
+        val col = FloatArray(n * 4)
+        for (i in 0 until n) {
+            col[i * 4] = grey; col[i * 4 + 1] = grey; col[i * 4 + 2] = grey
+            col[i * 4 + 3] = alpha
+        }
+        val ids = IntArray(2)
+        GLES30.glGenBuffers(2, ids, 0)
+        arrayBuffer(ids[0], pos, GLES30.GL_STATIC_DRAW)
+        arrayBuffer(ids[1], col, GLES30.GL_STATIC_DRAW)
+        return LineBuffers(ids[0], ids[1], n)
+    }
+
+    private fun drawFlat(m: FloatArray, b: LineBuffers, primitive: Int) {
+        GLES30.glUseProgram(lineProgram)
+        GLES30.glUniformMatrix4fv(lMvp, 1, false, m, 0)
+        GLES30.glEnable(GLES30.GL_BLEND)
+        GLES30.glBlendFunc(GLES30.GL_SRC_ALPHA, GLES30.GL_ONE_MINUS_SRC_ALPHA)
+        GLES30.glDepthMask(false)
+        GLES30.glDisable(GLES30.GL_CULL_FACE)
+
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, b.vbo)
+        GLES30.glEnableVertexAttribArray(lPos)
+        GLES30.glVertexAttribPointer(lPos, 3, GLES30.GL_FLOAT, false, 0, 0)
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, b.cbo)
+        GLES30.glEnableVertexAttribArray(lCol)
+        GLES30.glVertexAttribPointer(lCol, 4, GLES30.GL_FLOAT, false, 0, 0)
+        GLES30.glDrawArrays(primitive, 0, b.count)
+        GLES30.glDisableVertexAttribArray(lPos)
+        GLES30.glDisableVertexAttribArray(lCol)
+
+        GLES30.glEnable(GLES30.GL_CULL_FACE)
+        GLES30.glDepthMask(true)
+        GLES30.glDisable(GLES30.GL_BLEND)
+    }
+
+    private fun releaseFold() {
+        for (b in listOfNotNull(foldFill, foldEdge, foldAxis)) {
+            pendingDelete.add(b.vbo); pendingDelete.add(b.cbo)
+        }
+        foldFill = null; foldEdge = null; foldAxis = null
     }
 
     // ---- the ink --------------------------------------------------------

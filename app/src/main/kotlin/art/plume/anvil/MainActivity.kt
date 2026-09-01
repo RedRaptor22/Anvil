@@ -49,6 +49,7 @@ import art.plume.core.Sketch
 import art.plume.core.Stabilizer
 import art.plume.core.Step
 import art.plume.core.Stroke
+import art.plume.core.Symmetry
 import art.plume.core.StrokePoint
 import art.plume.core.StyleChange
 import art.plume.core.Transform
@@ -484,6 +485,7 @@ class MainActivity : Activity(), Gestures.Listener {
         chrome.onStable = { v -> stableAmount = v; stabilizer.amount = v; scheduleAutosave() }
         chrome.onRadial = { n ->
             radial = n
+            pushFold()
             chrome.setSymmetry(mirror != null || radial > 1)
             scheduleAutosave()
         }
@@ -928,6 +930,12 @@ class MainActivity : Activity(), Gestures.Listener {
         }
         Selection.transform(targets, m)
         refreshStrokeMeshes(targets)
+        surface.requestRender()
+    }
+
+    /** The fold is sized to the work, so it moves when the work does. */
+    private fun pushFold() {
+        renderer.setFold(Symmetry.fold(Bounds.of(sketch), mirror, radial))
         surface.requestRender()
     }
 
@@ -2000,6 +2008,7 @@ class MainActivity : Activity(), Gestures.Listener {
             "x" -> "z"
             else -> null
         }
+        pushFold()
         chrome.setSymmetry(mirror != null || radial > 1)
         toast(
             mirror?.let { getString(R.string.mirror_on, it.uppercase()) }
@@ -2496,6 +2505,7 @@ class MainActivity : Activity(), Gestures.Listener {
     }
 
     private fun refreshScene() {
+        pushFold()
         renderer.setStrokes(sketch.strokes)
         refreshControls()
         scheduleAutosave()
