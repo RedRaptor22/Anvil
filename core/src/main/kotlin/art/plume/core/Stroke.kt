@@ -81,7 +81,32 @@ class StrokePoint(
     var pressure: Double = 0.5,
     /** the guide surface normal here, when the stroke was painted onto one */
     var nrm: Vec3? = null,
-)
+) {
+    /**
+     * The surface's own frame at this sample, kept only until the stroke is
+     * frozen.
+     *
+     * It is what [Nib.fitAt] measures the edge trim against, and it is spent
+     * by the first freeze: every later one — smooth, liquify, bend, an undo —
+     * arrives without it, and the measured trim stands rather than resetting.
+     */
+    var surf: SurfaceFrame? = null
+
+    /**
+     * The camera-plane nib direction the sample was taken with, for points
+     * with no surface under them. Also spent by the freeze.
+     */
+    var axis: Vec3? = null
+
+    /**
+     * How much of the nib's half-width the surface can take on each side.
+     *
+     * 1 in open ground, less as an edge closes in, and asymmetric so painting
+     * along an edge keeps full width on the inside instead of collapsing.
+     */
+    var fitL: Double = 1.0
+    var fitR: Double = 1.0
+}
 
 /** Colour as linear-ish RGB in 0..1, plus alpha. */
 data class Rgba(val r: Double, val g: Double, val b: Double, val a: Double = 1.0)
@@ -127,16 +152,22 @@ class Stroke(
         out.group = group
         out.seedRef = seedRef?.copy()
         for (q in points) {
-            out.pts.add(
-                StrokePoint(
-                    q.p.copy(),
-                    tan = q.tan?.copy(),
-                    ref = q.ref?.copy(),
-                    roll = q.roll,
-                    pressure = q.pressure,
-                    nrm = q.nrm?.copy(),
-                ),
+            val c = StrokePoint(
+                q.p.copy(),
+                tan = q.tan?.copy(),
+                ref = q.ref?.copy(),
+                roll = q.roll,
+                pressure = q.pressure,
+                nrm = q.nrm?.copy(),
             )
+            /* the measured trim travels with the point. A copy is not a
+               re-measurement, and dropping it here springs the paint back out
+               over the edge of the guide it was painted on. */
+            c.fitL = q.fitL
+            c.fitR = q.fitR
+            c.surf = q.surf
+            c.axis = q.axis?.copy()
+            out.pts.add(c)
         }
         return out
     }
@@ -272,17 +303,44 @@ object StrokeGeometry {
         val n = stroke.pts.size
         if (n < 2) return null
 
-        val closed = Frames.loopsClosed(stroke.pts.map { it.p })
-        val frames = Frames.transportFrames(stroke.pts.map { it.p }, null, closed)
-        val t = frames.t
-        val r = frames.r
+        val world = stroke.pts.map { it.p }
+        val closed = Frames.loopsClosed(world)
+
+        /*
+         * FROZEN FRAMES IF THE STROKE HAS THEM, transported ones if it does
+         * not.
+         *
+         * Freezing is what makes a nib's orientation persistent rather than
+         * re-derived: it is measured once against the surface the stroke was
+         * painted on, and every later edit — smooth, liquify, bend, the
+         * joystick — moves the points without disturbing it. Re-transporting
+         * here would throw that away and put the blade back wherever the
+         * arithmetic happened to seed it.
+         */
+        val head = stroke.pts.first(); val tail = stroke.pts.last()
+        val frozen = head.ref != null && tail.ref != null && tail.tan != null
+        val t: List<Vec3>; val r: List<Vec3>
+        if (frozen) {
+            t = stroke.pts.map { it.tan!! }
+            r = stroke.pts.map { it.ref!! }
+        } else {
+            val frames = Frames.transportFrames(world, stroke.seedRef, closed)
+            t = frames.t
+            r = frames.r
+            /* Never frozen — a shape, a fill, a document written before the
+               nib followed the surface. Measure the roll now rather than
+               leaving every blade at whatever angle transport chose. */
+            for (i in stroke.pts.indices) {
+                stroke.pts[i].roll = Nib.rollOf(stroke.pts[i], t[i], r[i])
+            }
+        }
 
         val seg = segmentsFor(stroke)
         val cfg = stroke.cfg
         val rings = if (closed) n - 1 else n
         val caps = cfg.caps && !closed
 
-        val arc = Frames.arcLengths(stroke.pts.map { it.p })
+        val arc = Frames.arcLengths(world)
         val total = arc[n - 1]
 
         val vCount = 2 + rings * seg
@@ -296,8 +354,11 @@ object StrokeGeometry {
         }
 
         if (caps) {
-            writeCapCentre(stroke, 0, t[0], -1.0, pos, nor, col)
-            writeCapCentre(stroke, rings - 1, t[rings - 1], 1.0, pos, nor, col)
+            writeCapCentre(stroke, 0, t[0], -1.0, pos, nor, col, arc[0], total, r[0])
+            writeCapCentre(
+                stroke, rings - 1, t[rings - 1], 1.0, pos, nor, col,
+                arc[rings - 1], total, r[rings - 1],
+            )
         }
 
         val bands = if (closed) rings else rings - 1
@@ -324,6 +385,9 @@ object StrokeGeometry {
         val world = Vec3(); val normal = Vec3()
     }
 
+    /** one thousandth of a radian, to differentiate the outline numerically */
+    private const val DANG = 1e-3
+
     /**
      * Write one cross-section into the vertex arrays.
      *
@@ -342,6 +406,14 @@ object StrokeGeometry {
         t: Vec3, r: Vec3, arcS: Double, total: Double,
         pos: FloatArray, nor: FloatArray, col: FloatArray, seg: Int,
         s: RingScratch,
+        /**
+         * The section angle to use, when the caller has just measured one.
+         *
+         * The live path has frames in hand and no frozen roll to read yet, so
+         * it passes what it measured; the batch path leaves this null and the
+         * point's own frozen roll stands.
+         */
+        roll: Double? = null,
     ) {
         val cfg = stroke.cfg
         val pt = stroke.pts[ptIndex]
@@ -356,7 +428,8 @@ object StrokeGeometry {
         val inkA = sh.alpha.toFloat()
 
         // roll the reference frame, then build an orthonormal section basis
-        val ca = cos(pt.roll); val sa = sin(pt.roll)
+        val ang0 = roll ?: pt.roll
+        val ca = cos(ang0); val sa = sin(ang0)
         s.b.set(t cross r)
         s.u.set(
             r.x * ca + s.b.x * sa,
@@ -374,17 +447,51 @@ object StrokeGeometry {
          */
         val riseShift = if (cfg.rise) -ry else 0.0
 
+        /*
+         * PAINT SHADES AS THE SURFACE, NOT AS ITSELF.
+         *
+         * A brush meant to fill an area leaves a sheet lying on a guide, and
+         * what gives away every overlap is that the sheet's SIDES are lit
+         * differently from its top: a dark line at every seam, however thin the
+         * sheet gets. Handing every vertex the surface normal instead makes a
+         * wall read as a wall no matter how many times you go over it.
+         *
+         * Only the brushes that are FOR filling do this. A pen is a tube and
+         * should still look like one where two of them cross.
+         */
+        val paintN = pt.nrm?.takeIf { cfg.paint && it.lengthSq() > Vec3.EPS }
+
         for (j in 0 until seg) {
             val ang = j.toDouble() / seg * 2.0 * PI
             val (sx, sy) = sectionPoint(ang, cfg.square)
+            /* the two halves of the section are scaled independently, so a nib
+               beside an edge keeps everything it has room for and loses only
+               the overhang */
+            val ax = sx * rx * (if (sx >= 0) pt.fitR else pt.fitL)
+            val ay = sy * ry
             s.world.set(pt.p)
-            s.world.addScaled(s.u, sx * rx)
-            s.world.addScaled(s.v, sy * ry + riseShift)
+            s.world.addScaled(s.u, ax)
+            s.world.addScaled(s.v, ay + riseShift)
 
-            s.normal.set(0.0, 0.0, 0.0)
-            s.normal.addScaled(s.u, sx / rx)
-            s.normal.addScaled(s.v, sy / ry)
-            if (s.normal.lengthSq() < Vec3.EPS) s.normal.set(s.u) else s.normal.normalize()
+            if (paintN != null) {
+                s.normal.set(paintN)
+            } else {
+                /* Normal from the actual outline: differentiate the
+                   cross-section and rotate a quarter turn. The ellipse-gradient
+                   shortcut this used to take is wrong once the section is
+                   squared off, which is exactly where flat shading shows. */
+                val (nx0, ny0) = sectionPoint(ang + DANG, cfg.square)
+                val dx = (nx0 - sx) * rx
+                val dy = (ny0 - sy) * ry
+                var nx = dy; var ny = -dx
+                if (nx * ax + ny * ay < 0) { nx = -nx; ny = -ny }   // point it outward
+                var nl = kotlin.math.hypot(nx, ny)
+                if (nl < Vec3.EPS) { nx = ax; ny = ay; nl = kotlin.math.hypot(nx, ny).takeIf { it > 0 } ?: 1.0 }
+                s.normal.set(0.0, 0.0, 0.0)
+                s.normal.addScaled(s.u, nx / nl)
+                s.normal.addScaled(s.v, ny / nl)
+                if (s.normal.lengthSq() < Vec3.EPS) s.normal.set(s.u) else s.normal.normalize()
+            }
 
             val o = (2 + ringSlot * seg + j)
             pos[o * 3] = s.world.x.toFloat(); pos[o * 3 + 1] = s.world.y.toFloat(); pos[o * 3 + 2] = s.world.z.toFloat()
@@ -394,18 +501,51 @@ object StrokeGeometry {
         }
     }
 
+    /**
+     * The disc at one end of the tube.
+     *
+     * Its centre is the point itself unless the brush rises off the surface,
+     * in which case it moves with the rings — a cap left on the point while
+     * the wall stood off it was a cone jammed into the end of the extrusion.
+     *
+     * [r] is the transported reference; without it the rise cannot be aimed
+     * and the cap stays on the point, which is right for every brush that does
+     * not rise.
+     */
     internal fun writeCapCentre(
         stroke: Stroke, i: Int, t: Vec3, sign: Double,
         pos: FloatArray, nor: FloatArray, col: FloatArray,
-        arcS: Double = 0.0, total: Double = 0.0,
+        arcS: Double = 0.0, total: Double = 0.0, r: Vec3? = null,
     ) {
+        val cfg = stroke.cfg
         val sh = shadeAt(stroke, i, arcS, total)
         val slot = if (sign < 0) 0 else 1
-        val p = stroke.pts[i].p
-        pos[slot * 3] = p.x.toFloat(); pos[slot * 3 + 1] = p.y.toFloat(); pos[slot * 3 + 2] = p.z.toFloat()
-        nor[slot * 3] = (t.x * sign).toFloat()
-        nor[slot * 3 + 1] = (t.y * sign).toFloat()
-        nor[slot * 3 + 2] = (t.z * sign).toFloat()
+        val pt = stroke.pts[i]
+        val c = pt.p.copy()
+        if (cfg.rise && r != null) {
+            val ry = max(halfThick(stroke, sh.radius), 1e-5)
+            val ca = cos(pt.roll); val sa = sin(pt.roll)
+            val b = t cross r
+            val u = Vec3(
+                r.x * ca + b.x * sa,
+                r.y * ca + b.y * sa,
+                r.z * ca + b.z * sa,
+            )
+            c.addScaled(t cross u, -ry)
+        }
+        pos[slot * 3] = c.x.toFloat(); pos[slot * 3 + 1] = c.y.toFloat(); pos[slot * 3 + 2] = c.z.toFloat()
+
+        // a paint brush's cap is part of the sheet, so it lights as the sheet
+        val paintN = pt.nrm?.takeIf { cfg.paint && it.lengthSq() > Vec3.EPS }
+        if (paintN != null) {
+            nor[slot * 3] = paintN.x.toFloat()
+            nor[slot * 3 + 1] = paintN.y.toFloat()
+            nor[slot * 3 + 2] = paintN.z.toFloat()
+        } else {
+            nor[slot * 3] = (t.x * sign).toFloat()
+            nor[slot * 3 + 1] = (t.y * sign).toFloat()
+            nor[slot * 3 + 2] = (t.z * sign).toFloat()
+        }
         col[slot * 4] = (stroke.color.r + (1.0 - stroke.color.r) * sh.lift).toFloat()
         col[slot * 4 + 1] = (stroke.color.g + (1.0 - stroke.color.g) * sh.lift).toFloat()
         col[slot * 4 + 2] = (stroke.color.b + (1.0 - stroke.color.b) * sh.lift).toFloat()

@@ -39,6 +39,7 @@ import art.plume.core.Import
 import art.plume.core.Liquify
 import art.plume.core.LiveStroke
 import art.plume.core.MM
+import art.plume.core.Nib
 import art.plume.core.Primitives
 import art.plume.core.Px
 import art.plume.core.Ray
@@ -1274,7 +1275,7 @@ class MainActivity : Activity(), Gestures.Listener {
 
         when (tool) {
             Tool.DRAW, Tool.SHAPE, Tool.GUIDE, Tool.FLATGUIDE ->
-                beginStroke(x, y, pressure, tiltAz)
+                beginStroke(x, y, pressure)
 
             /*
              * The plane a bend stroke is drawn on: camera-facing, through the
@@ -1287,7 +1288,7 @@ class MainActivity : Activity(), Gestures.Listener {
                 val g = guides.active
                 if (g == null) { toast(getString(R.string.bend_needs_guide)); return }
                 camera.refreshDrawPlane(g.sweep?.anchor ?: centreOf(g))
-                beginStroke(x, y, pressure, tiltAz)
+                beginStroke(x, y, pressure)
             }
 
             Tool.ERASE, Tool.VACUUM -> {
@@ -1346,7 +1347,7 @@ class MainActivity : Activity(), Gestures.Listener {
         dragMoved = true
         when (tool) {
             Tool.DRAW, Tool.SHAPE, Tool.GUIDE, Tool.FLATGUIDE, Tool.BEND ->
-                moveStroke(x, y, pressure, tiltAz)
+                moveStroke(x, y, pressure)
             Tool.ERASE, Tool.VACUUM -> stepDestructive(x.toDouble(), y.toDouble())
             Tool.SMOOTH -> stepSmooth(x.toDouble(), y.toDouble())
             Tool.LIQUIFY -> {
@@ -1569,7 +1570,7 @@ class MainActivity : Activity(), Gestures.Listener {
 
     // ---- drawing -----------------------------------------------------------
 
-    private fun beginStroke(x: Float, y: Float, pressure: Float, tiltAz: Float) {
+    private fun beginStroke(x: Float, y: Float, pressure: Float) {
         val s = Stroke(
             brush = brush, color = color, baseRadius = sizeMM * MM * 0.5, opacity = opacity,
         )
@@ -1588,14 +1589,14 @@ class MainActivity : Activity(), Gestures.Listener {
         synchronized(liveBuffer) {
             live = s
             liveBuffer.begin(s)
-            if (appendAt(s, stabilizer.x, stabilizer.y, pressure, tiltAz)) liveBuffer.append(s)
+            if (appendAt(s, stabilizer.x, stabilizer.y, pressure)) liveBuffer.append(s)
         }
         liveScreen.add(Px(stabilizer.x, stabilizer.y))
         renderer.setLive(liveBuffer)
         armShapeHold()
     }
 
-    private fun moveStroke(x: Float, y: Float, pressure: Float, tiltAz: Float) {
+    private fun moveStroke(x: Float, y: Float, pressure: Float) {
         val s = live ?: return
 
         /*
@@ -1605,14 +1606,14 @@ class MainActivity : Activity(), Gestures.Listener {
          */
         adjusting?.let { shape ->
             Shapes.adjust(shape, adjustAnchor, x.toDouble(), y.toDouble())
-            rebuildFromShape(s, shape, pressure, tiltAz)
+            rebuildFromShape(s, shape, pressure)
             return
         }
 
         // FACT (C.2): Stable Stroke smooths the INPUT, before it is projected
         if (!stabilizer.next(x.toDouble(), y.toDouble())) return
         synchronized(liveBuffer) {
-            if (appendAt(s, stabilizer.x, stabilizer.y, pressure, tiltAz)) liveBuffer.append(s)
+            if (appendAt(s, stabilizer.x, stabilizer.y, pressure)) liveBuffer.append(s)
         }
         liveScreen.add(Px(stabilizer.x, stabilizer.y))
         armShapeHold()
@@ -1775,7 +1776,7 @@ class MainActivity : Activity(), Gestures.Listener {
 
         adjusting = fitted
         adjustAnchor = liveScreen.lastOrNull() ?: Px(0.0, 0.0)
-        rebuildFromShape(s, fitted, 1f, 0f)
+        rebuildFromShape(s, fitted, 1f)
 
         val what = when (tool) {
             Tool.GUIDE -> getString(R.string.shape_profile)
@@ -1810,12 +1811,12 @@ class MainActivity : Activity(), Gestures.Listener {
      * changes at BOTH ends and in the middle at once, so there is no window to
      * rewrite. Rebuilding is also cheap — a shape is at most 65 points.
      */
-    private fun rebuildFromShape(s: Stroke, shape: Shapes.Shape, pressure: Float, az: Float) {
+    private fun rebuildFromShape(s: Stroke, shape: Shapes.Shape, pressure: Float) {
         synchronized(liveBuffer) {
             s.pts.clear()
             liveBuffer.begin(s)
             for (p in shape.points) {
-                if (appendAt(s, p.x, p.y, pressure, az)) liveBuffer.append(s)
+                if (appendAt(s, p.x, p.y, pressure)) liveBuffer.append(s)
             }
         }
         surface.requestRender()
@@ -1828,6 +1829,15 @@ class MainActivity : Activity(), Gestures.Listener {
         renderer.setLive(null)
         Dedupe.clean(s)
         if (s.pts.size < 2) return
+
+        /* FREEZE THE FRAMES BEFORE ANYTHING ELSE TOUCHES THE STROKE.
+           This is the step that measures the nib against the surface it was
+           painted on — which way it points, and how much of it the guide can
+           actually take beside an edge — and writes the answer onto the
+           points. Everything downstream (erase, bend, smooth, the joystick,
+           an undo) moves points without knowing anything about surfaces, and
+           the stroke keeps looking like itself because of this. */
+        Nib.freezeFrames(s)
 
         /*
          * Which tools make a guide, matching `role` in Tools.begin. Shape is
@@ -1848,7 +1858,7 @@ class MainActivity : Activity(), Gestures.Listener {
      * web build's `refreshDrawPlane()` with no argument.
      */
     private fun appendAt(
-        s: Stroke, px: Double, py: Double, pressure: Float, az: Float,
+        s: Stroke, px: Double, py: Double, pressure: Float,
     ): Boolean {
         val active = guides.active
         if (active != null && (tool == Tool.DRAW || tool == Tool.SHAPE)) {
@@ -1856,19 +1866,35 @@ class MainActivity : Activity(), Gestures.Listener {
             val hit = GuidePainting.project(active, penRay, clampOffSurface = clampOff)
                 ?: return false
             s.pts.lastOrNull()?.let { if (it.p.distanceTo(hit.point) < 0.0005) return false }
-            s.pts.add(
-                StrokePoint(
-                    hit.point.copy(), pressure = pressure.toDouble(), roll = az.toDouble(),
-                    nrm = hit.normal.copy(),
-                ),
+            /* THE NIB IS AIMED BY THE SURFACE, NOT BY THE PEN.
+               `roll` used to be set from the stylus tilt azimuth here, and a
+               rotation about the tangent is precisely what lifts a blade off
+               the guide — which is why the wide brush stood out of the surface
+               instead of lying on it. The surface normal and the surface's own
+               frame go on the point instead, and Nib measures the roll from
+               them at freeze time. Tilt is still recorded; it no longer turns
+               the section. */
+            val pt = StrokePoint(
+                hit.point.copy(), pressure = pressure.toDouble(),
+                nrm = hit.normal.copy(),
             )
+            pt.surf = hit.frame          // spent by the freeze, after it trims the nib
+            s.pts.add(pt)
             s.guideId = active.id
             return true
         }
 
         val p = camera.planePoint(px, py, scratch) ?: return false
         s.pts.lastOrNull()?.let { if (it.p.distanceTo(p) < 0.0005) return false }
-        s.pts.add(StrokePoint(p.copy(), pressure = pressure.toDouble(), roll = az.toDouble()))
+        /* No guide: the draw plane faces the camera, so ITS normal is the view
+           direction and a blade lies flat in the plane you are drawing on,
+           which is how free-space strokes have always looked. */
+        s.pts.add(
+            StrokePoint(
+                p.copy(), pressure = pressure.toDouble(),
+                nrm = camera.drawPlane.normal.copy(),
+            ),
+        )
         return true
     }
 

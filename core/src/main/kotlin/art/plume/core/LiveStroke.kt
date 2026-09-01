@@ -241,16 +241,30 @@ class LiveStroke {
         if (!headResolved) { writeFrom = 0; windowStart = 0 }
 
         for (i in writeFrom until n) {
+            /* THE PREVIEW ORIENTS ITSELF THE SAME WAY THE COMMITTED STROKE
+               WILL. The roll is only frozen onto the point when the stroke
+               ends, so until then it is measured here, against the frame this
+               ring is about to be written in. Skipping it left the live
+               preview rolling with whatever transport chose while the
+               committed stroke lay flat on the guide — the same mark changing
+               shape the instant the pen lifted. */
             StrokeGeometry.writeRing(
                 stroke, i, i, t[i], r[i], arc[i], total,
                 positions, normals, colors, seg, scratch,
+                roll = Nib.rollOf(pts[i], t[i], r[i]),
             )
         }
         soil(2 + writeFrom * seg, 2 + n * seg)
 
         if (caps && n >= 1) {
-            StrokeGeometry.writeCapCentre(stroke, 0, t[0], -1.0, positions, normals, colors)
-            StrokeGeometry.writeCapCentre(stroke, n - 1, t[n - 1], 1.0, positions, normals, colors)
+            StrokeGeometry.writeCapCentre(
+                stroke, 0, t[0], -1.0, positions, normals, colors,
+                arc[0], total, r[0],
+            )
+            StrokeGeometry.writeCapCentre(
+                stroke, n - 1, t[n - 1], 1.0, positions, normals, colors,
+                arc[n - 1], total, r[n - 1],
+            )
             capsDirty = true
         }
 
