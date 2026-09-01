@@ -33,9 +33,11 @@ import art.plume.core.Guide
 import art.plume.core.GuideEditing
 import art.plume.core.GuidePainting
 import art.plume.core.GuideScene
+import art.plume.core.GuideTransform
 import art.plume.core.Guides
 import art.plume.core.History
 import art.plume.core.Import
+import art.plume.core.Mat4
 import art.plume.core.Liquify
 import art.plume.core.LiveStroke
 import art.plume.core.MM
@@ -219,6 +221,12 @@ class MainActivity : Activity(), Gestures.Listener {
     private val lasso = ArrayList<Px>()
     private var lastPen = Px(0.0, 0.0)
     private var dragMoved = false
+
+    /** A press-hold picked a guide, so the release is not also a tap select. */
+    private var holdConsumedTap = false
+
+    /** Everything one joystick drag did to a guide, for a single undo step. */
+    private var guideAccum: Mat4? = null
 
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
@@ -463,11 +471,12 @@ class MainActivity : Activity(), Gestures.Listener {
              * Liquify: one step, positions before and after.
              */
             val sel = sketch.selection
-            if (sel.isNotEmpty()) {
+            if (transformGuide == null && sel.isNotEmpty()) {
                 dragTargets = sel
                 dragPositions = Editing.snapshot(sel)
                 dragMoved = false
             }
+            dragMoved = false
             pushTransform()
         }
         chrome.onTransformDrag = { axis, dx, dy, sweep, strip ->
@@ -475,6 +484,7 @@ class MainActivity : Activity(), Gestures.Listener {
         }
         chrome.onTransformEnd = {
             joyAxis = null
+            commitGuideTransform()
             commitPointChange("Transform")
             clearDrag()
             pushTransform()
@@ -696,6 +706,12 @@ class MainActivity : Activity(), Gestures.Listener {
             else -> {}
         }
         tool = t
+        /* Select is a tap tool, so its press carries a hold — holding it picks
+           the guide underneath. Every drag tool's press IS the drag. */
+        gestures.holdWhileDrawing = t == Tool.SELECT
+        /* leaving Select puts down whatever guide it had hold of, or the
+           joystick would keep driving a surface you can no longer see selected */
+        if (t != Tool.SELECT) guides.active?.selected = false
         chrome.setTool(t)
         refreshControls()
     }
@@ -872,6 +888,17 @@ class MainActivity : Activity(), Gestures.Listener {
                 /* their setting, not our guess about their hardware: a pen
                    landing later does not get to change it back */
                 gestures.fingerDrawsIsOurs = false
+                /* IT IS A MODE, SO IT SAYS WHICH ONE IT IS NOW. The whole
+                   point of promoting it out of the settings list is that it
+                   gets flipped often, and a mode you flip often has to
+                   confirm itself — otherwise the only way to find out which
+                   way it went is to put a finger down and see whether you
+                   drew a line you did not want. */
+                toast(
+                    getString(
+                        if (gestures.fingerDraws) R.string.finger_on else R.string.finger_off,
+                    ),
+                )
             }
             InputToggle.AUTO_GUIDE -> autoGuide = !autoGuide
             InputToggle.ISOLATE -> isolate = !isolate
@@ -936,10 +963,22 @@ class MainActivity : Activity(), Gestures.Listener {
      * about a stale centre drifts the selection sideways as it turns.
      */
     private fun stepTransform(axis: Int?, dx: Double, dy: Double, sweep: Double, strip: Boolean) {
-        val targets = dragTargets ?: return
-        if (targets.isEmpty()) return
+        val guide = transformGuide
+        val targets = if (guide == null) dragTargets ?: return else null
+        if (targets != null && targets.isEmpty()) return
         dragMoved = true
-        val centre = Bounds().also { b -> for (s in targets) for (p in s.pts) b.add(p.p) }
+
+        val centre = Bounds()
+        if (guide != null) guide.surface?.let { srf ->
+            val p = srf.positions
+            var i = 0
+            while (i + 2 < p.size) {
+                centre.add(Vec3(p[i].toDouble(), p[i + 1].toDouble(), p[i + 2].toDouble()))
+                i += 3
+            }
+        } else {
+            for (s in targets!!) for (p in s.pts) centre.add(p.p)
+        }
         if (centre.empty) return
         val c = centre.centre()
 
@@ -950,10 +989,47 @@ class MainActivity : Activity(), Gestures.Listener {
             val screen = Transform.axisOnScreen(camera, a, c) ?: return
             Transform.alongAxis(joyMode, a, screen, c, dx, dy, sweep)
         }
-        Selection.transform(targets, m)
-        refreshStrokeMeshes(targets)
+
+        if (guide != null) {
+            GuideTransform.apply(guide, m)
+            /* ONE HISTORY STEP FOR THE WHOLE DRAG, accumulated as a matrix.
+               A guide has no point list to snapshot the way a selection does,
+               so what is remembered is the transform itself — replayed to
+               redo, inverted to undo. That is the web build's model too. */
+            guideAccum = Mat4.multiply(m, guideAccum ?: Mat4().identity(), Mat4())
+            pushGuides()
+        } else {
+            Selection.transform(targets!!, m)
+            refreshStrokeMeshes(targets)
+        }
         surface.requestRender()
     }
+
+    /** Close a guide drag into one undoable step. */
+    private fun commitGuideTransform() {
+        val m = guideAccum ?: return
+        guideAccum = null
+        val g = transformGuide ?: return
+        val inv = Mat4()
+        if (!Mat4.invert(m, inv)) return        // a degenerate drag is not a step
+        history.push(
+            Step(
+                "Move guide",
+                onRedo = { GuideTransform.apply(g, m); pushGuides(); surface.requestRender() },
+                onUndo = { GuideTransform.apply(g, inv); pushGuides(); surface.requestRender() },
+            ),
+        )
+    }
+
+    /**
+     * WHAT THE JOYSTICK IS DRIVING.
+     *
+     * `Tools.transformTarget`: a guide you picked by holding on it outranks a
+     * curve selection, because picking one puts the other down and the guide
+     * is the more specific thing to have asked for.
+     */
+    private val transformGuide: Guide?
+        get() = guides.active?.takeIf { it.selected }
 
     /** The fold is sized to the work, so it moves when the work does. */
     private fun pushFold() {
@@ -962,9 +1038,12 @@ class MainActivity : Activity(), Gestures.Listener {
     }
 
     private fun pushTransform() {
+        val guide = transformGuide
         val sel = sketch.selection
+        val nothing = guide == null && sel.isEmpty()
+
         val label = when {
-            sel.isEmpty() -> getString(R.string.joy_nothing)
+            nothing -> getString(R.string.joy_nothing)
             joyAxis != null -> getString(
                 R.string.joy_axis,
                 getString(
@@ -976,6 +1055,7 @@ class MainActivity : Activity(), Gestures.Listener {
                 ),
                 "XYZ"[joyAxis!!].toString(),
             )
+            guide != null -> guide.name
             else -> getString(R.string.joy_count, sel.size)
         }
         /*
@@ -983,10 +1063,22 @@ class MainActivity : Activity(), Gestures.Listener {
          * direction, so its arc is dimmed rather than left to send the
          * selection to the horizon on a one-pixel drag.
          */
-        val usable = if (sel.isEmpty()) {
+        val usable = if (nothing) {
             listOf(false, false, false)
         } else {
-            val b = Bounds().also { bb -> for (s in sel) for (p in s.pts) bb.add(p.p) }
+            val b = Bounds()
+            if (guide != null) {
+                guide.surface?.let { srf ->
+                    val p = srf.positions
+                    var i = 0
+                    while (i + 2 < p.size) {
+                        b.add(Vec3(p[i].toDouble(), p[i + 1].toDouble(), p[i + 2].toDouble()))
+                        i += 3
+                    }
+                }
+            } else {
+                for (s in sel) for (p in s.pts) b.add(p.p)
+            }
             val c = if (b.empty) Vec3() else b.centre()
             Transform.AXES.map { Transform.axisOnScreen(camera, it, c) != null }
         }
@@ -1508,6 +1600,38 @@ class MainActivity : Activity(), Gestures.Listener {
     }
 
     /**
+     * HOLDING ON A GUIDE WITH SELECT PICKS THE GUIDE.
+     *
+     * `Tools.longPressSelect`, which was never ported: Select is a tap tool,
+     * so its press is free to mean something on its own, and what it means is
+     * "this whole surface, not the curves on it". A guide picked this way is
+     * what the joystick then drives.
+     *
+     * Only the ACTIVE guide can be picked, as in the web build — an inactive
+     * one is scaffolding you have put away, and reaching through the thing you
+     * are drawing on to grab it is not what the press meant.
+     */
+    override fun onDrawHold(x: Float, y: Float) {
+        if (tool != Tool.SELECT) return
+        val g = guides.active ?: return
+        camera.rayFrom(x.toDouble(), y.toDouble(), penRay)
+        if (GuidePainting.project(g, penRay, clampOffSurface = false) == null) return
+
+        holdConsumedTap = true          // the press has been spent; it is not a tap
+        g.selected = !g.selected
+        /* a guide and a set of curves are two different things for the
+           joystick to drive, so picking one puts the other down */
+        if (g.selected) sketch.clearSelection()
+        pushGuides()
+        refreshScene()
+        toast(
+            getString(
+                if (g.selected) R.string.guide_selected else R.string.guide_deselected,
+            ),
+        )
+    }
+
+    /**
      * Two fingers tapping undo, which is the one gesture this build adds.
      *
      * The web build's own note calls it "the documented rough edge worth
@@ -2019,6 +2143,11 @@ class MainActivity : Activity(), Gestures.Listener {
 
     private fun endSelect() {
         val before = dragSelection ?: return
+        /* A HOLD THAT PICKED A GUIDE SPENT THE PRESS. Without this the same
+           press then fell through as a tap and selected whatever curve was
+           under it, so a guide picked by holding arrived with a stroke
+           selected alongside it and the joystick had two targets. */
+        if (holdConsumedTap) { holdConsumedTap = false; return }
         // a press that never moved is a tap; anything else was a sweep
         if (!dragMoved) Selection.tapSelect(sketch, camera, lastPen.x, lastPen.y, true, mask())
         commitSelectionChange(if (dragMoved) "Sweep select" else "Select", before)

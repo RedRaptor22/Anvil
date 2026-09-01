@@ -45,6 +45,8 @@
     <dimen name="helpLeft">160dp</dimen>       <!-- #helpBtn left -->
     <dimen name="viewInfoLeft">214dp</dimen>   <!-- #viewInfo left -->
     <dimen name="undoBottom">14dp</dimen>
+    <!-- clear of the undo pill it sits above -->
+    <dimen name="penPillBottom">66dp</dimen>
     <dimen name="ctxBottom">14dp</dimen>
     <dimen name="selBarBottom">78dp</dimen>
     <dimen name="liquifyBottom">70dp</dimen>

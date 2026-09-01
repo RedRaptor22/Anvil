@@ -248,6 +248,22 @@ class Chrome(private val act: Activity, val t: Tokens) {
     )
     private val brushRail = panel(act, t)
     private val undoPill = panel(act, t)
+
+    /**
+     * `#fingerPen` — NOT from the web build, which has no such control.
+     *
+     * Feather puts a Finger-Pen button at the bottom of the screen: tap it to
+     * make the next touch draw, tap it again to hand the fingers back to
+     * navigation. It is a MODE you flip, not a preference you set, and that is
+     * the whole difference — the same switch buried in a settings menu costs
+     * four taps and a hunt every time you want to orbit what you just drew,
+     * which is what made finger navigation here so tiring.
+     *
+     * Feather keeps the settings-menu copy of it as well, and so does this: an
+     * always-visible button for the flipping, the Input list for discovering
+     * it exists.
+     */
+    private val penPill = panel(act, t)
     private val ctxBar = panel(act, t)
     private val selBar = panel(act, t)
     private val liquifyPanel = panel(act, t)
@@ -586,6 +602,14 @@ class Chrome(private val act: Activity, val t: Tokens) {
     private fun buildUndoPill() {
         undoPill.addView(ico("undo", Action.UNDO))
         undoPill.addView(ico("redo", Action.REDO))
+
+        penPill.addView(
+            IcoButton(act, t).icon("fingerpen").also { b ->
+                b.setOnClickListener { onInput(InputToggle.FINGER) }
+                icons["fingerpen"] = b
+                Tip.attach(b, tipCard, act.getString(R.string.tip_fingerpen))
+            },
+        )
     }
 
     /**
@@ -1051,18 +1075,38 @@ class Chrome(private val act: Activity, val t: Tokens) {
             val b = TextButton(act, t, filled = true, small = true).apply {
                 text = act.getString(label)
                 setOnClickListener { onTransformMode(mode) }
+                /* NEVER WRAP AND NEVER ELLIPSIZE. "Move", "Turn" and "Size"
+                   are the whole label; half of one is not a control. */
+                maxLines = 1
+                ellipsize = null
                 layoutParams = LinearLayout.LayoutParams(
-                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
                 ).apply { marginEnd = t.dp(2f) }
             }
             joyModes[mode] = b
             modes.addView(b)
         }
+        /*
+         * THE ROW IS AS WIDE AS ITS WORDS, AND THE PANEL FOLLOWS IT.
+         *
+         * The web build's `#joy` is 132px wide with `#joyMode{width:100%}`,
+         * and this port copied the 112px of content that leaves — but a CSS
+         * pixel of Plume's 11px UI font is not a dp of Android's system font,
+         * and three labels that fit there do not fit here. They came out
+         * stacked two lines high.
+         *
+         * So the number is not copied any more. The row wraps its content, the
+         * panel wraps the row, and the pad and strip stay the size they
+         * actually are (108dp, the real geometry of the control) centred
+         * underneath. Whichever is wider sets the panel, which is what the
+         * CSS was doing too — just from the other direction.
+         */
         joyPanel.addView(
             modes,
             LinearLayout.LayoutParams(
-                t.dp(112f), ViewGroup.LayoutParams.WRAP_CONTENT,
-            ).apply { bottomMargin = t.dp(8f) },
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { bottomMargin = t.dp(8f); gravity = Gravity.CENTER_HORIZONTAL },
         )
 
         joyPad = JoyPad(
@@ -1088,6 +1132,13 @@ class Chrome(private val act: Activity, val t: Tokens) {
             textSize = 10.5f
             gravity = Gravity.CENTER
             setPadding(0, t.dp(6f), 0, 0)
+            /* "Move along X" and a guide's name are both longer than the pad
+               is wide, and this is the one label that may take a second line
+               rather than force the panel wider than the control it labels */
+            maxLines = 2
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            )
         }
         joyPanel.addView(joyTarget)
         joyPanel.visibility = View.GONE
@@ -2125,6 +2176,9 @@ class Chrome(private val act: Activity, val t: Tokens) {
         root.addView(viewInfo, lp(Gravity.TOP or Gravity.START, top = e, left = t.px(R.dimen.viewInfoLeft)))
         root.addView(brushRail, lp(Gravity.START or Gravity.CENTER_VERTICAL, left = e, width = t.px(R.dimen.brushRailW)))
         root.addView(undoPill, lp(Gravity.BOTTOM or Gravity.START, left = e, bottom = t.px(R.dimen.undoBottom)))
+        /* bottom-left, above the undo pill on a tablet and above the dock on a
+           phone — the one control that has to be one tap away at every width */
+        root.addView(penPill, lp(Gravity.BOTTOM or Gravity.START, left = e, bottom = t.px(R.dimen.penPillBottom)))
         root.addView(selBar, lp(Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL, bottom = t.px(R.dimen.selBarBottom)))
         root.addView(
             railTab,
@@ -2198,6 +2252,13 @@ class Chrome(private val act: Activity, val t: Tokens) {
 
         railTab.visibility = if (narrow) View.GONE else View.VISIBLE
         undoPill.visibility = if (narrow) View.GONE else View.VISIBLE
+        /* the ONE thing that does not go away on a phone: undo and redo have
+           dock slots, and this has nowhere else to be */
+        penPill.layoutParams = lp(
+            Gravity.BOTTOM or Gravity.START,
+            left = e,
+            bottom = if (narrow) t.px(R.dimen.dockH) + e else t.px(R.dimen.penPillBottom),
+        )
         dock.visibility = if (narrow) View.VISIBLE else View.GONE
 
         for (sheet in listOf(toolPill, brushRail, stagePanel, joyPanel)) {
@@ -2441,6 +2502,8 @@ class Chrome(private val act: Activity, val t: Tokens) {
         railHidden = hidden
         val off = -(brushRail.width + t.px(R.dimen.edge)) * 1.35f
         brushRail.animate().translationX(if (hidden) off else 0f).alpha(if (hidden) 0f else 1f)
+            .setDuration(200).start()
+        penPill.animate().translationX(if (hidden) off else 0f).alpha(if (hidden) 0f else 1f)
             .setDuration(200).start()
         undoPill.animate().translationX(if (hidden) off else 0f).alpha(if (hidden) 0f else 1f)
             .setDuration(200).start()
@@ -2758,6 +2821,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
         eyedropButton.visibility =
             if (colorTarget == ColorTarget.INK) View.VISIBLE else View.GONE
         icons["brushType"]?.on = brushGrid.visibility == View.VISIBLE
+        icons["fingerpen"]?.on = optFinger
     }
 
     /** `input[type=color]` — a circular well with a --dim ring around it. */

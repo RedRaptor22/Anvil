@@ -97,6 +97,17 @@ class Gestures(private val listener: Listener) {
          * was not pinned.
          */
         fun onPressHold(x: Float, y: Float)
+
+        /**
+         * A press and hold by the pointer that is DRAWING, which only the tap
+         * tools ask for.
+         *
+         * Select is a tap tool rather than a drag tool, so its press is free
+         * to mean something on its own: holding it picks the guide underneath
+         * and hands it to the joystick. Draw's press is a stroke and has no
+         * hold to give — [holdWhileDrawing] is what says which is which.
+         */
+        fun onDrawHold(x: Float, y: Float)
     }
 
     /**
@@ -118,6 +129,15 @@ class Gestures(private val listener: Listener) {
 
     /** A real stylus has touched the glass at least once. */
     private var penSeen = false
+
+    /**
+     * Whether the drawing pointer should also run a hold clock.
+     *
+     * Set by the tool: Select and Loft are tap tools, so their press can carry
+     * a hold; every drag tool's press is the drag itself. The web build makes
+     * the same split inside `penBegin`, by reading the tool there.
+     */
+    var holdWhileDrawing = false
 
     private var drawingPointer = -1
     private var gesturing = false
@@ -232,8 +252,9 @@ class Gestures(private val listener: Listener) {
                  * finger drawing on, a finger holding still both drew and
                  * pinned the pivot out from under its own stroke.
                  */
-                if (!isStylus(ev, i) && !fingerDraws) armHold(ev.getX(i), ev.getY(i))
-                if (isStylus(ev, i) || fingerDraws) {
+                val willDraw = isStylus(ev, i) || fingerDraws
+                if (!willDraw || holdWhileDrawing) armHold(ev.getX(i), ev.getY(i), willDraw)
+                if (willDraw) {
                     drawingPointer = ev.getPointerId(i)
                     listener.onDrawBegin(
                         ev.getX(i), ev.getY(i), pressureOf(ev, i),
@@ -313,10 +334,16 @@ class Gestures(private val listener: Listener) {
                 } else if (gesturing) {
                     stepGesture(ev)
                 }
-                /* a finger that travels is a swipe, not a tap, and never a hold */
-                val moved = hypot(ev.getX(0) - downX, ev.getY(0) - downY)
-                if (moved > TAP_SLOP) gestureMoved = true
-                if (moved > HOLD_SLOP) cancelHold()
+                /* a pointer that travels is a swipe, not a tap, and never a
+                   hold — measured on whichever pointer is DRAWING when one is,
+                   since a pen's hold has to die when the pen moves and the pen
+                   is not always index 0 */
+                val hi = if (drawingPointer >= 0) ev.findPointerIndex(drawingPointer) else 0
+                if (hi >= 0) {
+                    val moved = hypot(ev.getX(hi) - downX, ev.getY(hi) - downY)
+                    if (moved > TAP_SLOP) gestureMoved = true
+                    if (moved > HOLD_SLOP) cancelHold()
+                }
             }
 
             MotionEvent.ACTION_POINTER_UP -> {
@@ -378,13 +405,14 @@ class Gestures(private val listener: Listener) {
         return true
     }
 
-    private fun armHold(x: Float, y: Float) {
+    private fun armHold(x: Float, y: Float, whileDrawing: Boolean = false) {
         cancelHold()
         holdX = x; holdY = y
         val r = Runnable {
             holdRunnable = null
             gestureHeld = true          // a hold is never also a tap
-            listener.onPressHold(holdX, holdY)
+            if (whileDrawing) listener.onDrawHold(holdX, holdY)
+            else listener.onPressHold(holdX, holdY)
         }
         holdRunnable = r
         main.postDelayed(r, HOLD_MS)

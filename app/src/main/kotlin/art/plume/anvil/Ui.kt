@@ -1010,6 +1010,34 @@ class JoyPad(
     private var lastY = 0f
     private var lastAngle = 0.0
 
+    /**
+     * WHERE THE STICK IS LEANING, in pixels from the centre.
+     *
+     * A joystick you push and which does not move is a picture of a joystick.
+     * The knob follows the finger out to the ring and no further, so the
+     * control reports what it is doing the way the physical thing does: how
+     * far you have pushed it, and which way.
+     *
+     * It is a DISPLAY of the drag, not the drag itself — the transform is
+     * still driven by the per-sample delta, so leaning on the stick at full
+     * deflection does not keep moving the selection. That is deliberate: this
+     * pad steers a direct manipulation, not a rate.
+     */
+    private var knobX = 0f
+    private var knobY = 0f
+
+    /** Where the knob is heading — the finger while held, the centre on release. */
+    private var aimX = 0f
+    private var aimY = 0f
+
+    /**
+     * An axis grab slides ALONG that axis only, so the stick has to as well:
+     * the arc is a rail, and a knob that wandered off it while the selection
+     * ran straight would be the control lying about what it is doing.
+     */
+    private var railX = 0f
+    private var railY = 0f
+
     init {
         val side = t.dp(108f)
         layoutParams = LinearLayout.LayoutParams(side, side)
@@ -1019,6 +1047,11 @@ class JoyPad(
         val c = width / 2f
         val r = width * (43f / 108f)
         val inner = width * (19f / 108f)
+
+        /* the knob is chased in the draw pass rather than by an animator: it
+           only ever moves while it is on screen, and this way there is no
+           timer to leak when the panel closes mid-drag */
+        if (stepKnob()) postInvalidateOnAnimation()
 
         paint.style = Paint.Style.FILL
         paint.color = t.panel2
@@ -1043,9 +1076,25 @@ class JoyPad(
         paint.style = Paint.Style.FILL
         paint.alpha = 255
 
-        /* the knob in the middle, so the free centre reads as a control */
+        /* THE STICK, leaning wherever it has been pushed. A line from the
+           centre out to it reads as the shaft, which is what tells you at a
+           glance how far over it is. */
+        if (knobX != 0f || knobY != 0f) {
+            paint.style = Paint.Style.STROKE
+            paint.strokeWidth = t.dpf(3f)
+            paint.color = t.line
+            canvas.drawLine(c, c, c + knobX, c + knobY, paint)
+            paint.style = Paint.Style.FILL
+        }
         paint.color = t.panel
-        canvas.drawCircle(c, c, t.dpf(13f), paint)
+        canvas.drawCircle(c + knobX, c + knobY, t.dpf(13f), paint)
+        /* a rim, so the knob still reads as a knob once it is over a coloured
+           arc rather than over the pad's own fill */
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = t.dpf(1f)
+        paint.color = t.line
+        canvas.drawCircle(c + knobX, c + knobY, t.dpf(13f), paint)
+        paint.style = Paint.Style.FILL
 
         paint.textSize = t.dpf(9f)
         paint.textAlign = Paint.Align.CENTER
@@ -1076,8 +1125,13 @@ class JoyPad(
                 )
                 lastX = e.x; lastY = e.y
                 lastAngle = kotlin.math.atan2(e.y - c, e.x - c)
+                grabbed?.let { i ->
+                    val a = Transform.ARC_ANGLES[i]
+                    railX = kotlin.math.cos(a).toFloat()
+                    railY = kotlin.math.sin(a).toFloat()
+                }
+                leanTo(e.x, e.y)
                 onGrab(grabbed)
-                invalidate()
                 return true
             }
             MotionEvent.ACTION_MOVE -> {
@@ -1090,17 +1144,69 @@ class JoyPad(
                 lastAngle = ang
                 onDrag(grabbed, e.x - lastX, e.y - lastY, sweep)
                 lastX = e.x; lastY = e.y
+                leanTo(e.x, e.y)
                 return true
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 grabbed = null
-                invalidate()
+                /* SPRING BACK, because a stick that stayed where you left it
+                   would read as a position — and this pad reports a direction
+                   you are pushing, not a place you have set it to. */
+                aimX = 0f; aimY = 0f
+                postInvalidateOnAnimation()
                 onRelease()
                 performClick()
                 return true
             }
         }
         return super.onTouchEvent(e)
+    }
+
+    /**
+     * Point the stick at ([x], [y]), clamped to the ring.
+     *
+     * The knob does not sit under the finger — it leans TOWARDS it and stops
+     * at the ring, which is how far a real stick goes. An axis grab leans
+     * along that axis only, since that is the only direction the drag is
+     * being read in.
+     */
+    private fun leanTo(x: Float, y: Float) {
+        val c = width / 2f
+        var dx = x - c
+        var dy = y - c
+        if (grabbed != null) {
+            // project onto the rail: the arc is a track, not a target
+            val along = dx * railX + dy * railY
+            dx = railX * along
+            dy = railY * along
+        }
+        val reach = width * (43f / 108f)
+        val len = kotlin.math.hypot(dx, dy)
+        if (len > reach) { dx = dx / len * reach; dy = dy / len * reach }
+        aimX = dx; aimY = dy
+        postInvalidateOnAnimation()
+    }
+
+    /**
+     * Move the knob a step towards where it is aimed.
+     *
+     * Chased rather than snapped even while the finger is down: a stick with
+     * a little weight in it reads as a physical thing, and the lag is small
+     * enough (about three frames to close the gap) that it never feels like
+     * the control is behind you. On release the aim is the centre, and the
+     * same chase is the spring.
+     */
+    private fun stepKnob(): Boolean {
+        val k = 0.35f
+        val dx = aimX - knobX
+        val dy = aimY - knobY
+        if (kotlin.math.hypot(dx, dy) < 0.4f) {
+            knobX = aimX; knobY = aimY
+            return false
+        }
+        knobX += dx * k
+        knobY += dy * k
+        return true
     }
 
     override fun performClick(): Boolean { super.performClick(); return true }
@@ -1133,16 +1239,26 @@ class JoyStrip(
     private val rect = RectF()
     private var lastY = 0f
 
+    /** How far the grip has been pushed, and where it is heading. */
+    private var gripY = 0f
+    private var aimY = 0f
+
     init { layoutParams = LinearLayout.LayoutParams(t.dp(108f), t.dp(26f)) }
 
     override fun onDraw(canvas: Canvas) {
+        val k = 0.35f
+        val d = aimY - gripY
+        if (kotlin.math.abs(d) < 0.4f) gripY = aimY
+        else { gripY += d * k; postInvalidateOnAnimation() }
+
         rect.set(0f, 0f, width.toFloat(), height.toFloat())
         paint.color = t.panel2
         canvas.drawRoundRect(rect, height / 2f, height / 2f, paint)
         paint.color = t.dim2
+        val cy = height / 2f + gripY
         rect.set(
-            width / 2f - t.dpf(11f), height / 2f - t.dpf(2f),
-            width / 2f + t.dpf(11f), height / 2f + t.dpf(2f),
+            width / 2f - t.dpf(11f), cy - t.dpf(2f),
+            width / 2f + t.dpf(11f), cy + t.dpf(2f),
         )
         canvas.drawRoundRect(rect, t.dpf(2f), t.dpf(2f), paint)
     }
@@ -1152,14 +1268,29 @@ class JoyStrip(
             MotionEvent.ACTION_DOWN -> {
                 parent?.requestDisallowInterceptTouchEvent(true)
                 lastY = e.y
+                lean(e.y)
                 return true
             }
-            MotionEvent.ACTION_MOVE -> { onDrag(e.y - lastY); lastY = e.y; return true }
+            MotionEvent.ACTION_MOVE -> {
+                onDrag(e.y - lastY); lastY = e.y
+                lean(e.y)
+                return true
+            }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                // back to the middle, for the reason the pad's knob is
+                aimY = 0f
+                postInvalidateOnAnimation()
                 onRelease(); performClick(); return true
             }
         }
         return super.onTouchEvent(e)
+    }
+
+    /** The grip leans towards the finger, stopping short of either end. */
+    private fun lean(y: Float) {
+        val reach = height / 2f - t.dpf(3f)
+        aimY = (y - height / 2f).coerceIn(-reach, reach)
+        postInvalidateOnAnimation()
     }
 
     override fun performClick(): Boolean { super.performClick(); return true }

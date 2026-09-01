@@ -46,6 +46,11 @@
 
     <!-- tools whose behaviour is not ported yet: the button exists and says
          so rather than doing nothing. -->
+    <string name="tip_fingerpen">Finger-Pen — a finger draws instead of orbiting</string>
+    <string name="finger_on">Finger-Pen on — a finger now draws</string>
+    <string name="finger_off">Finger-Pen off — a finger now orbits</string>
+    <string name="guide_selected">Guide selected — use the joystick</string>
+    <string name="guide_deselected">Guide released</string>
     <string name="pen_detected">Pen detected — one finger now orbits</string>
     <string name="colour_ink">BRUSH COLOUR</string>
     <string name="colour_background">BACKGROUND</string>

@@ -315,3 +315,74 @@ object GuideEditing {
         return loftFromCurves(strokes.map { st -> st.pts.map { it.p.copy() } }, tension)
     }
 }
+
+/**
+ * MOVING A WHOLE GUIDE.
+ *
+ * The web build transforms the guide's scene object — position, quaternion,
+ * scale — and lets the renderer compose that with the mesh. This build has no
+ * scene graph: a guide keeps the data it was made from and rebuilds its mesh
+ * from it, so a guide is moved by moving THAT and rebuilding.
+ *
+ * Which is the better place for it anyway. Everything that reads a guide —
+ * painting onto it, the edge trim, the nearest-point clamp, Fill's rows, the
+ * occlusion mask — works in world coordinates off `surface`, and a transform
+ * parked on a separate object would have to be threaded through every one of
+ * them.
+ */
+object GuideTransform {
+
+    /**
+     * Apply [m] to [guide] and rebuild its surface.
+     *
+     * Rigid motion and uniform scale only, which is what the joystick offers.
+     * A non-uniform scale would need a profile the sweep model cannot hold —
+     * `local` is written in the anchor frame and carried along the path, so
+     * squashing one world axis is not a thing the data can say.
+     *
+     * @return false when the guide is a kind that has no source data to move
+     *   (an imported model or image, which keep only their built mesh).
+     */
+    fun apply(guide: Guide, m: Mat4): Boolean {
+        val k = m.uniformScale()
+        val tmp = Vec3()
+
+        guide.sweep?.let { s ->
+            m.transformPoint(s.anchor, tmp); s.anchor.set(tmp)
+            for (p in s.path) { m.transformPoint(p, tmp); p.set(tmp) }
+            /* the profile is in the anchor frame, so it does not rotate with
+               the guide — it only grows or shrinks with it */
+            if (k != 1.0) for (p in s.local) p.set(p.x * k, p.y * k, p.z * k)
+            m.transformDirection(s.basisR, tmp)
+            if (tmp.lengthSq() > Vec3.EPS) s.basisR.set(tmp).normalize()
+            m.transformDirection(s.basisT, tmp)
+            if (tmp.lengthSq() > Vec3.EPS) s.basisT.set(tmp).normalize()
+            /* basisR has to stay square to basisT or the transported frames
+               shear; a rotation keeps them square but a scale need not */
+            s.basisR.addScaled(s.basisT, -(s.basisR dot s.basisT))
+            if (s.basisR.lengthSq() > Vec3.EPS) s.basisR.normalize()
+            else Vec3.perpTo(s.basisT, s.basisR)
+            s.depth *= k
+            return when (guide.kind) {
+                GuideKind.LOFT -> GuideEditing.rebuildLoft(guide)
+                else -> Guides.rebuildSweep(guide)
+            }
+        }
+
+        guide.plane?.let { pl ->
+            m.transformPoint(pl.origin, tmp); pl.origin.set(tmp)
+            for (v in listOf(pl.right, pl.up, pl.normal)) {
+                m.transformDirection(v, tmp)
+                if (tmp.lengthSq() > Vec3.EPS) v.set(tmp).normalize()
+            }
+            guide.plane = PlaneData(
+                pl.origin, pl.right, pl.up, pl.normal,
+                pl.lu * k, pl.lv * k,
+                if (k == 1.0) pl.outline else pl.outline.map { UV(it.u * k, it.v * k) },
+            )
+            return Guides.rebuildFlat(guide)
+        }
+
+        return false
+    }
+}
