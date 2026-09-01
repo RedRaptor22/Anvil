@@ -221,6 +221,67 @@ class NibTest {
     }
 
     @Test
+    fun `the trim survives a save and a reopen`() {
+        /* Measured once against a surface frame that is spent by the freeze,
+           so if the file does not carry it there is nothing left to measure it
+           from — and every stroke painted along a guide's edge springs back
+           out over that edge the moment the sketch is reopened. */
+        val sketch = Sketch()
+        val s = onFloor("wide", 7.0 * MM, n = 6)
+        s.pts[2].fitL = 0.4
+        s.pts[2].fitR = 0.9
+        sketch.add(s)
+
+        val text = Document.toJsonText(sketch, GuideScene(), Camera())
+        val back = Sketch()
+        Document.restore(text, back, GuideScene(), Camera())
+
+        val p = back.strokes[0].pts[2]
+        assertTrue(abs(p.fitL - 0.4) < 1e-6, "fitL came back as ${p.fitL}")
+        assertTrue(abs(p.fitR - 0.9) < 1e-6, "fitR came back as ${p.fitR}")
+    }
+
+    @Test
+    fun `a stroke with room writes no trim at all`() {
+        /* The key is written only where something was actually trimmed, so a
+           file whose strokes all had room is what it always was. */
+        val sketch = Sketch()
+        sketch.add(onFloor("wide", 7.0 * MM, n = 6))
+        val text = Document.toJsonText(sketch, GuideScene(), Camera())
+        assertTrue(!text.contains("\"fit\""), "an untrimmed stroke wrote a fit array")
+    }
+
+    @Test
+    fun `an inserted point inherits the trim of its neighbours`() {
+        /* Erase and smooth cut a stroke and interpolate a new point at the
+           cut. A new point taking the full nib is one bulge in the middle of
+           an otherwise clean boundary. */
+        val sketch = Sketch()
+        val s = Stroke(brush = "wide", baseRadius = 7.0 * MM)
+        for (i in 0 until 12) {
+            s.pts.add(
+                StrokePoint(Vec3(i * 0.06 - 0.33, 0.0, 0.0), pressure = 1.0, nrm = Vec3(0.0, 1.0, 0.0)),
+            )
+        }
+        for (p in s.pts) { p.fitL = 0.5; p.fitR = 0.5 }
+        Nib.freezeFrames(s)
+        sketch.add(s)
+        val was = s.pts.size
+
+        /* the screen eraser cuts BETWEEN samples and interpolates a point at
+           the cut, which is the path that can invent a fit from nothing */
+        val cam = Camera().apply { resize(1000, 1000) }
+        val px = cam.worldToScreen(s.pts[6].p, Vec3())
+        Editing.eraseScreen(sketch, cam, px.x, px.y, 20.0)
+        val now = sketch.strokes.sumOf { it.pts.size }
+        assertTrue(sketch.strokes.isNotEmpty() && now != was, "the eraser did not cut anything")
+
+        var worst = 0.0
+        for (st in sketch.strokes) for (p in st.pts) worst = kotlin.math.max(worst, p.fitR)
+        assertTrue(worst <= 0.55, "an inserted point took $worst of the nib")
+    }
+
+    @Test
     fun `freezing writes the frames onto the points`() {
         val s = onFloor("wide", 7.0 * MM, n = 5)
         Nib.freezeFrames(s)

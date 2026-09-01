@@ -110,7 +110,9 @@ object Document {
         val nrm = DoubleArray(n * 3)
         val roll = DoubleArray(n)
         val pressure = DoubleArray(n)
+        val fit = DoubleArray(n * 2)
         var hasNrm = false
+        var hasFit = false
 
         for (i in 0 until n) {
             val t = pts[i]
@@ -137,6 +139,8 @@ object Document {
             }
             roll[i] = q(t.roll)
             pressure[i] = q(t.pressure)
+            fit[i * 2] = q(t.fitL); fit[i * 2 + 1] = q(t.fitR)
+            if (t.fitL < 1.0 || t.fitR < 1.0) hasFit = true
         }
 
         val o = JsonObject()
@@ -151,6 +155,18 @@ object Document {
         o.put("tiltAz", JsonArray(MutableList(n) { JsonNull as JsonValue }))
         o.put("tiltAlt", JsonArray.of(DoubleArray(n) { 1.0 }))
         if (hasNrm) o.put("nrm", JsonArray.of(nrm))
+        /*
+         * HOW MUCH OF THE NIB THE GUIDE COULD TAKE, which is measured once
+         * against a surface frame that is gone by the time the file is
+         * written. Without it, reopening a sketch sprang every stroke painted
+         * along a guide's edge back out over that edge.
+         *
+         * An extra key rather than a change to any existing one, and written
+         * only where something was actually trimmed: a file whose strokes all
+         * had room is byte-for-byte what it was, and a reader that does not
+         * know the key gets the full nib, which is what it assumed anyway.
+         */
+        if (hasFit) o.put("fit", JsonArray.of(fit))
         return o
     }
 
@@ -162,6 +178,7 @@ object Document {
         val nrm = d.arr("nrm")
         val roll = d.arr("roll")
         val pressure = d.arr("pressure")
+        val fit = d.arr("fit")
 
         val out = ArrayList<StrokePoint>(n)
         for (i in 0 until n) {
@@ -180,7 +197,12 @@ object Document {
                     roll = roll?.items?.getOrNull(i)?.asDouble() ?: 0.0,
                     pressure = pressure?.items?.getOrNull(i)?.asDouble() ?: 0.5,
                     nrm = vecAt(nrm),
-                ),
+                ).also { pt ->
+                    if (fit != null && i * 2 + 1 < fit.size) {
+                        pt.fitL = fit[i * 2].asDouble() ?: 1.0
+                        pt.fitR = fit[i * 2 + 1].asDouble() ?: 1.0
+                    }
+                },
             )
         }
         return out

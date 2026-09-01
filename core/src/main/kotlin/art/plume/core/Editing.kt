@@ -220,7 +220,17 @@ object Editing {
             roll = near.roll,
             pressure = a.pressure + (b.pressure - a.pressure) * t,
             nrm = near.nrm?.copy(),
-        )
+        ).also {
+            /* THE EDGE TRIM IS INTERPOLATED TOO. It was measured against a
+               surface frame that is long gone by the time a point is inserted,
+               and a new point defaulting to the full nib is a section that
+               springs back out over the guide's edge — one bulge in the middle
+               of an otherwise clean boundary, wherever an erase or a smooth
+               happened to cut. The neighbours are the best measurement there
+               is now, and both of them have one. */
+            it.fitL = a.fitL + (b.fitL - a.fitL) * t
+            it.fitR = a.fitR + (b.fitR - a.fitR) * t
+        }
     }
 
     /**
