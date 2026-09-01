@@ -159,6 +159,9 @@ class MainActivity : Activity(), Gestures.Listener {
     private val main = Handler(Looper.getMainLooper())
     private var autosavePending = false
 
+    /** 0 saved, 1 a write still owed, 2 the last one failed. */
+    private var saveState = 0
+
     /** The material file waiting for its own destination; see [exportObj]. */
     private var pendingMtl: String? = null
 
@@ -288,6 +291,16 @@ class MainActivity : Activity(), Gestures.Listener {
         refreshGroups()
         refreshResources()
         pushLiquify()
+        /*
+         * FIRST RUN ONLY, and only on an empty page: someone whose autosave
+         * restored a drawing has plainly been here before, whatever the flag
+         * says.
+         */
+        if (!getPreferences(MODE_PRIVATE).getBoolean(PREF_WALKED, false) &&
+            sketch.strokes.isEmpty()
+        ) {
+            startWalk(0)
+        }
         pushSettings()
         refreshControls()
         syncBrushControls()
@@ -344,6 +357,7 @@ class MainActivity : Activity(), Gestures.Listener {
      */
     @Deprecated("Activity.onBackPressed")
     override fun onBackPressed() {
+        if (chrome.walkShowing()) { endWalk(); return }
         if (chrome.closeTop()) return
         if (sketch.selection.isNotEmpty()) { deselectAll(); return }
         if (history.canUndo()) { history.undo(); refreshScene(); return }
@@ -403,6 +417,10 @@ class MainActivity : Activity(), Gestures.Listener {
             sketch.selectOnly(sketch.editable())
             commitSelectionChange("Select all", before)
         }
+        chrome.onWalkNext = {
+            if (walkStep >= WALK.size - 1) endWalk() else startWalk(walkStep + 1)
+        }
+        chrome.onWalkSkip = { endWalk() }
         chrome.onResourceActivate = { id -> activateResource(id) }
         chrome.onResourceVisible = { id, visible ->
             guides.byId(id)?.let { g -> guides.setResourceVisible(g, visible) }
@@ -599,7 +617,7 @@ class MainActivity : Activity(), Gestures.Listener {
         Action.HOME -> { resetView(); pushCamera(); refreshControls() }
         Action.EXPORT -> chooseExportFormat()
         Action.MENU -> chrome.setMenu(true)
-        Action.HELP -> toast(getString(R.string.not_yet_help))
+        Action.HELP -> startWalk(0)
         Action.UNDO -> { history.undo(); refreshScene() }
         Action.REDO -> { history.redo(); refreshScene() }
         Action.MIRROR -> cycleMirror()
@@ -943,6 +961,33 @@ class MainActivity : Activity(), Gestures.Listener {
             liquifyCfg.range,
             liquifyCfg.strength,
         )
+    }
+
+    // ---- the walkthrough ---------------------------------------------------
+
+    private var walkStep = -1
+
+    private fun startWalk(i: Int) {
+        walkStep = i
+        val (title, body) = WALK[i]
+        chrome.setWalk(
+            i, WALK.size, getString(title),
+            /*
+             * Step 2 describes a gesture that differs between pen and finger
+             * mode: with finger drawing on, one finger is busy and orbiting
+             * takes two.
+             */
+            getString(
+                if (i == 1 && !gestures.fingerDraws) R.string.walk_b2_pen else body,
+            ),
+            last = i == WALK.size - 1,
+        )
+    }
+
+    private fun endWalk() {
+        walkStep = -1
+        chrome.setWalk(null, WALK.size, "", "", false)
+        getPreferences(MODE_PRIVATE).edit().putBoolean(PREF_WALKED, true).apply()
     }
 
     // ---- saved guides and references ---------------------------------------
@@ -2369,17 +2414,30 @@ class MainActivity : Activity(), Gestures.Listener {
      * enough to be past the end of a gesture and short enough that almost
      * nothing is at risk.
      */
+    private fun setSaveState(state: Int) {
+        if (saveState == state) return
+        saveState = state
+        chrome.setSaveState(state)
+    }
+
     private fun scheduleAutosave() {
+        setSaveState(1)
         if (autosavePending) return
         autosavePending = true
         main.postDelayed({ autosavePending = false; writeAutosave() }, 500)
     }
 
     private fun writeAutosave() {
-        if (sketch.strokes.isEmpty() && guides.active == null) return
+        if (sketch.strokes.isEmpty() && guides.active == null) { setSaveState(0); return }
         val text = currentDocumentText()
         io.execute {
-            runCatching { autosaveFile().writeText(text) }
+            val ok = runCatching { autosaveFile().writeText(text) }.isSuccess
+            /*
+             * A save you were told about that then quietly did not happen is
+             * the one failure a sketchbook must never have, so the dot reports
+             * what actually landed rather than what was attempted.
+             */
+            main.post { setSaveState(if (ok) 0 else 2) }
         }
     }
 
@@ -2499,6 +2557,19 @@ class MainActivity : Activity(), Gestures.Listener {
         const val REQ_EXPORT_MTL = 6
         const val REQ_EXPORT_PNG = 7
         const val REQ_IMPORT = 8
+
+        /** Whether the first-run walkthrough has been seen. */
+        const val PREF_WALKED = "walked"
+
+        /** The six steps, as (title, body) string pairs. */
+        private val WALK = listOf(
+            R.string.walk_t1 to R.string.walk_b1,
+            R.string.walk_t2 to R.string.walk_b2,
+            R.string.walk_t3 to R.string.walk_b3,
+            R.string.walk_t4 to R.string.walk_b4,
+            R.string.walk_t5 to R.string.walk_b5,
+            R.string.walk_t6 to R.string.walk_b6,
+        )
 
         /**
          * Guide names that are a KIND rather than a name. A reference carries

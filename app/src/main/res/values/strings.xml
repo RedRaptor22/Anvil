@@ -46,7 +46,6 @@
 
     <!-- tools whose behaviour is not ported yet: the button exists and says
          so rather than doing nothing. -->
-    <string name="not_yet_help">Walkthrough not ported yet</string>
     <string name="not_yet_colour_wheel">The colour wheel is not built yet</string>
 
     <!-- #stagePanel -->
@@ -175,6 +174,56 @@
     <string name="guide_activated">Guide activated</string>
     <string name="imported">Imported %1$s</string>
     <string name="import_failed">Could not read that file</string>
+
+    <!-- the six-step walkthrough -->
+    <string name="walk_step">Step %1$d of %2$d</string>
+    <string name="walk_next">Next</string>
+    <string name="walk_done">Start sketching</string>
+    <string name="walk_skip">Skip</string>
+    <string name="walk_t1">Draw one stroke</string>
+    <string name="walk_b1">With no guide active, your first stroke is not a curve — it is extruded along the direction you are looking in and becomes a translucent 3D guide. Draw one now.</string>
+    <string name="walk_t2">Orbit and look at it</string>
+    <string name="walk_b2">Drag with two fingers to orbit — one finger is busy drawing. Pinch to zoom, three fingers to pan. The guide has depth: the orange edge marks where your first stroke was.</string>
+    <string name="walk_b2_pen">Drag with one finger to orbit. The guide has depth: the orange edge marks where your first stroke was.</string>
+    <string name="walk_t3">Draw on the guide</string>
+    <string name="walk_b3">Every stroke from here projects onto that surface, so it picks up real 3D coordinates. That is the whole trick.</string>
+    <string name="walk_t4">Bend it</string>
+    <string name="walk_b4">Orbit to a new viewpoint, hit Bend, and draw a path. The first stroke keeps its shape and gets swept along what you just drew — a circle plus a big top-view circle gives you a doughnut.</string>
+    <string name="walk_t5">Navigate</string>
+    <string name="walk_b5">Double-tap snaps to the nearest of the six straight-on views, and a three-finger double-tap flips to orthographic. Press and hold to pin the orbit point; hold on empty space to reset. Change the lens from the menu.</string>
+    <string name="walk_t6">The guide is also a mask</string>
+    <string name="walk_b6">Anything hidden behind the guide cannot be erased or selected — cover what you want to protect, then erase freely. Toggle it under Isolate.</string>
+
+    <!-- data-tip, in the web build's own words -->
+    <string name="tip_home">Reset view — F, or press and hold empty space</string>
+    <string name="tip_export">Export — PNG, glTF/OBJ/STL or a .plume file</string>
+    <string name="tip_menu">Settings</string>
+    <string name="tip_help">Walkthrough</string>
+    <string name="tip_undo">Undo — Ctrl+Z</string>
+    <string name="tip_redo">Redo — Ctrl+Shift+Z</string>
+    <string name="tip_mirror">Mirror — X, then Z</string>
+    <string name="tip_stage">Stage — curves, resources, scene</string>
+    <string name="tip_dup">Duplicate</string>
+    <string name="tip_dupmir">Duplicate symmetrically</string>
+    <string name="tip_delete">Delete</string>
+    <string name="tip_guide_save">Save to the Import tab</string>
+    <string name="tip_guide_close">Close the guide</string>
+    <string name="tip_pressure">Pressure sensitivity</string>
+    <string name="tip_draw">Draw — tap again for Draw Shape · D</string>
+    <string name="tip_shape">Draw Shape — snaps to lines, curves and circles · R</string>
+    <string name="tip_select">Select — tap again for Lasso · S</string>
+    <string name="tip_lasso">Lasso — drag a loop · L</string>
+    <string name="tip_smooth">Smooth — drag over a shaky curve · M</string>
+    <string name="tip_fill">Fill — coats the whole guide in the current brush and colour · K</string>
+    <string name="tip_erase">Eraser — tap again for Vacuum · E</string>
+    <string name="tip_vacuum">Vacuum — deletes whole curves · V</string>
+    <string name="tip_guide">Draw 3D Guide — extrudes along the view direction · G</string>
+    <string name="tip_flatguide">Flat Shape Guide — draw a closed outline and it fills in facing you</string>
+    <string name="tip_bend">Bend — redraw the sweep from another viewpoint · B</string>
+    <string name="tip_loft">Loft — connect two or more curves</string>
+    <string name="tip_prim">Primitives — cube, pyramid, sphere, torus, tube</string>
+    <string name="tip_liquify">Liquify — press and drag to deform the selection</string>
+    <string name="tip_inject">Injector — samples the whole brush</string>
 
     <string name="nothing_under_that">Nothing under that</string>
     <string name="bad_hex">Not a colour — six hex digits, or three</string>

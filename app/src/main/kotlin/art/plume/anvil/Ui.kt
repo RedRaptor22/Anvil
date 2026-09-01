@@ -417,6 +417,96 @@ class DragValue(
 }
 
 /**
+ * `data-tip` — the name of a control, on hover or a long press.
+ *
+ * Two ways in, because there are two ways to ask. A stylus HOVERS, which is
+ * the same gesture as a mouse and gets the same answer; a finger has no hover
+ * at all, so a long press stands in for it. Both land in the same card, which
+ * follows the control rather than sitting in a fixed corner: a tip you have to
+ * look away to read is a tip you stop reading.
+ *
+ * Attached rather than built in, so a control does not have to know it has a
+ * name — the same reason the web build puts it in an attribute.
+ */
+object Tip {
+
+    /** GUESS: long enough not to fire on a tap, short enough to feel asked-for. */
+    const val HOLD_MS = 500L
+
+    fun attach(view: View, card: TipCard, text: String) {
+        view.setOnLongClickListener { card.showFor(view, text); true }
+        /*
+         * A stylus hovering over a control is asking what it is. The pen is
+         * the one pointer on Android that reports hover, which is why this is
+         * worth wiring at all.
+         */
+        view.setOnHoverListener { v, e ->
+            when (e.actionMasked) {
+                MotionEvent.ACTION_HOVER_ENTER -> card.showFor(v, text)
+                MotionEvent.ACTION_HOVER_EXIT -> card.hide()
+            }
+            false
+        }
+    }
+}
+
+/** `.tip` — an inverted capsule that points at whatever asked for it. */
+class TipCard(ctx: Context, private val t: Tokens) : TextView(ctx) {
+
+    init {
+        setTextColor(t.onActive)
+        textSize = 11.5f
+        setLineSpacing(0f, 1.5f)
+        background = GradientDrawable().apply {
+            setColor(t.active)
+            cornerRadius = t.dpf(9f)
+        }
+        setPadding(t.dp(11f), t.dp(6f), t.dp(11f), t.dp(6f))
+        elevation = t.dpf(8f)
+        maxWidth = t.dp(240f)
+        alpha = 0f
+        visibility = GONE
+    }
+
+    fun showFor(anchor: View, message: String) {
+        text = message
+        visibility = VISIBLE
+        val parent = this.parent as? ViewGroup ?: return
+        val a = IntArray(2)
+        val p = IntArray(2)
+        anchor.getLocationInWindow(a)
+        parent.getLocationInWindow(p)
+        measure(
+            View.MeasureSpec.makeMeasureSpec(parent.width, View.MeasureSpec.AT_MOST),
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
+        )
+        /*
+         * Below the control by preference, above it when there is no room —
+         * a tip that runs off the bottom of the screen is worse than one on
+         * the other side of the thing it names.
+         */
+        val x = (a[0] - p[0] + anchor.width / 2 - measuredWidth / 2)
+            .coerceIn(t.dp(4f), maxOf(t.dp(4f), parent.width - measuredWidth - t.dp(4f)))
+        val below = a[1] - p[1] + anchor.height + t.dp(6f)
+        val above = a[1] - p[1] - measuredHeight - t.dp(6f)
+        val y = if (below + measuredHeight < parent.height) below else maxOf(t.dp(4f), above)
+        translationX = x.toFloat()
+        translationY = y.toFloat()
+        animate().cancel()
+        animate().alpha(1f).setDuration(120).start()
+        removeCallbacks(hideLater)
+        postDelayed(hideLater, 2600)
+    }
+
+    private val hideLater = Runnable { hide() }
+
+    fun hide() {
+        removeCallbacks(hideLater)
+        animate().alpha(0f).setDuration(120).withEndAction { visibility = GONE }.start()
+    }
+}
+
+/**
  * `#toast` — a card that fades up from the bottom and back out.
  *
  * Deliberately not an Android Toast: on API 30+ those are drawn by the system

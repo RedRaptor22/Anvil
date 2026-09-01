@@ -131,6 +131,10 @@ class Chrome(private val act: Activity, val t: Tokens) {
     var onResourceDelete: (Int) -> Unit = {}
     var onImportReference: () -> Unit = {}
 
+    /** The walkthrough. */
+    var onWalkNext: () -> Unit = {}
+    var onWalkSkip: () -> Unit = {}
+
     /** The liquify strip. Its three numbers are dragged, like everything else. */
     var onLiquifyMode: (String) -> Unit = {}
     var onLiquifyValue: (which: String, value: Double) -> Unit = { _, _ -> }
@@ -225,6 +229,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
     private val selBar = panel(act, t)
     private val liquifyPanel = panel(act, t)
     private val joyPanel = panel(act, t)
+    private val walkPanel = panel(act, t, large = true)
     private val stagePanel = panel(act, t, large = true)
     private val brushGrid = panel(act, t, large = true)
     private val slidePop = panel(act, t, large = true)
@@ -233,6 +238,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
     private val dock = panel(act, t, radius = 0f)
     private val scrim = View(act)
     private val toastCard = ToastCard(act, t)
+    private val tipCard = TipCard(act, t)
 
     private val toolButtons = HashMap<Tool, IcoButton>()
     private val brushTiles = HashMap<String, IcoButton>()
@@ -298,6 +304,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
     private var focalMm = 50.0
     private var saveText = ""
     private var symmetryOn = false
+    private var saveDotState = 0
 
     /** The group being renamed, so a refresh cannot yank the field away. */
     private var renaming: Int? = null
@@ -310,10 +317,15 @@ class Chrome(private val act: Activity, val t: Tokens) {
     private lateinit var radialValue: TextView
     private lateinit var focalValue: TextView
     private lateinit var saveState: TextView
+    private lateinit var saveDot: View
     private lateinit var pressRow: LinearLayout
     private lateinit var joyPad: JoyPad
     private lateinit var joyStrip: JoyStrip
     private lateinit var joyTarget: TextView
+    private lateinit var walkStep: TextView
+    private lateinit var walkTitle: TextView
+    private lateinit var walkBody: TextView
+    private lateinit var walkNext: TextButton
     private val joyModes = HashMap<Transform.Mode, TextButton>()
     private var joyMode = Transform.Mode.MOVE
     private var joyLabel = ""
@@ -348,6 +360,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
         buildUndoPill()
         buildCtxBar()
         buildSelBar()
+        buildWalk()
         buildJoyPanel()
         buildLiquifyPanel()
         buildStagePanel()
@@ -372,12 +385,14 @@ class Chrome(private val act: Activity, val t: Tokens) {
             .also {
                 it.setOnClickListener { _ -> onAction(act1) }
                 icons[name] = it
+                TIPS[name]?.let { r -> Tip.attach(it, tipCard, act.getString(r)) }
             }
 
     /** An `.ico` button that selects a tool, with D.1's repeat-tap partner swap. */
     private fun toolIco(which: Tool): IcoButton =
         IcoButton(act, t).icon(which.icon).also { b ->
             b.dot = partner.containsKey(which)
+            TOOL_TIPS[which]?.let { r -> Tip.attach(b, tipCard, act.getString(r)) }
             b.setOnClickListener {
                 val alt = partner[which]
                 /*
@@ -714,6 +729,79 @@ class Chrome(private val act: Activity, val t: Tokens) {
      * axis: it is the one direction a flat circle cannot show, so it gets a
      * control of its own rather than being folded into the pad.
      */
+    /**
+     * `#walk` — the six-step first run.
+     *
+     * It is a card at the bottom rather than a modal, because every step asks
+     * you to DO something: a scrim over the canvas would hide the thing the
+     * step is describing.
+     */
+    private fun buildWalk() {
+        walkPanel.orientation = LinearLayout.VERTICAL
+        val p = t.dp(18f)
+        walkPanel.setPadding(p, p, p, p)
+        walkStep = TextView(act).apply {
+            setTextColor(t.dim2)
+            textSize = 10f
+            letterSpacing = 0.11f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+        }
+        walkTitle = TextView(act).apply {
+            setTextColor(t.ink)
+            textSize = 15f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            setPadding(0, t.dp(4f), 0, 0)
+        }
+        walkBody = TextView(act).apply {
+            setTextColor(t.dim)
+            textSize = 12.5f
+            setLineSpacing(0f, 1.6f)
+            setPadding(0, t.dp(6f), 0, t.dp(10f))
+        }
+        walkPanel.addView(walkStep)
+        walkPanel.addView(walkTitle)
+        walkPanel.addView(walkBody)
+
+        val row = LinearLayout(act).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        row.addView(
+            TextButton(act, t, small = true).apply {
+                text = act.getString(R.string.walk_skip)
+                setOnClickListener { onWalkSkip() }
+                layoutParams = LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f,
+                )
+            },
+        )
+        walkNext = TextButton(act, t, filled = true, small = true).apply {
+            text = act.getString(R.string.walk_next)
+            on = true
+            setOnClickListener { onWalkNext() }
+        }
+        row.addView(walkNext)
+        walkPanel.addView(
+            row,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ),
+        )
+        walkPanel.visibility = View.GONE
+    }
+
+    /** Show step [i] of [total], or hide the card when [i] is null. */
+    fun setWalk(i: Int?, total: Int, title: String, body: String, last: Boolean) {
+        if (i == null) { walkPanel.visibility = View.GONE; return }
+        walkPanel.visibility = View.VISIBLE
+        walkStep.text = act.getString(R.string.walk_step, i + 1, total)
+        walkTitle.text = title
+        walkBody.text = body
+        walkNext.text = act.getString(if (last) R.string.walk_done else R.string.walk_next)
+    }
+
+    fun walkShowing(): Boolean = walkPanel.visibility == View.VISIBLE
+
     private fun buildJoyPanel() {
         joyPanel.orientation = LinearLayout.VERTICAL
         joyPanel.gravity = Gravity.CENTER_HORIZONTAL
@@ -1616,12 +1704,28 @@ class Chrome(private val act: Activity, val t: Tokens) {
         }
         body.addView(files, matchWrap(t.dp(4f)))
 
+        /*
+         * `#saveDot` — green when the file on disk matches what is on screen,
+         * amber while a write is still owed, red when the last one failed.
+         * A save you were told about that then quietly did not happen is the
+         * one failure a sketchbook must never have.
+         */
+        val saveRow = LinearLayout(act).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = matchWrap(t.dp(6f))
+        }
+        saveDot = View(act).apply {
+            layoutParams = LinearLayout.LayoutParams(t.dp(7f), t.dp(7f))
+                .apply { marginEnd = t.dp(6f) }
+        }
+        saveRow.addView(saveDot)
         saveState = TextView(act).apply {
             setTextColor(t.dim2)
             textSize = 11f
-            setPadding(t.dp(1f), t.dp(6f), 0, 0)
         }
-        body.addView(saveState)
+        saveRow.addView(saveState)
+        body.addView(saveRow)
 
         /* the modal is taller than a phone, so it scrolls inside its card */
         sysMenu.addView(
@@ -1763,6 +1867,19 @@ class Chrome(private val act: Activity, val t: Tokens) {
         root.addView(sysMenu, lp(Gravity.CENTER, width = t.px(R.dimen.sysMenuW)))
         root.addView(colorCard, lp(Gravity.START or Gravity.CENTER_VERTICAL, left = t.px(R.dimen.brushGridLeft), width = t.px(R.dimen.colorCardW)))
         root.addView(slidePop, lp(Gravity.START or Gravity.CENTER_VERTICAL, left = t.px(R.dimen.brushGridLeft), width = t.px(R.dimen.slidePopW)))
+        root.addView(
+            walkPanel,
+            lp(
+                Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL,
+                left = t.px(R.dimen.edge), right = t.px(R.dimen.edge),
+                bottom = t.px(R.dimen.walkBottom), width = t.px(R.dimen.walkW),
+            ),
+        )
+        /* the tip sits over everything, because it names everything */
+        root.addView(
+            tipCard,
+            lp(Gravity.TOP or Gravity.START),
+        )
         root.addView(toastCard, lp(Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL, bottom = t.px(R.dimen.toastBottom)))
     }
 
@@ -2095,6 +2212,9 @@ class Chrome(private val act: Activity, val t: Tokens) {
     }
 
     /** The tool pill's Mirror button lights for either kind of symmetry. */
+    /** 0 saved, 1 a write still owed, 2 the last one failed. */
+    fun setSaveState(state: Int) { saveDotState = state; refresh() }
+
     fun setSymmetry(on: Boolean) { symmetryOn = on; refresh() }
 
     /** [usable] dims the axes that are end-on and cannot be dragged along. */
@@ -2276,6 +2396,16 @@ class Chrome(private val act: Activity, val t: Tokens) {
         focalBar.value = focalMm
         focalValue.text = "${focalMm.toInt()}mm"
         saveState.text = saveText
+        saveDot.background = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(
+                when (saveDotState) {
+                    1 -> t.accent
+                    2 -> t.red
+                    else -> t.green
+                },
+            )
+        }
 
         swatch(bgSwatch, backgroundColor)
         swatch(lightSwatch, lightColor)
@@ -2313,6 +2443,45 @@ class Chrome(private val act: Activity, val t: Tokens) {
     }
 
     companion object {
+        /**
+         * `data-tip` for the action buttons, in the web build's own words.
+         * Keyed by icon name, which is how [ico] identifies them.
+         */
+        private val TIPS = mapOf(
+            "grid" to R.string.tip_home,
+            "export" to R.string.tip_export,
+            "menu" to R.string.tip_menu,
+            "help" to R.string.tip_help,
+            "undo" to R.string.tip_undo,
+            "redo" to R.string.tip_redo,
+            "mirror" to R.string.tip_mirror,
+            "stage" to R.string.tip_stage,
+            "dup" to R.string.tip_dup,
+            "dupmir" to R.string.tip_dupmir,
+            "trash" to R.string.tip_delete,
+            "eye" to R.string.tip_guide_save,
+            "close" to R.string.tip_guide_close,
+            "brush" to R.string.tip_pressure,
+        )
+
+        private val TOOL_TIPS = mapOf(
+            Tool.DRAW to R.string.tip_draw,
+            Tool.SHAPE to R.string.tip_shape,
+            Tool.SELECT to R.string.tip_select,
+            Tool.LASSO to R.string.tip_lasso,
+            Tool.SMOOTH to R.string.tip_smooth,
+            Tool.FILL to R.string.tip_fill,
+            Tool.ERASE to R.string.tip_erase,
+            Tool.VACUUM to R.string.tip_vacuum,
+            Tool.GUIDE to R.string.tip_guide,
+            Tool.FLATGUIDE to R.string.tip_flatguide,
+            Tool.BEND to R.string.tip_bend,
+            Tool.LOFT to R.string.tip_loft,
+            Tool.PRIM to R.string.tip_prim,
+            Tool.LIQUIFY to R.string.tip_liquify,
+            Tool.INJECT to R.string.tip_inject,
+        )
+
         /** The rail's swatches. Index 0 is the default near-black ink. */
         val PALETTE = intArrayOf(
             0xFF1B1C21.toInt(), 0xFFFAFAFA.toInt(), 0xFF8C8C96.toInt(), 0xFFF2545B.toInt(),
