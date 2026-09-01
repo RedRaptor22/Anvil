@@ -2314,26 +2314,37 @@ class Chrome(private val act: Activity, val t: Tokens) {
             toolPill.addView(unGrid(icons.getValue("stage")))
             showLiveHalves()
         } else {
+            /*
+             * ONE CELL PER SLOT, NOT ONE PER TOOL.
+             *
+             * A pair shares a slot here exactly as it does on the desktop, so
+             * the grid holds six tools plus Mirror and Stage: eight tiles in
+             * three columns. The two halves of a pair go into the SAME cell,
+             * stacked, because a GridLayout child that is GONE still reserves
+             * the cell it was given — laying both out as siblings would leave
+             * a hole in the grid wherever a partner was hidden.
+             */
             val grid = GridLayout(act).apply { columnCount = 3 }
+            fun cellParams() = GridLayout.LayoutParams().apply {
+                width = 0
+                height = t.px(R.dimen.toolTileCompact)
+                columnSpec = GridLayout.spec(GridLayout.UNDEFINED, 1f)
+                setMargins(t.dp(4f), t.dp(4f), t.dp(4f), t.dp(4f))
+            }
+            fun fill() = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT,
+            )
+            fun tile(v: View) = FrameLayout(act).apply { addView(reparent(v), fill()) }
             for (tl in order) {
-                val b = reparent(toolButtons.getValue(tl))
-                b.layoutParams = GridLayout.LayoutParams().apply {
-                    width = 0
-                    height = t.px(R.dimen.toolTileCompact)
-                    columnSpec = GridLayout.spec(GridLayout.UNDEFINED, 1f)
-                    setMargins(t.dp(4f), t.dp(4f), t.dp(4f), t.dp(4f))
-                }
-                grid.addView(b)
+                val alt = partner[tl]
+                // the second half of a pair rides in the first half's cell
+                if (alt != null && alt < tl) continue
+                val cell = tile(toolButtons.getValue(tl))
+                if (alt != null) cell.addView(reparent(toolButtons.getValue(alt)), fill())
+                grid.addView(cell, cellParams())
             }
             for (extra in listOf("mirror", "stage")) {
-                val b = reparent(icons.getValue(extra))
-                b.layoutParams = GridLayout.LayoutParams().apply {
-                    width = 0
-                    height = t.px(R.dimen.toolTileCompact)
-                    columnSpec = GridLayout.spec(GridLayout.UNDEFINED, 1f)
-                    setMargins(t.dp(4f), t.dp(4f), t.dp(4f), t.dp(4f))
-                }
-                grid.addView(b)
+                grid.addView(tile(icons.getValue(extra)), cellParams())
             }
             toolPill.addView(
                 grid,

@@ -225,12 +225,17 @@ class Gestures(private val listener: Listener) {
                 downX = ev.getX(i); downY = ev.getY(i)
                 tapX = downX; tapY = downY
                 /*
-                 * The hold clock runs for a finger, not for the pen. A pen
-                 * resting still mid-stroke is hold-to-shape's business, and
-                 * pinning the orbit point under it as well would be two
-                 * different things happening to one gesture.
+                 * The hold clock runs for a pointer that is NAVIGATING, not
+                 * one that is drawing.
+                 *
+                 * A pointer resting still mid-stroke is hold-to-shape's
+                 * business, and pinning the orbit point under it as well would
+                 * be two different things happening to one gesture. The test
+                 * used to be "not a stylus", which is only half of it: with
+                 * finger drawing on, a finger holding still both drew and
+                 * pinned the pivot out from under its own stroke.
                  */
-                if (!isStylus(ev, i)) armHold(ev.getX(i), ev.getY(i))
+                if (!isStylus(ev, i) && !fingerDraws) armHold(ev.getX(i), ev.getY(i))
                 if (isStylus(ev, i) || fingerDraws) {
                     drawingPointer = ev.getPointerId(i)
                     listener.onDrawBegin(

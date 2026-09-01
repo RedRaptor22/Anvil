@@ -226,6 +226,22 @@ class Mat4 {
         return if (abs(sx - sy) < 1e-6 && abs(sy - sz) < 1e-6) sx else 1.0
     }
 
+    /**
+     * Whether this transform turns a right-handed basis into a left-handed one
+     * — which is to say, whether it contains a reflection.
+     *
+     * The sign of the upper-left 3x3 determinant, and it matters because a
+     * cross product is not preserved by a reflection: `Ma x Mb` is MINUS
+     * `M(a x b)` when this is true. Anything storing an angle measured against
+     * a cross product has to know.
+     */
+    fun flipsHandedness(): Boolean {
+        val d = m[0] * (m[5] * m[10] - m[6] * m[9]) -
+            m[4] * (m[1] * m[10] - m[2] * m[9]) +
+            m[8] * (m[1] * m[6] - m[2] * m[5])
+        return d < 0.0
+    }
+
     /** The three basis columns of a camera's world matrix: right, up, forward. */
     fun extractBasis(right: Vec3, up: Vec3, forward: Vec3) {
         right.set(m[0], m[1], m[2])

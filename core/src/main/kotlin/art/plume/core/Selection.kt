@@ -223,6 +223,7 @@ object Selection {
      */
     fun transform(strokes: List<Stroke>, m: Mat4) {
         val uniform = m.uniformScale()
+        val flips = m.flipsHandedness()
         val tmp = Vec3()
         for (st in strokes) {
             for (pt in st.pts) {
@@ -243,6 +244,24 @@ object Selection {
                 pt.nrm?.let {
                     m.transformDirection(it, tmp)
                     if (tmp.lengthSq() > Vec3.EPS) it.set(tmp).normalize()
+                }
+                /*
+                 * A MIRROR REVERSES THE FRAME THE ROLL IS MEASURED IN.
+                 *
+                 * The section angle is measured from `ref` towards `tan x ref`,
+                 * and a reflection sends `tan x ref` to MINUS the transform of
+                 * it — so carrying the angle across unchanged aims a mirrored
+                 * blade on the wrong side of its own stroke. Re-deriving it
+                 * from the surface, which has just been transformed too, is
+                 * exact for a reflection and for everything else; a point with
+                 * no surface has only the angle, and negating it is what a
+                 * handedness flip does to it.
+                 */
+                val t = pt.tan; val r = pt.ref
+                if (pt.nrm != null && t != null && r != null) {
+                    pt.roll = Nib.rollOf(pt, t, r)
+                } else if (flips) {
+                    pt.roll = -pt.roll
                 }
             }
             st.baseRadius *= uniform

@@ -308,6 +308,96 @@ class NibTest {
         assertTrue(above / MM > 6.0, "the cube did not stand off the wall")
     }
 
+    /** A spiral wrapped round a cylinder of radius 0.3 about the y axis. */
+    private fun onCylinder(brush: String): Stroke {
+        val s = Stroke(brush = brush, baseRadius = 7.0 * MM)
+        for (i in 0 until 14) {
+            val a = i * 0.25
+            val n = Vec3(cos(a), 0.0, sin(a))
+            s.pts.add(
+                StrokePoint(
+                    Vec3(n.x * 0.3, i * 0.012, n.z * 0.3), pressure = 1.0, nrm = n.copy(),
+                ),
+            )
+        }
+        return s
+    }
+
+    /** How far the section basis tips out of the surface, worst point. */
+    private fun tipOut(st: Stroke): Double {
+        var worst = 0.0
+        for (p in st.pts) {
+            val t = p.tan ?: continue
+            val r = p.ref ?: continue
+            val n = p.nrm ?: continue
+            val b = t cross r
+            val u = Vec3(
+                r.x * cos(p.roll) + b.x * sin(p.roll),
+                r.y * cos(p.roll) + b.y * sin(p.roll),
+                r.z * cos(p.roll) + b.z * sin(p.roll),
+            )
+            worst = kotlin.math.max(worst, abs(u dot n))
+        }
+        return worst
+    }
+
+    @Test
+    fun `a mirrored blade lies on the mirrored surface`() {
+        /* A REFLECTION TURNS THE FRAME THE ROLL IS MEASURED IN OVER.
+         *
+         * The angle is measured from `ref` towards `tan x ref`, and a
+         * reflection sends `tan x ref` to MINUS the transform of it — so an
+         * angle carried across unchanged comes out reflected about the
+         * reference instead of transformed with it.
+         *
+         * On a FLAT guide the two answers agree, because transport keeps the
+         * reference in the surface and the discrepancy vanishes. It is a
+         * curved guide that shows it: on a stroke wrapped round a cylinder the
+         * mirrored nib tips 58 degrees out of the surface it is painted on.
+         */
+        val s = onCylinder("wide")
+        Nib.freezeFrames(s)
+        assertTrue(tipOut(s) < 1e-9, "the nib was not in the surface to begin with")
+
+        val copy = Selection.transformedCopy(s, Mat4.scale(-1.0, 1.0, 1.0, Mat4()))
+        assertTrue(tipOut(copy) < 1e-9, "the mirrored nib tipped ${tipOut(copy)} out")
+
+        // and the mesh is still on the cylinder it was mirrored onto
+        val mesh = StrokeGeometry.build(copy)!!
+        var worst = 0.0
+        for (i in 0 until mesh.vertexCount) {
+            val x = mesh.positions[i * 3].toDouble()
+            val z = mesh.positions[i * 3 + 2].toDouble()
+            val d = abs(kotlin.math.hypot(x, z) - 0.3)
+            if (d > worst) worst = d
+        }
+        assertTrue(worst / MM < 1.1, "the mirrored blade stood ${worst / MM}mm off the cylinder")
+    }
+
+    @Test
+    fun `a blade keeps lying on a curved surface through a rotation`() {
+        val s = onCylinder("wide")
+        Nib.freezeFrames(s)
+        val copy = Selection.transformedCopy(s, Mat4.rotationZ(0.7, Mat4()))
+        assertTrue(tipOut(copy) < 1e-9, "the rotated nib tipped ${tipOut(copy)} out")
+    }
+
+    @Test
+    fun `a rotated blade keeps lying on its surface`() {
+        val s = onFloor("wide", 7.0 * MM)
+        Nib.freezeFrames(s)
+        // a quarter turn about z sends the floor's normal from +y to -x
+        val m = Mat4.rotationZ(PI / 2, Mat4())
+        val copy = Selection.transformedCopy(s, m)
+        val mesh = StrokeGeometry.build(copy)!!
+        var worst = 0.0
+        for (i in 0 until mesh.vertexCount) {
+            val d = abs(mesh.positions[i * 3].toDouble())
+            if (d > worst) worst = d
+        }
+        assertTrue(worst / MM < 1.1, "the rotated blade stood ${worst / MM}mm off")
+    }
+
     @Test
     fun `a closed ring of paint still lies flat`() {
         val s = Stroke(brush = "wide", baseRadius = 7.0 * MM)
