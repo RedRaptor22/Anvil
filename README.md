@@ -186,13 +186,14 @@ looking at a sheet you can draw on; the pen then paints onto that surface
 rather than onto the screen plane, clamping back to the nearest point if you
 run off the edge.
 
-A scrolling tool row reaches draw, erase, vacuum, smooth, select, lasso,
-liquify and the two guide kinds; beside it, fill, duplicate, mirror, delete,
-save, open and export. Every gesture undoes in one step, and the sketch
-autosaves — close the app and it comes back.
+The interface is Plume's, ported: the tool pill, the brush rail with its
+collapse tab, the context bar, the Scene, Curves and Import panels, the colour
+wheel, the transform gizmo and the liquify strip — on a screen under 720dp
+they become bottom sheets over a dock, which is what the web build does at the
+same width. Every gesture undoes in one step, and the sketch autosaves — close
+the app and it comes back.
 
-There is no brush picker and no transform gizmo yet — that is the current
-state, not a fault. Artifacts expire after 90 days.
+Artifacts expire after 90 days.
 
 ## Not yet ported
 
@@ -201,23 +202,21 @@ Roughly in the order they matter:
 1. **Opening an Anvil file in the browser, and a Pl file on the phone.** The
    format is written to match and the tests round-trip it, but nothing has yet
    carried a sketch between the two builds. That is the check the whole format
-   exists for.
-2. **Lighting and the render pass** — the key light, toon banding, depth of
-   field, and with them the PNG snapshot and image references that Phase 4
-   could not finish.
-3. **A transform gizmo**, which is the one editing tool with no touch
-   equivalent yet.
-4. **The interface** is now a port of Plume's rather than a floor of its own —
-   the same panels, in the same corners, at the same offsets, with the same
-   43 icons. The earlier note here said a phone wants bottom sheets rather
-   than "the desktop's 58px vertical rail"; reading the stylesheet properly
-   settled it, because Plume ALREADY does that: under 720px `body.compact`
-   turns the rails into bottom sheets over a permanent dock. So both layouts
-   are ported and the width picks between them, exactly as the web build does.
-   Still missing inside that chrome: the hue wheel, the transform joystick,
-   the groups and lighting panels, and the walkthrough.
-3. Document save/load, export (OBJ/STL/glTF), lighting controls, the post pass,
-   symmetry, selection and the editing tools.
+   exists for, and it is still the largest unverified claim in the project.
+2. **Running any of it.** There is no GPU here and CI compiles the APK rather
+   than launching it, so no frame of the lighting, the shadow, the post pass
+   or the whole interface has ever been rendered. The maths under all of it is
+   tested on a JVM; the pixels are not.
+3. **Image references** — an imported photo to trace over. OBJ and STL already
+   import and become guides; a photo needs a texture sampler the guide shader
+   does not have.
+4. **A stylus hover preview of the actual nib**, and palm rejection beyond
+   "a pen outranks a finger".
+
+Everything else in Plume is ported: the tools, the guides, the document
+format, the exporters, the lighting and post pass, and the whole interface —
+both of its layouts, its 43 icons, its keyboard map, its tooltips and its
+walkthrough.
 
 [docs/ROADMAP.md](docs/ROADMAP.md) orders all of it into eight phases.
 
