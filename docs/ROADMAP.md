@@ -295,6 +295,46 @@ without being told how.
 
 ---
 
+## What running it on a device found
+
+Everything above had been compiled, type-checked and unit-tested. None of
+that catches a wrong reading of the reference, and a session with the app in
+hand turned up nine of them. Recording what they had in common, because it
+is the same shape every time: each was a place where the port had made a
+DECISION the web build had already made differently, and had written a
+comment justifying it.
+
+- **The nib was aimed by the stylus, not by the surface.** Tilt azimuth was
+  mapped onto a rotation about the tangent, which is exactly what lifts a
+  blade off a guide. Worst on `wide`, 3.4 radii across; invisible on a round
+  pen, which has no direction to get wrong. The web build carries the same
+  finding after trying the same thing.
+- **A mirrored nib was aimed off its own surface**, because a reflection
+  turns the frame the section angle is measured in over. Invisible on a flat
+  guide; 58 degrees out on a cylinder.
+- **The edge trim was dropped** by the file format and by every point an
+  erase or a smooth inserted, and nothing downstream can measure it again.
+- **The repeat-tap tool swap was switched off on a phone** — which is where
+  the app is used — and nothing updated the pill when a tool changed.
+- **Background and light colour were still toasts** from before the colour
+  card existed.
+- **One finger never orbited.** A camera gesture only ever began on the
+  second finger landing.
+- **The camera mapping was neither of the two the web build has.** They
+  differ by one finger depending on whether a finger is drawing, and the
+  lens gesture was unreachable.
+- **Every tap was thrown away** by a test that read `fingerDraws &&
+  peakFingers == 1`.
+- **A pen changed nothing.** First contact is meant to hand the app back to
+  the pen-first mapping, once.
+- **The keypad opened in the middle of the screen** rather than beside the
+  readout it was editing.
+
+The lesson for what is left: a comment explaining why this port differs from
+the reference is a place to look first, not a decision that has been made.
+
+---
+
 ## Phase 07 — Ship it
 
 *Play Store, and the things that only matter once real people install it.*

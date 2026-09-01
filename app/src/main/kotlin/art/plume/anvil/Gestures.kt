@@ -122,9 +122,6 @@ class Gestures(private val listener: Listener) {
     private var drawingPointer = -1
     private var gesturing = false
 
-    /** How many fingers the live camera gesture is being driven by. */
-    private var gestureFingers = 0
-
     // ---- taps and holds ---------------------------------------------------
 
     private val main = android.os.Handler(android.os.Looper.getMainLooper())
@@ -452,17 +449,20 @@ class Gestures(private val listener: Listener) {
      * into the first frame after it goes.
      */
     private fun beginGesture(ev: MotionEvent, skipIndex: Int = -1) {
+        val m = measure(ev, skipIndex)
+        /* NOTHING TO NAVIGATE WITH IS NOT A GESTURE. A palm lifting from
+           beside a pen stroke leaves only the pen, which is drawing, not
+           navigating — starting a camera gesture on it would hand the stroke's
+           own pointer to the camera. */
+        if (m.n == 0) { endGesture(); return }
         gesturing = true
         lastDx = 0f; lastDy = 0f
-        val m = measure(ev, skipIndex)
         lastCx = m.cx; lastCy = m.cy; lastSpan = m.span; lastAngle = m.angle
-        gestureFingers = m.n
     }
 
     private fun endGesture() {
         if (gesturing) listener.onCameraEnd(lastDx, lastDy)
         gesturing = false
-        gestureFingers = 0
         lastDx = 0f; lastDy = 0f
     }
 
@@ -489,7 +489,6 @@ class Gestures(private val listener: Listener) {
         lastDx = m.cx - lastCx; lastDy = m.cy - lastCy
         listener.onCamera(lastDx, lastDy, dScale, dAngle, m.n)
         lastCx = m.cx; lastCy = m.cy; lastSpan = m.span; lastAngle = m.angle
-        gestureFingers = m.n
     }
 
     private class Measure(
