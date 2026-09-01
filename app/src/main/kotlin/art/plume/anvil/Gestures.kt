@@ -6,19 +6,36 @@ import kotlin.math.atan2
 import kotlin.math.hypot
 
 /**
- * Turning Android touch into the four things a 3D sketchbook needs.
+ * Turning Android touch into Feather's documented navigation set (B.1).
  *
- * This is deliberately NOT a translation of the desktop's mouse handling. On a
- * desktop, orbit/pan/zoom hang off modifier keys and a wheel; on a phone there
- * are no modifiers, so the number of fingers IS the mode:
+ *     one finger swipe .............. orbit, with release momentum
+ *     one finger double-tap ......... snap to the nearest of the six views
+ *     two finger tap ................ undo
+ *     pinch ......................... zoom
+ *     two finger swipe .............. pan
+ *     two finger twist .............. roll the canvas
+ *     three finger double-tap ....... perspective <-> orthographic
+ *     three finger swipe (vertical).. focal length, 10-500mm
+ *     tap and hold on curve/grid .... pin the orbit point
+ *     tap and hold on empty space ... unpin, or reset the view
  *
- *  - one finger or a stylus  draws
- *  - two fingers             orbit, pan and zoom at once
+ * THE MAPPING SHIFTS BY ONE FINGER WHEN A FINGER IS DRAWING, because one
+ * finger is then busy: two fingers orbit instead of panning, three pan instead
+ * of setting the lens, and the lens moves to its slider. That shift is the web
+ * build's, and [fingerDraws] is the switch. This class reports the finger
+ * count and lets the listener do the mapping.
+ *
+ * Two fingers tapping to undo is the one addition. The web build's own note
+ * calls a gesture undo "the documented rough edge worth fixing" — Feather has
+ * none — and every tablet drawing app has taught the same two-finger tap.
+ * Nothing else in the set uses a two-finger single tap, so there is nothing
+ * for it to collide with.
  *
  * The one rule that matters most: **a stylus always draws, even mid-gesture**,
  * and a finger never draws while a second one is down. Feather's whole premise
  * is resting your hand on the glass, so a palm landing after the pen must not
- * turn the stroke into a camera move.
+ * turn the stroke into a camera move — and, when the palm finally lifts, must
+ * not turn it into a tap either.
  */
 class Gestures(private val listener: Listener) {
 
@@ -54,6 +71,27 @@ class Gestures(private val listener: Listener) {
         fun onDoubleTap(x: Float, y: Float, fingers: Int)
 
         /**
+         * A single tap that finished as a tap, with the gesture's peak finger
+         * count.
+         *
+         * Only reported for counts that mean something on their own — which is
+         * two, for undo. A one-finger tap has to wait to see whether it is
+         * half of a view snap, and a three-finger one half of a projection
+         * toggle, so those arrive through [onDoubleTap] or not at all.
+         */
+        fun onTap(x: Float, y: Float, fingers: Int)
+
+        /**
+         * A real stylus touched the glass for the first time.
+         *
+         * Finger drawing is on by default because most Android tablets ship
+         * without a usable stylus, and this is the moment that assumption is
+         * proved wrong. The app hands itself back to the pen-first mapping,
+         * once, and says so.
+         */
+        fun onPenDetected()
+
+        /**
          * FACT (B.2/B.3): a press and hold on a curve or the grid pins the
          * orbit point; on empty space it unpins it, or resets the view when it
          * was not pinned.
@@ -61,11 +99,31 @@ class Gestures(private val listener: Listener) {
         fun onPressHold(x: Float, y: Float)
     }
 
-    /** Finger drawing can be switched off, as on the desktop build. */
+    /**
+     * Whether a bare finger draws.
+     *
+     * On by default, because most Android tablets ship without a usable
+     * stylus and the documented Finger-Pen "workaround" is the only way to
+     * draw at all on one. [penSeen] takes it back the moment that turns out
+     * not to be true here.
+     */
     var fingerDraws = true
+
+    /**
+     * True once the user has changed [fingerDraws] themselves, after which a
+     * pen landing does not get to change it back. Their setting outranks our
+     * guess about their hardware.
+     */
+    var fingerDrawsIsOurs = true
+
+    /** A real stylus has touched the glass at least once. */
+    private var penSeen = false
 
     private var drawingPointer = -1
     private var gesturing = false
+
+    /** How many fingers the live camera gesture is being driven by. */
+    private var gestureFingers = 0
 
     // ---- taps and holds ---------------------------------------------------
 
@@ -84,6 +142,26 @@ class Gestures(private val listener: Listener) {
     private var gestureStart = 0L
     private var downX = 0f
     private var downY = 0f
+
+    /**
+     * A PEN TOOK PART, SO THE GESTURE IS NOT A TAP.
+     *
+     * A palm resting through a whole pen stroke lifts like any other finger,
+     * and without this its lift was a two-finger tap — so drawing with your
+     * hand on the glass undid the stroke you had just drawn.
+     */
+    private var gesturePen = false
+
+    /**
+     * Where the gesture was, measured when it reached its peak finger count.
+     *
+     * Not the position of whichever finger happened to lift last: fingers come
+     * off one at a time, so that point jumps by far more than TAP_SLOP between
+     * two taps of the same three-finger gesture, and the double-tap test could
+     * never match.
+     */
+    private var tapX = 0f
+    private var tapY = 0f
 
     /**
      * The tap waiting to be doubled. `fingers == 0` means nothing is pending,
@@ -138,11 +216,14 @@ class Gestures(private val listener: Listener) {
 
             MotionEvent.ACTION_DOWN -> {
                 val i = 0
+                notePen(ev, i)
                 peakFingers = 1
                 gestureMoved = false
                 gestureHeld = false
+                gesturePen = isStylus(ev, i)
                 gestureStart = ev.eventTime
                 downX = ev.getX(i); downY = ev.getY(i)
+                tapX = downX; tapY = downY
                 /*
                  * The hold clock runs for a finger, not for the pen. A pen
                  * resting still mid-stroke is hold-to-shape's business, and
@@ -156,11 +237,20 @@ class Gestures(private val listener: Listener) {
                         ev.getX(i), ev.getY(i), pressureOf(ev, i),
                         tiltAz(ev, i).toFloat(), tiltAlt(ev, i)
                     )
+                } else {
+                    /*
+                     * ONE FINGER ORBITS. B.1's first line, and it was missing
+                     * entirely: a camera gesture only ever started on the
+                     * SECOND finger landing, so with drawing handed to the pen
+                     * a single finger did nothing at all.
+                     */
+                    beginGesture(ev)
                 }
             }
 
             MotionEvent.ACTION_POINTER_DOWN -> {
                 val newIndex = ev.actionIndex
+                notePen(ev, newIndex)
                 /*
                  * A stylus outranks everything. If the pen is drawing, a second
                  * touch is a palm or a steadying hand and must be ignored
@@ -174,6 +264,8 @@ class Gestures(private val listener: Listener) {
                     // the pen arrived after a finger: hand the stroke to the pen
                     if (drawingPointer >= 0) listener.onDrawCancel()
                     endGesture()
+                    cancelHold()
+                    gesturePen = true
                     drawingPointer = ev.getPointerId(newIndex)
                     listener.onDrawBegin(
                         ev.getX(newIndex), ev.getY(newIndex), pressureOf(ev, newIndex),
@@ -185,7 +277,13 @@ class Gestures(private val listener: Listener) {
                 // a second finger: the first one was never a stroke, it was a camera move
                 if (ev.pointerCount >= 2) {
                     if (drawingPointer >= 0) { listener.onDrawCancel(); drawingPointer = -1 }
-                    if (ev.pointerCount > peakFingers) peakFingers = ev.pointerCount
+                    if (ev.pointerCount > peakFingers) {
+                        peakFingers = ev.pointerCount
+                        // the gesture is where its fingers are, at their widest
+                        var sx = 0f; var sy = 0f
+                        for (k in 0 until ev.pointerCount) { sx += ev.getX(k); sy += ev.getY(k) }
+                        tapX = sx / ev.pointerCount; tapY = sy / ev.pointerCount
+                    }
                     cancelHold()
                     beginGesture(ev)
                 }
@@ -210,7 +308,7 @@ class Gestures(private val listener: Listener) {
                             tiltAz(ev, i).toFloat(), tiltAlt(ev, i)
                         )
                     }
-                } else if (gesturing && ev.pointerCount >= 2) {
+                } else if (gesturing) {
                     stepGesture(ev)
                 }
                 /* a finger that travels is a swipe, not a tap, and never a hold */
@@ -222,8 +320,19 @@ class Gestures(private val listener: Listener) {
             MotionEvent.ACTION_POINTER_UP -> {
                 val goneId = ev.getPointerId(ev.actionIndex)
                 if (goneId == drawingPointer) { listener.onDrawEnd(); drawingPointer = -1 }
-                if (ev.pointerCount - 1 < 2) endGesture()
-                else beginGesture(ev)          // re-seed from whoever is left
+                /*
+                 * Re-seed from whoever is left, INCLUDING a single finger:
+                 * lifting one of two fingers hands the gesture back to a
+                 * one-finger orbit rather than ending navigation with a finger
+                 * still on the glass. Ending it here was what made a pinch
+                 * that let go unevenly feel like it had died.
+                 *
+                 * A finger left over from a pen stroke is not navigation
+                 * though — that is a palm, and it stays inert until it lifts.
+                 */
+                val left = ev.pointerCount - 1
+                if (left <= 0 || (gesturePen && drawingPointer < 0)) endGesture()
+                else beginGesture(ev, skipIndex = ev.actionIndex)
             }
 
             MotionEvent.ACTION_UP -> {
@@ -232,16 +341,26 @@ class Gestures(private val listener: Listener) {
                 endGesture()
                 /*
                  * A tap is a gesture that did not travel, did not become a
-                 * hold, and did not linger. A one-finger tap only counts when
-                 * a finger was not drawing with it — otherwise every dot you
-                 * draw would be half of a view snap.
+                 * hold, and did not linger.
+                 *
+                 * A ONE-finger tap only counts when a finger was not drawing
+                 * with it, or every dot you draw would be half of a view snap.
+                 * That test used to read `fingerDraws && peakFingers == 1`,
+                 * which with finger drawing on — its default — threw away
+                 * every one-finger tap whatever the peak count had been, and
+                 * with it the view snap. It is the count that decides.
+                 *
+                 * A gesture the pen took part in is never a tap at all: the
+                 * finger lifting is a palm that has been resting there since
+                 * before the stroke began.
                  */
                 val quick = ev.eventTime - gestureStart < TAP_MAX_MS
-                val drew = fingerDraws && peakFingers == 1
-                if (!gestureMoved && !gestureHeld && quick && !drew) {
-                    registerTap(ev.getX(0), ev.getY(0), peakFingers, ev.eventTime)
+                val drew = fingerDraws && peakFingers == 1 && !gesturePen
+                if (!gestureMoved && !gestureHeld && !gesturePen && quick && !drew) {
+                    registerTap(tapX, tapY, peakFingers, ev.eventTime)
                 }
                 peakFingers = 0
+                gesturePen = false
             }
 
             MotionEvent.ACTION_CANCEL -> {
@@ -249,6 +368,9 @@ class Gestures(private val listener: Listener) {
                 cancelHold()
                 endGesture()
                 peakFingers = 0
+                gesturePen = false
+                // a cancelled gesture is not a tap, and not half of one either
+                lastTapFingers = 0
             }
         }
         return true
@@ -271,7 +393,28 @@ class Gestures(private val listener: Listener) {
         holdRunnable = null
     }
 
-    /** Two taps of the same finger count, close together in time and space. */
+    /**
+     * FIRST REAL PEN CONTACT HANDS THE APP BACK TO THE PEN.
+     *
+     * Finger drawing is on by default on the assumption that there is no
+     * stylus, and this is the moment that assumption is disproved. Doing it
+     * once, and only while the setting is still ours rather than the user's,
+     * is the web build's rule.
+     */
+    private fun notePen(ev: MotionEvent, index: Int) {
+        if (penSeen || !isStylus(ev, index)) return
+        penSeen = true
+        if (fingerDraws && fingerDrawsIsOurs) {
+            fingerDraws = false
+            fingerDrawsIsOurs = false
+            listener.onPenDetected()
+        }
+    }
+
+    /**
+     * A finished tap: either the second of a pair, or one that means something
+     * on its own.
+     */
     private fun registerTap(x: Float, y: Float, fingers: Int, now: Long) {
         val isDouble = lastTapFingers == fingers &&
             now - lastTapAt < TAP_MS &&
@@ -281,63 +424,98 @@ class Gestures(private val listener: Listener) {
             listener.onDoubleTap(x, y, fingers)
             return
         }
+        /*
+         * Two fingers mean undo on their own, so it fires now rather than
+         * waiting out the double-tap window — a gesture you have to wait 300ms
+         * to find out did nothing is worse than no gesture. Nothing is bound
+         * to a two-finger double tap, so there is nothing to pre-empt.
+         */
+        if (fingers == 2) {
+            lastTapFingers = 0
+            listener.onTap(x, y, fingers)
+            return
+        }
         lastTapAt = now; lastTapX = x; lastTapY = y; lastTapFingers = fingers
     }
 
-    private fun beginGesture(ev: MotionEvent) {
+    /**
+     * Start (or re-seed) the camera gesture from whichever pointers are still
+     * navigating.
+     *
+     * [skipIndex] is the pointer that is on its way up: ACTION_POINTER_UP
+     * still reports it, and seeding from a finger that is leaving puts a jump
+     * into the first frame after it goes.
+     */
+    private fun beginGesture(ev: MotionEvent, skipIndex: Int = -1) {
         gesturing = true
         lastDx = 0f; lastDy = 0f
-        val (cx, cy, span, angle) = measure(ev)
-        lastCx = cx; lastCy = cy; lastSpan = span; lastAngle = angle
+        val m = measure(ev, skipIndex)
+        lastCx = m.cx; lastCy = m.cy; lastSpan = m.span; lastAngle = m.angle
+        gestureFingers = m.n
     }
 
     private fun endGesture() {
         if (gesturing) listener.onCameraEnd(lastDx, lastDy)
         gesturing = false
+        gestureFingers = 0
         lastDx = 0f; lastDy = 0f
     }
 
     private fun stepGesture(ev: MotionEvent) {
-        val (cx, cy, span, angle) = measure(ev)
-        if (lastSpan <= 0f) { lastCx = cx; lastCy = cy; lastSpan = span; lastAngle = angle; return }
+        val m = measure(ev)
+        if (m.n == 0) return
 
-        var dAngle = angle - lastAngle
-        // shortest way round, so crossing the +/-pi seam does not spin the view
-        while (dAngle > Math.PI) dAngle -= (2 * Math.PI).toFloat()
-        while (dAngle < -Math.PI) dAngle += (2 * Math.PI).toFloat()
-
-        lastDx = cx - lastCx; lastDy = cy - lastCy
-        listener.onCamera(lastDx, lastDy, span / lastSpan, dAngle, fingerCount(ev))
-        lastCx = cx; lastCy = cy; lastSpan = span; lastAngle = angle
-    }
-
-    /** Pointers taking part in the camera gesture — the pen is not one of them. */
-    private fun fingerCount(ev: MotionEvent): Int {
-        var n = 0
-        for (i in 0 until ev.pointerCount) if (ev.getPointerId(i) != drawingPointer) n++
-        return n
-    }
-
-    private data class Measure(val cx: Float, val cy: Float, val span: Float, val angle: Float)
-
-    private fun measure(ev: MotionEvent): Measure {
-        var sx = 0f; var sy = 0f; var n = 0
-        for (i in 0 until ev.pointerCount) {
-            if (ev.getPointerId(i) == drawingPointer) continue
-            sx += ev.getX(i); sy += ev.getY(i); n++
+        /*
+         * ONE FINGER HAS NO SPAN AND NO ANGLE, only a centroid — so zoom and
+         * roll sit out and the whole gesture is the drag. Requiring a span
+         * here (the old `lastSpan <= 0` guard) is what stopped a one-finger
+         * gesture dead on its first move.
+         */
+        var dScale = 1f
+        var dAngle = 0f
+        if (m.n >= 2 && lastSpan > 0f && m.span > 0f) {
+            dScale = m.span / lastSpan
+            dAngle = m.angle - lastAngle
+            // shortest way round, so crossing the +/-pi seam does not spin the view
+            while (dAngle > Math.PI) dAngle -= (2 * Math.PI).toFloat()
+            while (dAngle < -Math.PI) dAngle += (2 * Math.PI).toFloat()
         }
-        if (n == 0) return Measure(0f, 0f, 0f, 0f)
-        val cx = sx / n; val cy = sy / n
-        if (n < 2) return Measure(cx, cy, lastSpan, lastAngle)
-        val dx = ev.getX(1) - ev.getX(0)
-        val dy = ev.getY(1) - ev.getY(0)
-        return Measure(cx, cy, hypot(dx, dy), atan2(dy, dx))
+
+        lastDx = m.cx - lastCx; lastDy = m.cy - lastCy
+        listener.onCamera(lastDx, lastDy, dScale, dAngle, m.n)
+        lastCx = m.cx; lastCy = m.cy; lastSpan = m.span; lastAngle = m.angle
+        gestureFingers = m.n
     }
 
-    private operator fun Measure.component1() = cx
-    private operator fun Measure.component2() = cy
-    private operator fun Measure.component3() = span
-    private operator fun Measure.component4() = angle
+    private class Measure(
+        val cx: Float, val cy: Float, val span: Float, val angle: Float, val n: Int,
+    )
+
+    /**
+     * The centroid, span and twist of the pointers that are navigating.
+     *
+     * The pen is never one of them, and neither is [skipIndex] — the finger
+     * ACTION_POINTER_UP is reporting on its way off the glass.
+     *
+     * Span and angle come from the first TWO NAVIGATING pointers rather than
+     * from raw indices 0 and 1: index 0 can be the pen, which would have made
+     * a pinch measure the distance between the pen and a finger.
+     */
+    private fun measure(ev: MotionEvent, skipIndex: Int = -1): Measure {
+        var sx = 0f; var sy = 0f; var n = 0
+        var ax = 0f; var ay = 0f; var bx = 0f; var by = 0f
+        for (i in 0 until ev.pointerCount) {
+            if (i == skipIndex || ev.getPointerId(i) == drawingPointer) continue
+            val x = ev.getX(i); val y = ev.getY(i)
+            sx += x; sy += y
+            if (n == 0) { ax = x; ay = y } else if (n == 1) { bx = x; by = y }
+            n++
+        }
+        if (n == 0) return Measure(0f, 0f, 0f, 0f, 0)
+        val cx = sx / n; val cy = sy / n
+        if (n < 2) return Measure(cx, cy, 0f, 0f, n)
+        return Measure(cx, cy, hypot(bx - ax, by - ay), atan2(by - ay, bx - ax), n)
+    }
 
     private companion object {
         /** All four are the web build's, in the same units. */

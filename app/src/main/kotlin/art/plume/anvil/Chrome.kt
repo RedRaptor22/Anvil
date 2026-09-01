@@ -54,6 +54,9 @@ enum class Tool(val key: String, val icon: String) {
  */
 enum class EnvToggle { GRID, AXIS, FOG, SHADED, RENDER, SHADOW, TOON, DOF, GRAIN, PIXEL }
 
+/** Which of the three colour wells the one colour card is pointed at. */
+enum class ColorTarget { INK, BACKGROUND, LIGHT }
+
 /** The settings modal's switches — input behaviour and the view. */
 enum class InputToggle {
     FINGER, AUTO_GUIDE, ISOLATE, CLAMP, HOLD_SHAPE, STABLE, ORTHO, THEME, HIDE_UI, DIAG,
@@ -106,8 +109,11 @@ class Chrome(private val act: Activity, val t: Tokens) {
     var onLight: (az: Double, alt: Double) -> Unit = { _, _ -> }
     var onLightLevels: () -> Unit = {}
     var onFx: () -> Unit = {}
-    var onPickBackground: () -> Unit = {}
-    var onPickLightColour: () -> Unit = {}
+    /** The background colour changed, so the fog, the grid and the theme move. */
+    var onBackground: (Int) -> Unit = {}
+
+    /** The key light's colour changed. */
+    var onLightColour: (Int) -> Unit = {}
 
     /** The colour card. [onHex] gets raw text; a bad one leaves the colour alone. */
     var onHex: (String) -> Unit = {}
@@ -177,6 +183,18 @@ class Chrome(private val act: Activity, val t: Tokens) {
     private var opacity = 1.0
     private var brush = "pen"
     private var inkColor = Color.rgb(27, 28, 33)
+
+    /**
+     * WHICH COLOUR THE CARD IS EDITING.
+     *
+     * The web build has three separate `input[type=color]` wells — the brush
+     * swatch on the rail, Background and Light in the Scene tab. Android's
+     * platform picker is the one piece of chrome that would look borrowed, so
+     * this build has ONE card and points it at whichever well was tapped.
+     * Background and Light were left as a "not built yet" toast when the card
+     * was written, which is why the background could not be changed at all.
+     */
+    private var colorTarget = ColorTarget.INK
     private var guideName = ""
     private var guideActive = false
     private var guideOpacity = 0.42
@@ -208,6 +226,8 @@ class Chrome(private val act: Activity, val t: Tokens) {
     private var pixelSize = 4.0
     private var backgroundColor = Color.rgb(236, 234, 243)
     private var lightColor = Color.WHITE
+    private lateinit var cardTitle: TextView
+    private lateinit var eyedropButton: IcoButton
 
     /** Draw/Shape, Select/Lasso, Erase/Vacuum — which side of each pair shows. */
     private val partner = mapOf(
@@ -409,14 +429,21 @@ class Chrome(private val act: Activity, val t: Tokens) {
             b.dot = partner.containsKey(which)
             TOOL_TIPS[which]?.let { r -> Tip.attach(b, tipCard, act.getString(r)) }
             b.setOnClickListener {
-                val alt = partner[which]
                 /*
                  * D.1: a repeat tap on an active tool swaps it for its partner.
-                 * On a phone every partner already has a slot of its own, so a
-                 * repeat tap there would swap a button the user can see for one
-                 * they can also see — confusing rather than compact.
+                 *
+                 * This used to be switched off on a phone, on the reading that
+                 * the compact grid gave every partner a slot of its own so a
+                 * repeat tap would swap a visible button for another visible
+                 * button. Both halves of that were wrong. The pairs stay
+                 * merged at every width — "three across, because the pairs
+                 * stay merged here too, one Erase icon on the phone as well as
+                 * on the desktop" — and switching the swap off on a phone is
+                 * what made the dotted icons do nothing at all, since a phone
+                 * is where the app is actually used.
                  */
-                if (alt != null && tool == which && !compact) select(alt) else select(which)
+                val alt = partner[which]
+                if (alt != null && tool == which) select(alt) else select(which)
             }
             toolButtons[which] = b
         }
@@ -495,7 +522,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
             layoutParams = LinearLayout.LayoutParams(
                 t.px(R.dimen.brushDot), t.px(R.dimen.brushDot),
             ).apply { topMargin = t.px(R.dimen.gapRail) }
-            setOnClickListener { togglePopover(colorCard) }
+            setOnClickListener { openColorCard(ColorTarget.INK) }
         }
         brushRail.addView(colorDot)
         brushRail.addView(separator(act, t))
@@ -514,7 +541,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
             set = { v -> sizeMm = v.coerceIn(Tune.BRUSH_MIN_MM, Tune.BRUSH_MAX_MM); onSizeMm(sizeMm); refresh() },
         )
         sizeVal.setOnClickListener {
-            openKeypad("size", act.getString(R.string.press_size), sizeMm, "mm")
+            openKeypad("size", act.getString(R.string.press_size), sizeMm, "mm", sizeVal)
         }
         brushRail.addView(sizeVal, railValueParams())
 
@@ -527,7 +554,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
             set = { v -> opacity = v.coerceIn(0.05, 1.0); onOpacity(opacity); refresh() },
         )
         opacityVal.setOnClickListener {
-            openKeypad("opacity", act.getString(R.string.opacity), opacity * 100, "%")
+            openKeypad("opacity", act.getString(R.string.opacity), opacity * 100, "%", opacityVal)
         }
         brushRail.addView(opacityVal, railValueParams())
 
@@ -843,8 +870,15 @@ class Chrome(private val act: Activity, val t: Tokens) {
         keypadValue.text = if (keypadText.isEmpty()) "0" else keypadText
     }
 
-    /** Open the pad on [which], showing [value] with [unit]. */
-    fun openKeypad(which: String, label: String, value: Double, unit: String) {
+    /**
+     * Open the pad on [which], showing [value] with [unit], beside [anchor].
+     *
+     * `anchorTo($('keypad'), which === 'size' ? $('btnSize') : $('btnOpacity'))`
+     * — the pad belongs to the readout you pressed. It was going up centred on
+     * the screen instead, which put it over the sketch, a long way from the
+     * number it was editing and with nothing to say which number that was.
+     */
+    fun openKeypad(which: String, label: String, value: Double, unit: String, anchor: View?) {
         keypadFor = which
         keypadText = if (value == value.toInt().toDouble()) {
             value.toInt().toString()
@@ -857,7 +891,43 @@ class Chrome(private val act: Activity, val t: Tokens) {
         keypadUnit.text = unit
         closePopovers()
         keypad.visibility = View.VISIBLE
+        anchorTo(keypad, anchor)
         refresh()
+    }
+
+    /**
+     * PUT A CARD BESIDE THE CONTROL THAT OPENED IT.
+     *
+     * `card.style.left = clamp(r.right + 10, 8, vw - w - 8)` and
+     * `card.style.top = clamp(r.top + r.height/2 - h/2, 8, vh - h - 8)`: ten
+     * pixels to the right of the control, vertically centred on it, and kept
+     * eight pixels clear of every edge of the screen.
+     *
+     * The card has not been measured yet at the moment it is asked for, so the
+     * placing waits one layout pass. On a phone, where the rails are bottom
+     * sheets and there is no room beside anything, it stays centred.
+     */
+    private fun anchorTo(card: View, anchor: View?) {
+        val lpc = card.layoutParams as FrameLayout.LayoutParams
+        if (anchor == null || compact) {
+            lpc.gravity = Gravity.CENTER
+            lpc.setMargins(0, 0, 0, 0)
+            card.layoutParams = lpc
+            return
+        }
+        card.post {
+            val a = IntArray(2); val r = IntArray(2)
+            anchor.getLocationInWindow(a)
+            root.getLocationInWindow(r)
+            val gap = t.dp(10f); val edge = t.dp(8f)
+            val left = (a[0] - r[0]) + anchor.width + gap
+            val top = (a[1] - r[1]) + anchor.height / 2 - card.height / 2
+            val p = card.layoutParams as FrameLayout.LayoutParams
+            p.gravity = Gravity.TOP or Gravity.START
+            p.leftMargin = left.coerceIn(edge, maxOf(edge, root.width - card.width - edge))
+            p.topMargin = top.coerceIn(edge, maxOf(edge, root.height - card.height - edge))
+            card.layoutParams = p
+        }
     }
 
     /**
@@ -1563,12 +1633,12 @@ class Chrome(private val act: Activity, val t: Tokens) {
 
     private fun bgDot(): View = View(act).apply {
         layoutParams = LinearLayout.LayoutParams(t.dp(30f), t.dp(30f))
-        setOnClickListener { onPickBackground() }
+        setOnClickListener { openColorCard(ColorTarget.BACKGROUND) }
     }.also { bgSwatch = it }
 
     private fun lightDot(): View = View(act).apply {
         layoutParams = LinearLayout.LayoutParams(t.dp(30f), t.dp(30f))
-        setOnClickListener { onPickLightColour() }
+        setOnClickListener { openColorCard(ColorTarget.LIGHT) }
     }.also { lightSwatch = it }
 
     /** `.mhead` — a card title with a close button on the right. */
@@ -1736,11 +1806,24 @@ class Chrome(private val act: Activity, val t: Tokens) {
             setOnEditorActionListener { v, _, _ -> onHex(v.text.toString()); true }
         }
         hexRow.addView(hexField)
-        hexRow.addView(
-            IcoButton(act, t, IcoButton.SIZE_SMALL).icon("pick").apply {
-                setOnClickListener { onEyedrop() }
-            },
-        )
+        eyedropButton = IcoButton(act, t, IcoButton.SIZE_SMALL).icon("pick").apply {
+            setOnClickListener { onEyedrop() }
+        }
+        hexRow.addView(eyedropButton)
+
+        /* THE CARD SAYS WHAT IT IS EDITING. One card serves the brush swatch,
+           Background and Light, and a wheel with no label on it is a wheel you
+           have to remember the context of. */
+        cardTitle = TextView(act).apply {
+            setTextColor(t.dim2)
+            textSize = 10f
+            letterSpacing = 0.08f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { bottomMargin = t.dp(6f) }
+        }
+        colorCard.addView(cardTitle)
         colorCard.addView(hexRow)
 
         colorWheel = ColorWheel(act, t) { c -> onWheel(c) }
@@ -1763,7 +1846,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
                         width = t.dp(19f); height = t.dp(19f)
                         setMargins(t.dp(3f), t.dp(3f), t.dp(3f), t.dp(3f))
                     }
-                    setOnClickListener { inkColor = c; onColor(c); refresh() }
+                    setOnClickListener { applyCardColor(c) }
                 },
             )
         }
@@ -1775,6 +1858,42 @@ class Chrome(private val act: Activity, val t: Tokens) {
         )
         colorCard.visibility = View.GONE
         popovers.add(colorCard)
+    }
+
+    /** The colour the card is showing, which is whatever it is pointed at. */
+    private fun cardColor(): Int = when (colorTarget) {
+        ColorTarget.INK -> inkColor
+        ColorTarget.BACKGROUND -> backgroundColor
+        ColorTarget.LIGHT -> lightColor
+    }
+
+    /**
+     * A colour came out of the card — from the wheel, the hex field, a swatch
+     * or the eyedropper. It goes wherever the card is pointed.
+     */
+    fun applyCardColor(argb: Int) {
+        when (colorTarget) {
+            ColorTarget.INK -> { inkColor = argb; onColor(argb) }
+            ColorTarget.BACKGROUND -> { backgroundColor = argb; onBackground(argb) }
+            ColorTarget.LIGHT -> { lightColor = argb; onLightColour(argb) }
+        }
+        refresh()
+    }
+
+    /**
+     * Point the card at one of the three wells and bring it up.
+     *
+     * Opening it from a well it is already showing closes it, which is how
+     * every other popover in here behaves.
+     */
+    private fun openColorCard(target: ColorTarget) {
+        if (colorTarget == target && colorCard.visibility == View.VISIBLE) {
+            closePopovers()
+            return
+        }
+        colorTarget = target
+        refresh()               // load the well's colour before the card is seen
+        showPopover(colorCard)
     }
 
     /**
@@ -2172,10 +2291,10 @@ class Chrome(private val act: Activity, val t: Tokens) {
     }
 
     /**
-     * On a phone the pill is a three-across grid — "because the pairs stay
-     * merged here too — one Erase icon on the phone as well as on the desktop"
-     * is what the CSS says about the DIVIDER, but the partners themselves all
-     * get a slot, which is why the repeat-tap swap is disabled there.
+     * On a phone the pill is a three-across grid, and the pairs stay merged in
+     * it: "three across, because the pairs stay merged here too — one Erase
+     * icon on the phone as well as on the desktop". Six tools behind six
+     * icons, plus Mirror and Stage, is eight tiles in three columns.
      */
     private fun rebuildToolPill(twoColumns: Boolean) {
         toolPill.removeAllViews()
@@ -2193,16 +2312,11 @@ class Chrome(private val act: Activity, val t: Tokens) {
             toolPill.addView(divider(act, t))
             toolPill.addView(unGrid(icons.getValue("mirror")))
             toolPill.addView(unGrid(icons.getValue("stage")))
-            for (tl in order) {
-                val alt = partner[tl] ?: continue
-                toolButtons.getValue(tl).visibility =
-                    if (shownSide[minOf(tl, alt)] == tl) View.VISIBLE else View.GONE
-            }
+            showLiveHalves()
         } else {
             val grid = GridLayout(act).apply { columnCount = 3 }
             for (tl in order) {
                 val b = reparent(toolButtons.getValue(tl))
-                b.visibility = View.VISIBLE
                 b.layoutParams = GridLayout.LayoutParams().apply {
                     width = 0
                     height = t.px(R.dimen.toolTileCompact)
@@ -2227,6 +2341,25 @@ class Chrome(private val act: Activity, val t: Tokens) {
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
                 ),
             )
+            showLiveHalves()
+        }
+    }
+
+    /**
+     * ONE HALF OF EACH PAIR IS ON SCREEN, AND IT IS THE LIVE ONE.
+     *
+     * Draw/Shape, Select/Lasso and Erase/Vacuum share a slot at every width,
+     * so the button showing has to be whichever of the two the tool actually
+     * is — otherwise a repeat tap swaps the tool and leaves the pill showing
+     * the icon you just swapped away from, with nothing lit.
+     *
+     * Called from [refresh] as well as from a rebuild, because the tool
+     * changes far more often than the layout does.
+     */
+    private fun showLiveHalves() {
+        for ((tl, b) in toolButtons) {
+            val alt = partner[tl] ?: continue
+            b.visibility = if (shownSide[minOf(tl, alt)] == tl) View.VISIBLE else View.GONE
         }
     }
 
@@ -2271,6 +2404,12 @@ class Chrome(private val act: Activity, val t: Tokens) {
         val wasOpen = v.visibility == View.VISIBLE
         closePopovers()
         v.visibility = if (wasOpen) View.GONE else View.VISIBLE
+        refresh()
+    }
+
+    private fun showPopover(v: View) {
+        closePopovers()
+        v.visibility = View.VISIBLE
         refresh()
     }
 
@@ -2459,6 +2598,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
     /** `UI.refresh` — every button re-derives its own state from the model. */
     fun refresh() {
         for ((which, b) in toolButtons) b.on = which == tool
+        showLiveHalves()
         for ((name, tile) in brushTiles) tile.solid = name == brush
         (colorDot.background as? GradientDrawable ?: GradientDrawable()).let { d ->
             d.shape = GradientDrawable.OVAL
@@ -2587,24 +2727,25 @@ class Chrome(private val act: Activity, val t: Tokens) {
 
         /* don't fight the keyboard: only rewrite the field when it is not
            the thing being typed into */
-        if (!hexField.hasFocus()) {
-            hexField.setText(
-                ColorSpace.toHex(
-                    Rgba(
-                        Color.red(inkColor) / 255.0,
-                        Color.green(inkColor) / 255.0,
-                        Color.blue(inkColor) / 255.0,
-                    ),
-                ),
-            )
-        }
-        colorWheel.setColor(
-            Rgba(
-                Color.red(inkColor) / 255.0,
-                Color.green(inkColor) / 255.0,
-                Color.blue(inkColor) / 255.0,
-            ),
+        val shown = cardColor()
+        val shownRgba = Rgba(
+            Color.red(shown) / 255.0,
+            Color.green(shown) / 255.0,
+            Color.blue(shown) / 255.0,
         )
+        if (!hexField.hasFocus()) hexField.setText(ColorSpace.toHex(shownRgba))
+        colorWheel.setColor(shownRgba)
+        cardTitle.text = act.getString(
+            when (colorTarget) {
+                ColorTarget.INK -> R.string.colour_ink
+                ColorTarget.BACKGROUND -> R.string.colour_background
+                ColorTarget.LIGHT -> R.string.colour_light
+            },
+        )
+        /* the sampler picks ink off the sketch; there is nothing on screen to
+           sample a background or a light from */
+        eyedropButton.visibility =
+            if (colorTarget == ColorTarget.INK) View.VISIBLE else View.GONE
         icons["brushType"]?.on = brushGrid.visibility == View.VISIBLE
     }
 

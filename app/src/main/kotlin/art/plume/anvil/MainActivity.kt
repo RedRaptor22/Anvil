@@ -57,6 +57,7 @@ import art.plume.core.Transform
 import art.plume.core.Tune
 import art.plume.core.Vec3
 import art.plume.core.clamp
+import kotlin.math.exp
 
 /**
  * The shell: one GL surface, the gesture layer, and Plume's chrome over it.
@@ -379,13 +380,15 @@ class MainActivity : Activity(), Gestures.Listener {
         chrome.onOpacity = { o -> applyOpacityToSelectionOrBrush(o) }
         chrome.onBrush = { b -> brush = b }
         chrome.onColor = { argb -> applyColorToSelectionOrBrush(rgbaOf(argb)) }
+        /* The hex field and the wheel serve whichever well the card is pointed
+           at, so they go back through the card rather than straight at the
+           brush — otherwise typing a hex while editing the background would
+           recolour the ink. */
         chrome.onHex = { text ->
             val c = ColorSpace.parseHex(text)
-            if (c == null) toast(getString(R.string.bad_hex))
-            else applyColorToSelectionOrBrush(c)
-            chrome.setColor(argbOf(color))
+            if (c == null) toast(getString(R.string.bad_hex)) else chrome.applyCardColor(argbOf(c))
         }
-        chrome.onWheel = { c -> applyColorToSelectionOrBrush(c) }
+        chrome.onWheel = { c -> chrome.applyCardColor(argbOf(c)) }
         chrome.onEyedrop = {
             chrome.closePopovers()
             setTool(Tool.EYEDROP)
@@ -541,8 +544,21 @@ class MainActivity : Activity(), Gestures.Listener {
          */
         chrome.onLightLevels = { chrome.readInto(docEnv); pushEnvironment() }
         chrome.onFx = { chrome.readInto(docEnv); pushEnvironment() }
-        chrome.onPickBackground = { toast(getString(R.string.not_yet_colour_wheel)) }
-        chrome.onPickLightColour = { toast(getString(R.string.not_yet_colour_wheel)) }
+        /* `P.ENV.bg.set(this.value); P.applyEnv();` — the background is not
+           just the clear colour. The fog takes its colour from it, the ground
+           grid picks its two line shades off its luminance, and the chrome
+           theme follows it unless it has been overridden, so all of that has
+           to be pushed rather than only the clear. */
+        chrome.onBackground = { argb ->
+            docEnv.background = rgbaOf(argb)
+            pushEnvironment()
+            scheduleAutosave()      // it travels in the file
+        }
+        chrome.onLightColour = { argb ->
+            docEnv.light.color = rgbaOf(argb)
+            pushEnvironment()
+            scheduleAutosave()
+        }
         chrome.onGuideOpacity = { v ->
             guides.active?.let { g -> g.opacity = v; pushGuides(); surface.requestRender() }
         }
@@ -851,7 +867,12 @@ class MainActivity : Activity(), Gestures.Listener {
      */
     private fun flipInput(which: InputToggle) {
         when (which) {
-            InputToggle.FINGER -> gestures.fingerDraws = !gestures.fingerDraws
+            InputToggle.FINGER -> {
+                gestures.fingerDraws = !gestures.fingerDraws
+                /* their setting, not our guess about their hardware: a pen
+                   landing later does not get to change it back */
+                gestures.fingerDrawsIsOurs = false
+            }
             InputToggle.AUTO_GUIDE -> autoGuide = !autoGuide
             InputToggle.ISOLATE -> isolate = !isolate
             InputToggle.CLAMP -> clampOff = !clampOff
@@ -1484,6 +1505,31 @@ class MainActivity : Activity(), Gestures.Listener {
                 )
             }
         }
+    }
+
+    /**
+     * Two fingers tapping undo, which is the one gesture this build adds.
+     *
+     * The web build's own note calls it "the documented rough edge worth
+     * fixing" — Feather has no gesture undo at all — and it is the tap every
+     * tablet drawing app has taught. Undoing is the one thing you reach for
+     * with the pen still in your hand, so it should not cost a trip to the
+     * rail.
+     */
+    override fun onTap(x: Float, y: Float, fingers: Int) {
+        if (fingers != 2) return
+        if (hideUi) { flipInput(InputToggle.HIDE_UI); return }
+        if (chrome.closeTop()) return    // a sheet in the way is what you meant
+        doAction(Action.UNDO)
+    }
+
+    /**
+     * A real stylus arrived, so finger drawing stands down and the fingers go
+     * back to navigating.
+     */
+    override fun onPenDetected() {
+        pushSettings()
+        toast(getString(R.string.pen_detected))
     }
 
     /**
@@ -2546,12 +2592,49 @@ class MainActivity : Activity(), Gestures.Listener {
 
     // ---- camera ---------------------------------------------------------------
 
+    /**
+     * B.1's navigation set, and it SHIFTS BY ONE FINGER when a finger draws.
+     *
+     *   pen mode          1 orbit   2 pan + pinch + twist   3 vertical = lens
+     *   finger-draw mode  1 draws   2 orbit + pinch + twist  3 pan
+     *
+     * That shift is the web build's and it is the whole point: with one finger
+     * busy laying ink, every navigation gesture needs one more finger, and the
+     * lens moves to its slider because there is no fourth-finger mapping worth
+     * teaching. This used to be a single mapping — one and two fingers orbit,
+     * three pans — which is neither of the two, so pan was unreachable with a
+     * pen and the lens unreachable at all.
+     */
     override fun onCamera(dx: Float, dy: Float, dScale: Float, dRotate: Float, fingers: Int) {
         camera.killSpin()
-        lastGestureOrbited = fingers < 3
+        val navFingers = if (gestures.fingerDraws) fingers - 1 else fingers
+
+        /* THREE FINGERS SET THE LENS, and nothing else: a focal change that
+           also orbited would be two things at once, and it is a vertical
+           gesture on purpose.
+           GUESS: up = a longer lens. The docs say "up = increase" without
+           saying increase what, and longer focal is the reading that matches
+           "increase FOV value". */
+        if (navFingers >= 3) {
+            lastGestureOrbited = false
+            camera.focal = clamp(
+                camera.focal * exp(-dy.toDouble() * 0.006),
+                Tune.FOCAL_MIN, Tune.FOCAL_MAX,
+            )
+            camera.apply()
+            pushCamera()
+            chrome.setViewInfo(
+                camera.focal.toInt(), !camera.ortho, sketch.strokes.size, camera.pinned,
+            )
+            return
+        }
+
+        lastGestureOrbited = navFingers <= 1
         if (lastGestureOrbited) camera.orbitBy(dx.toDouble(), dy.toDouble())
         else camera.panBy(dx.toDouble(), dy.toDouble())
-        if (dScale > 0f) camera.zoomBy(1.0 / dScale)
+        /* zoom and roll are what two fingers ADD; one finger has neither a
+           span nor a twist to read, and Gestures reports 1 and 0 for them */
+        if (dScale > 0f && dScale != 1f) camera.zoomBy(1.0 / dScale)
         if (dRotate != 0f) camera.rollBy(dRotate.toDouble())
         pushCamera()
     }

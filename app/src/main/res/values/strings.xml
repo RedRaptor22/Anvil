@@ -46,7 +46,10 @@
 
     <!-- tools whose behaviour is not ported yet: the button exists and says
          so rather than doing nothing. -->
-    <string name="not_yet_colour_wheel">The colour wheel is not built yet</string>
+    <string name="pen_detected">Pen detected — one finger now orbits</string>
+    <string name="colour_ink">BRUSH COLOUR</string>
+    <string name="colour_background">BACKGROUND</string>
+    <string name="colour_light">LIGHT COLOUR</string>
 
     <!-- #stagePanel -->
     <string name="tab_curves">Curves</string>
