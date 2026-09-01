@@ -1039,7 +1039,10 @@ class JoyPad(
     private var railY = 0f
 
     init {
-        val side = t.dp(108f)
+        /* the transcribed `#joyPad{width:108px;height:108px}` rather than the
+           number again — the ratios below are all against 108, so the two
+           drifting apart would put the arcs off the ring */
+        val side = t.px(R.dimen.joyPad)
         layoutParams = LinearLayout.LayoutParams(side, side)
     }
 
@@ -1243,7 +1246,7 @@ class JoyStrip(
     private var gripY = 0f
     private var aimY = 0f
 
-    init { layoutParams = LinearLayout.LayoutParams(t.dp(108f), t.dp(26f)) }
+    init { layoutParams = LinearLayout.LayoutParams(t.px(R.dimen.joyPad), t.dp(26f)) }
 
     override fun onDraw(canvas: Canvas) {
         val k = 0.35f

@@ -1124,7 +1124,8 @@ class Chrome(private val act: Activity, val t: Tokens) {
         )
         joyPanel.addView(
             joyStrip,
-            LinearLayout.LayoutParams(t.dp(108f), t.dp(26f)).apply { topMargin = t.dp(8f) },
+            LinearLayout.LayoutParams(t.px(R.dimen.joyPad), t.dp(26f))
+                .apply { topMargin = t.dp(8f) },
         )
 
         joyTarget = TextView(act).apply {
