@@ -22,6 +22,7 @@ class GuideScene {
     /** Saved guides, kept for reuse. FACT (A.5): the Resource tab. */
     private val saved = ArrayList<Guide>()
 
+    /** The saved guides, in order, for the panel that lists them. */
     val resources: List<Guide> get() = saved
 
     private val listeners = ArrayList<() -> Unit>()

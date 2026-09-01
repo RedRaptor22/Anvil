@@ -35,6 +35,8 @@
     <!-- #viewInfo, the top-strip readout -->
     <string name="persp">Persp</string>
     <string name="ortho">Ortho</string>
+    <string name="pivot_auto">auto</string>
+    <string name="pivot_pinned_short">pinned</string>
 
     <!-- #ctxHint. The first is what Plume shows with nothing active, and it
          states the premise the whole tool rests on (spec C.1): with autoGuide
@@ -69,7 +71,6 @@
     <string name="opt_dof">DOF</string>
     <string name="opt_grain">Grain</string>
     <string name="opt_pixel">Pixel</string>
-    <string name="not_yet_import">Importing a photo or a model to trace over is not wired up yet. OBJ and STL both read, and an imported mesh becomes a guide you can paint on.</string>
 
     <!-- the staging bar -->
     <string name="done">Done</string>
@@ -165,6 +166,15 @@
     <string name="joy_nothing">Nothing selected</string>
     <string name="joy_axis">%1$s along %2$s</string>
     <string name="joy_count">%1$d selected</string>
+
+    <!-- the Import tab -->
+    <string name="import_reference">Import reference…</string>
+    <string name="no_resources">Saved guides and imported references live here. Draw straight onto any of them.</string>
+    <string name="res_active">active</string>
+    <string name="res_deleted">Deleted %1$s</string>
+    <string name="guide_activated">Guide activated</string>
+    <string name="imported">Imported %1$s</string>
+    <string name="import_failed">Could not read that file</string>
 
     <string name="nothing_under_that">Nothing under that</string>
     <string name="bad_hex">Not a colour — six hex digits, or three</string>

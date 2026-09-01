@@ -35,6 +35,7 @@ import art.plume.core.GuidePainting
 import art.plume.core.GuideScene
 import art.plume.core.Guides
 import art.plume.core.History
+import art.plume.core.Import
 import art.plume.core.Liquify
 import art.plume.core.LiveStroke
 import art.plume.core.MM
@@ -285,6 +286,7 @@ class MainActivity : Activity(), Gestures.Listener {
         history.addListener { refreshControls() }
         restoreAutosave()
         refreshGroups()
+        refreshResources()
         pushLiquify()
         pushSettings()
         refreshControls()
@@ -400,6 +402,21 @@ class MainActivity : Activity(), Gestures.Listener {
             val before = sketch.selection
             sketch.selectOnly(sketch.editable())
             commitSelectionChange("Select all", before)
+        }
+        chrome.onResourceActivate = { id -> activateResource(id) }
+        chrome.onResourceVisible = { id, visible ->
+            guides.byId(id)?.let { g -> guides.setResourceVisible(g, visible) }
+            pushGuides(); refreshResources()
+        }
+        chrome.onResourceDelete = { id -> deleteResource(id) }
+        chrome.onImportReference = {
+            startActivityForResult(
+                Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                    addCategory(Intent.CATEGORY_OPENABLE)
+                    type = "*/*"
+                },
+                REQ_IMPORT,
+            )
         }
         chrome.onTransformMode = { m -> joyMode = m; pushTransform() }
         chrome.onTransformGrab = { axis ->
@@ -562,6 +579,7 @@ class MainActivity : Activity(), Gestures.Listener {
     private fun saveActiveGuide() {
         if (guides.save() == null) { toast(getString(R.string.no_guide)); return }
         pushGuides()
+        refreshResources()
         refreshControls()
         toast(getString(R.string.guide_saved))
     }
@@ -927,6 +945,118 @@ class MainActivity : Activity(), Gestures.Listener {
         )
     }
 
+    // ---- saved guides and references ---------------------------------------
+
+    /** The Import tab, rebuilt from the guide scene. */
+    private fun refreshResources() {
+        chrome.setResources(
+            guides.resources.map { g ->
+                Chrome.ResourceRow(
+                    g.id,
+                    /*
+                     * A reference carries the file's own name, so numbering it
+                     * reads as nonsense — only the generic ones need telling
+                     * apart.
+                     */
+                    if (GENERIC_NAMES.contains(g.name)) {
+                        "${g.name} ${guides.indexOf(g) + 1}"
+                    } else {
+                        g.name
+                    },
+                    g.kind.name.lowercase(),
+                    g.visible,
+                    g === guides.active,
+                )
+            },
+        )
+    }
+
+    private fun activateResource(id: Int) {
+        val g = guides.byId(id) ?: return
+        val previous = guides.active
+        history.run(
+            Step(
+                "Activate guide",
+                onRedo = { guides.setActive(g); pushGuides(); refreshResources() },
+                onUndo = { guides.setActive(previous); pushGuides(); refreshResources() },
+            ),
+        )
+        toast(getString(R.string.guide_activated))
+    }
+
+    /**
+     * Throwing a reference away takes the PICTURE only — anything traced onto
+     * it keeps its own curves — which is why it is one tap and undoable rather
+     * than a dialog.
+     */
+    private fun deleteResource(id: Int) {
+        val g = guides.byId(id) ?: return
+        val at = guides.indexOf(g)
+        val wasActive = guides.active === g
+        val name = g.name
+        history.run(
+            Step(
+                "Delete reference",
+                onRedo = {
+                    if (wasActive) guides.setActive(null)
+                    guides.remove(g); pushGuides(); refreshResources()
+                },
+                onUndo = {
+                    guides.restore(g, at, wasActive); pushGuides(); refreshResources()
+                },
+            ),
+        )
+        toast(getString(R.string.res_deleted, name))
+    }
+
+    /** An OBJ or STL becomes a guide you can paint on but not fill. */
+    private fun importReference(uri: Uri) {
+        io.execute {
+            val bytes = runCatching {
+                contentResolver.openInputStream(uri)?.use { it.readBytes() }
+            }.getOrNull()
+            val name = displayName(uri)
+            val surface = when {
+                bytes == null -> null
+                Import.looksBinarySTL(bytes) -> Import.parseSTL(bytes)
+                else -> {
+                    val text = bytes.toString(Charsets.UTF_8)
+                    Import.parseOBJ(text) ?: Import.parseSTL(bytes)
+                }
+            }
+            main.post {
+                if (surface == null) { toast(getString(R.string.import_failed)); return@post }
+                val g = Import.asGuide(surface, name)
+                val previous = guides.active
+                history.run(
+                    Step(
+                        "Import reference",
+                        onRedo = {
+                            guides.save(g); guides.setActive(g)
+                            pushGuides(); refreshResources()
+                        },
+                        onUndo = {
+                            guides.remove(g); guides.setActive(previous)
+                            pushGuides(); refreshResources()
+                        },
+                    ),
+                )
+                toast(getString(R.string.imported, name))
+            }
+        }
+    }
+
+    /** The file's own name, so a reference is not called "Model 3". */
+    private fun displayName(uri: Uri): String {
+        val fallback = uri.lastPathSegment?.substringAfterLast('/') ?: "Model"
+        return runCatching {
+            contentResolver.query(uri, null, null, null, null)?.use { c ->
+                val i = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                if (i >= 0 && c.moveToFirst()) c.getString(i) else null
+            }
+        }.getOrNull() ?: fallback
+    }
+
     private fun refreshGroups() {
         sketch.ensureGroup()
         chrome.setGroups(
@@ -1040,7 +1170,9 @@ class MainActivity : Activity(), Gestures.Listener {
         chrome.setGuide(g != null, g?.name ?: "", g?.opacity ?: 0.42)
         chrome.setSelection(sketch.selection.size)
         pushTransform()
-        chrome.setViewInfo(camera.focal.toInt(), !camera.ortho, sketch.strokes.size)
+        chrome.setViewInfo(
+            camera.focal.toInt(), !camera.ortho, sketch.strokes.size, camera.pinned,
+        )
     }
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
@@ -2091,6 +2223,7 @@ class MainActivity : Activity(), Gestures.Listener {
                 if (text == null) toast("Nothing to export") else writeText(uri, text, "Exported glTF")
             }
             REQ_EXPORT_PNG -> exportPng(uri)
+            REQ_IMPORT -> importReference(uri)
         }
     }
 
@@ -2365,6 +2498,14 @@ class MainActivity : Activity(), Gestures.Listener {
         const val REQ_EXPORT_GLTF = 5
         const val REQ_EXPORT_MTL = 6
         const val REQ_EXPORT_PNG = 7
+        const val REQ_IMPORT = 8
+
+        /**
+         * Guide names that are a KIND rather than a name. A reference carries
+         * the file's own, so numbering it would read as nonsense; only these
+         * need telling apart in a list.
+         */
+        private val GENERIC_NAMES = setOf("Surface", "Loft", "Shape", "Image", "Model")
         const val AUTOSAVE = "autosave.plume.json"
     }
 }

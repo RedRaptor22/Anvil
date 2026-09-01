@@ -125,6 +125,12 @@ class Chrome(private val act: Activity, val t: Tokens) {
     var onGroupDelete: () -> Unit = {}
     var onSelectAll: () -> Unit = {}
 
+    /** The Import tab: saved guides and references. */
+    var onResourceActivate: (Int) -> Unit = {}
+    var onResourceVisible: (id: Int, visible: Boolean) -> Unit = { _, _ -> }
+    var onResourceDelete: (Int) -> Unit = {}
+    var onImportReference: () -> Unit = {}
+
     /** The liquify strip. Its three numbers are dragged, like everything else. */
     var onLiquifyMode: (String) -> Unit = {}
     var onLiquifyValue: (which: String, value: Double) -> Unit = { _, _ -> }
@@ -248,6 +254,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
     private lateinit var colorDot: View
     private lateinit var vFocal: TextView
     private lateinit var vProj: TextView
+    private lateinit var vPivot: TextView
     private lateinit var vCount: TextView
     private lateinit var sizePopVal: TextView
     private lateinit var opacityPopVal: TextView
@@ -266,6 +273,8 @@ class Chrome(private val act: Activity, val t: Tokens) {
     private lateinit var hexField: EditText
     private lateinit var colorWheel: ColorWheel
     private lateinit var groupList: LinearLayout
+    private lateinit var resourceList: LinearLayout
+    private lateinit var resourceEmpty: View
     private lateinit var lqSize: DragValue
     private lateinit var lqRange: DragValue
     private lateinit var lqStrength: DragValue
@@ -405,6 +414,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
         }
         vFocal = value("50")
         vProj = value("Persp")
+        vPivot = value("auto")
         vCount = value("0")
         val pad = t.dp(13f)
         viewInfo.setPadding(pad, t.dp(7f), pad, t.dp(7f))
@@ -412,6 +422,8 @@ class Chrome(private val act: Activity, val t: Tokens) {
         viewInfo.addView(vFocal)
         viewInfo.addView(lab("mm   "))
         viewInfo.addView(vProj)
+        viewInfo.addView(lab("   pivot "))
+        viewInfo.addView(vPivot)
         viewInfo.addView(lab("   "))
         viewInfo.addView(vCount)
         viewInfo.addView(lab(" curves"))
@@ -868,7 +880,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
         )
 
         bodies.add(buildCurvesTab())
-        bodies.add(gap(R.string.not_yet_import))
+        bodies.add(buildImportTab())
         bodies.add(buildSceneTab())
         for ((i, b) in bodies.withIndex()) {
             b.visibility = if (i == 2) View.VISIBLE else View.GONE
@@ -950,6 +962,108 @@ class Chrome(private val act: Activity, val t: Tokens) {
         }
         col.addView(row, matchWrap(t.dp(6f)))
         return col
+    }
+
+    /**
+     * `#bodyRes` — saved guides and imported references.
+     *
+     * The row itself activates the guide; the dot toggles whether it shows as
+     * a reference; the bin throws it away. Deleting takes the PICTURE only —
+     * anything traced onto it keeps its own curves — which is why it is one
+     * tap and undoable rather than a dialog.
+     */
+    private fun buildImportTab(): View {
+        val col = LinearLayout(act).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            )
+        }
+        col.addView(
+            TextButton(act, t, filled = true, small = true).apply {
+                text = act.getString(R.string.import_reference)
+                setOnClickListener { onImportReference() }
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                )
+            },
+        )
+        resourceList = LinearLayout(act).apply { orientation = LinearLayout.VERTICAL }
+        col.addView(resourceList, matchWrap(t.dp(6f)))
+        resourceEmpty = gap(R.string.no_resources)
+        col.addView(resourceEmpty)
+        return col
+    }
+
+    /** One saved guide, as the Import tab shows it. */
+    class ResourceRow(
+        val id: Int,
+        val name: String,
+        val kind: String,
+        val visible: Boolean,
+        val active: Boolean,
+    )
+
+    fun setResources(rows: List<ResourceRow>) {
+        resourceList.removeAllViews()
+        resourceEmpty.visibility = if (rows.isEmpty()) View.VISIBLE else View.GONE
+        for (r in rows) resourceList.addView(resourceRow(r))
+    }
+
+    /** `.listItem` — the active one inverts, and its buttons come with it. */
+    private fun resourceRow(g: Chrome.ResourceRow): View {
+        val row = LinearLayout(act).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = GradientDrawable().apply {
+                setColor(if (g.active) t.active else t.panel2)
+                cornerRadius = t.dpf(12f)
+            }
+            setPadding(t.dp(9f), t.dp(5f), t.dp(5f), t.dp(5f))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { topMargin = t.dp(4f) }
+            setOnClickListener { onResourceActivate(g.id) }
+        }
+        val fg = if (g.active) t.onActive else t.ink
+        row.addView(
+            TextView(act).apply {
+                /* filled when it is showing as a reference, hollow when not */
+                text = if (g.visible) "\u25C9" else "\u25CB"
+                setTextColor(fg)
+                textSize = 12f
+                setPadding(0, 0, t.dp(6f), 0)
+                setOnClickListener { onResourceVisible(g.id, !g.visible) }
+            },
+        )
+        row.addView(
+            TextView(act).apply {
+                text = g.name
+                setTextColor(fg)
+                textSize = 12f
+                isSingleLine = true
+                ellipsize = android.text.TextUtils.TruncateAt.END
+                layoutParams = LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f,
+                )
+            },
+        )
+        row.addView(
+            TextView(act).apply {
+                text = if (g.active) act.getString(R.string.res_active) else g.kind
+                setTextColor(fg)
+                alpha = if (g.active) 0.7f else 1f
+                textSize = 10f
+                setPadding(t.dp(4f), 0, t.dp(2f), 0)
+            },
+        )
+        row.addView(
+            IcoButton(act, t, IcoButton.SIZE_TINY).icon("trash").apply {
+                danger = true
+                setOnClickListener { onResourceDelete(g.id) }
+            },
+        )
+        return row
     }
 
     /** What the Curves tab is showing. */
@@ -2039,10 +2153,11 @@ class Chrome(private val act: Activity, val t: Tokens) {
         (c.b * 255).toInt().coerceIn(0, 255),
     )
 
-    fun setViewInfo(focalMm: Int, perspective: Boolean, curves: Int) {
+    fun setViewInfo(focalMm: Int, perspective: Boolean, curves: Int, pinned: Boolean) {
         vFocal.text = focalMm.toString()
         vProj.text = act.getString(if (perspective) R.string.persp else R.string.ortho)
         vCount.text = curves.toString()
+        vPivot.text = act.getString(if (pinned) R.string.pivot_pinned_short else R.string.pivot_auto)
     }
 
     fun toast(msg: String) = toastCard.show(msg)
