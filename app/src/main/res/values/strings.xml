@@ -134,6 +134,7 @@
     <string name="opt_theme">Theme</string>
     <string name="opt_hideui">Hide UI</string>
     <string name="opt_guide">Guide</string>
+    <string name="opt_diag">Input</string>
     <string name="view_front">Front</string>
     <string name="view_back">Back</string>
     <string name="view_right">Right</string>
@@ -224,6 +225,8 @@
     <string name="tip_prim">Primitives — cube, pyramid, sphere, torus, tube</string>
     <string name="tip_liquify">Liquify — press and drag to deform the selection</string>
     <string name="tip_inject">Injector — samples the whole brush</string>
+
+    <string name="opacity">Opacity</string>
 
     <string name="nothing_under_that">Nothing under that</string>
     <string name="bad_hex">Not a colour — six hex digits, or three</string>

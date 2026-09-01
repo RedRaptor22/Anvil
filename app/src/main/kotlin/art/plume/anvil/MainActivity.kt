@@ -417,6 +417,14 @@ class MainActivity : Activity(), Gestures.Listener {
             sketch.selectOnly(sketch.editable())
             commitSelectionChange("Select all", before)
         }
+        chrome.onKeypad = { which, v ->
+            when (which) {
+                "size" -> { sizeMM = clamp(v, Tune.BRUSH_MIN_MM, Tune.BRUSH_MAX_MM) }
+                "opacity" -> applyOpacityToSelectionOrBrush(clamp(v / 100.0, 0.05, 1.0))
+            }
+            syncBrushControls()
+            scheduleAutosave()
+        }
         chrome.onWalkNext = {
             if (walkStep >= WALK.size - 1) endWalk() else startWalk(walkStep + 1)
         }
@@ -871,6 +879,7 @@ class MainActivity : Activity(), Gestures.Listener {
                 pushEnvironment()
                 scheduleAutosave()
             }
+            InputToggle.DIAG -> { diagOn = !diagOn; pushDiag() }
             InputToggle.HIDE_UI -> {
                 hideUi = !hideUi
                 chrome.root.visibility = if (hideUi) View.GONE else View.VISIBLE
@@ -891,7 +900,7 @@ class MainActivity : Activity(), Gestures.Listener {
     private fun pushSettings() {
         chrome.setSettings(
             gestures.fingerDraws, autoGuide, isolate, clampOff, shapeHoldOn,
-            stableOn, stableAmount, radial, camera.focal, camera.ortho, hideUi,
+            stableOn, stableAmount, radial, camera.focal, camera.ortho, hideUi, diagOn,
             getString(R.string.autosaves_here),
         )
     }
@@ -1240,6 +1249,17 @@ class MainActivity : Activity(), Gestures.Listener {
     // ---- one gesture, one history step ------------------------------------
 
     override fun onDrawBegin(x: Float, y: Float, pressure: Float, tiltAz: Float, tiltAlt: Float) {
+        if (diagOn) {
+            /*
+             * A stylus that reports no pressure, or reports it on an axis
+             * nothing reads, looks exactly like a bug in the brush. This says
+             * which it is.
+             */
+            diagValues["type"] = if (pressure != 0.5f) "stylus" else "finger"
+            diagValues["pressure"] = String.format("%.2f", pressure)
+            diagValues["tilt"] = String.format("%.2f / %.2f", tiltAz, tiltAlt)
+            pushDiag()
+        }
         camera.killSpin()
         dragMoved = false
         lastPen = Px(x.toDouble(), y.toDouble())
@@ -2525,8 +2545,31 @@ class MainActivity : Activity(), Gestures.Listener {
         surface.requestRender()
     }
 
-    override fun onHover(x: Float, y: Float, pressure: Float) { /* nib preview: Phase 6 */ }
-    override fun onHoverExit() { }
+    /** What the last pointer reported, for the diagnostics panel. */
+    private val diagValues = HashMap<String, String>()
+    private var diagOn = false
+
+    private fun pushDiag() {
+        diagValues["curves"] = sketch.strokes.size.toString()
+        chrome.setDiag(diagOn, diagValues)
+    }
+
+    /**
+     * A hovering stylus reports what it is and how hard it is about to press,
+     * which is what the diagnostics panel is for.
+     */
+    override fun onHover(x: Float, y: Float, pressure: Float) {
+        if (!diagOn) return
+        diagValues["hover"] = "yes"
+        diagValues["pressure"] = String.format("%.2f", pressure)
+        pushDiag()
+    }
+
+    override fun onHoverExit() {
+        if (!diagOn) return
+        diagValues["hover"] = "no"
+        pushDiag()
+    }
 
     private companion object {
         /**

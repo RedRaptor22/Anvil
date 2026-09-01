@@ -56,7 +56,7 @@ enum class EnvToggle { GRID, AXIS, FOG, SHADED, RENDER, SHADOW, TOON, DOF, GRAIN
 
 /** The settings modal's switches — input behaviour and the view. */
 enum class InputToggle {
-    FINGER, AUTO_GUIDE, ISOLATE, CLAMP, HOLD_SHAPE, STABLE, ORTHO, THEME, HIDE_UI,
+    FINGER, AUTO_GUIDE, ISOLATE, CLAMP, HOLD_SHAPE, STABLE, ORTHO, THEME, HIDE_UI, DIAG,
 }
 
 /** Everything a chrome button asks for that is not a change of tool. */
@@ -134,6 +134,9 @@ class Chrome(private val act: Activity, val t: Tokens) {
     /** The walkthrough. */
     var onWalkNext: () -> Unit = {}
     var onWalkSkip: () -> Unit = {}
+
+    /** The numeric keypad: a value typed rather than dragged. */
+    var onKeypad: (which: String, value: Double) -> Unit = { _, _ -> }
 
     /** The liquify strip. Its three numbers are dragged, like everything else. */
     var onLiquifyMode: (String) -> Unit = {}
@@ -230,6 +233,8 @@ class Chrome(private val act: Activity, val t: Tokens) {
     private val liquifyPanel = panel(act, t)
     private val joyPanel = panel(act, t)
     private val walkPanel = panel(act, t, large = true)
+    private val keypad = panel(act, t, large = true)
+    private val diag = panel(act, t)
     private val stagePanel = panel(act, t, large = true)
     private val brushGrid = panel(act, t, large = true)
     private val slidePop = panel(act, t, large = true)
@@ -299,6 +304,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
     private var optStable = true
     private var optOrtho = false
     private var optHideUi = false
+    private var optDiag = false
     private var stableAmt = Tune.STABLE_DEFAULT
     private var radialAmt = 1
     private var focalMm = 50.0
@@ -326,6 +332,13 @@ class Chrome(private val act: Activity, val t: Tokens) {
     private lateinit var walkTitle: TextView
     private lateinit var walkBody: TextView
     private lateinit var walkNext: TextButton
+    private lateinit var keypadLabel: TextView
+    private lateinit var keypadValue: TextView
+    private lateinit var keypadUnit: TextView
+    private val diagValues = HashMap<String, TextView>()
+    private var keypadFor = ""
+    private var keypadText = ""
+    private var keypadFresh = true
     private val joyModes = HashMap<Transform.Mode, TextButton>()
     private var joyMode = Transform.Mode.MOVE
     private var joyLabel = ""
@@ -360,6 +373,8 @@ class Chrome(private val act: Activity, val t: Tokens) {
         buildUndoPill()
         buildCtxBar()
         buildSelBar()
+        buildKeypad()
+        buildDiag()
         buildWalk()
         buildJoyPanel()
         buildLiquifyPanel()
@@ -498,7 +513,9 @@ class Chrome(private val act: Activity, val t: Tokens) {
             get = { sizeMm },
             set = { v -> sizeMm = v.coerceIn(Tune.BRUSH_MIN_MM, Tune.BRUSH_MAX_MM); onSizeMm(sizeMm); refresh() },
         )
-        sizeVal.setOnClickListener { togglePopover(slidePop) }
+        sizeVal.setOnClickListener {
+            openKeypad("size", act.getString(R.string.press_size), sizeMm, "mm")
+        }
         brushRail.addView(sizeVal, railValueParams())
 
         val opacityBtn = IcoButton(act, t).icon("opacity")
@@ -509,7 +526,9 @@ class Chrome(private val act: Activity, val t: Tokens) {
             get = { opacity },
             set = { v -> opacity = v.coerceIn(0.05, 1.0); onOpacity(opacity); refresh() },
         )
-        opacityVal.setOnClickListener { togglePopover(slidePop) }
+        opacityVal.setOnClickListener {
+            openKeypad("opacity", act.getString(R.string.opacity), opacity * 100, "%")
+        }
         brushRail.addView(opacityVal, railValueParams())
 
         brushRail.addView(separator(act, t))
@@ -736,6 +755,151 @@ class Chrome(private val act: Activity, val t: Tokens) {
      * you to DO something: a scrim over the canvas would hide the thing the
      * step is describing.
      */
+    /**
+     * `#keypad` — for typing a value instead of dragging for it.
+     *
+     * The drag-a-readout control is quick and imprecise by design; sometimes
+     * you want exactly 14mm. Tapping the readout opens this.
+     */
+    private fun buildKeypad() {
+        val grid = GridLayout(act).apply { columnCount = 3 }
+        keypad.orientation = LinearLayout.VERTICAL
+        keypad.setPadding(t.dp(10f), t.dp(10f), t.dp(10f), t.dp(10f))
+
+        val head = LinearLayout(act).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { bottomMargin = t.dp(4f) }
+        }
+        keypadLabel = TextView(act).apply {
+            setTextColor(t.dim2)
+            textSize = 10f
+            letterSpacing = 0.08f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            layoutParams = LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f,
+            )
+        }
+        keypadValue = TextView(act).apply {
+            setTextColor(t.ink)
+            textSize = 15f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+        }
+        keypadUnit = TextView(act).apply {
+            setTextColor(t.dim2)
+            textSize = 11f
+            setPadding(t.dp(2f), 0, 0, 0)
+        }
+        head.addView(keypadLabel); head.addView(keypadValue); head.addView(keypadUnit)
+        keypad.addView(head)
+
+        for (k in listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "back", "0", "ok")) {
+            val b = TextButton(act, t, filled = true).apply {
+                text = when (k) {
+                    "back" -> "\u232B"
+                    "ok" -> "\u2713"
+                    else -> k
+                }
+                textSize = 16f
+                if (k == "back") setTextColor(t.red)
+                setOnClickListener { keypadKey(k) }
+                layoutParams = GridLayout.LayoutParams().apply {
+                    width = t.dp(58f); height = t.dp(44f)
+                    setMargins(t.dp(3f), t.dp(3f), t.dp(3f), t.dp(3f))
+                }
+            }
+            if (k == "ok") {
+                b.background = GradientDrawable().apply {
+                    setColor(t.green); cornerRadius = t.rBtn
+                }
+            }
+            grid.addView(b)
+        }
+        keypad.addView(grid)
+        keypad.visibility = View.GONE
+        popovers.add(keypad)
+    }
+
+    /**
+     * Typing REPLACES rather than appends on the first key, because the field
+     * opens showing the current value: appending to it would turn 14 into 145
+     * when you meant 5.
+     */
+    private fun keypadKey(k: String) {
+        when (k) {
+            "back" -> keypadText = keypadText.dropLast(1)
+            "ok" -> {
+                keypadText.toDoubleOrNull()?.let { onKeypad(keypadFor, it) }
+                closePopovers()
+                return
+            }
+            else -> {
+                if (keypadFresh) { keypadText = ""; keypadFresh = false }
+                if (keypadText.length < 6) keypadText += k
+            }
+        }
+        keypadValue.text = if (keypadText.isEmpty()) "0" else keypadText
+    }
+
+    /** Open the pad on [which], showing [value] with [unit]. */
+    fun openKeypad(which: String, label: String, value: Double, unit: String) {
+        keypadFor = which
+        keypadText = if (value == value.toInt().toDouble()) {
+            value.toInt().toString()
+        } else {
+            value.toString()
+        }
+        keypadFresh = true
+        keypadLabel.text = label
+        keypadValue.text = keypadText
+        keypadUnit.text = unit
+        closePopovers()
+        keypad.visibility = View.VISIBLE
+        refresh()
+    }
+
+    /**
+     * `#diag` — what the pointer is reporting.
+     *
+     * Not decoration: a stylus that reports no pressure, or reports it on an
+     * axis nothing reads, looks exactly like a bug in the brush. This says
+     * which it is.
+     */
+    private fun buildDiag() {
+        diag.orientation = LinearLayout.VERTICAL
+        diag.setPadding(t.dp(12f), t.dp(10f), t.dp(12f), t.dp(10f))
+        for (label in listOf("type", "pressure", "tilt", "hover", "curves")) {
+            val row = LinearLayout(act).apply { orientation = LinearLayout.HORIZONTAL }
+            row.addView(
+                TextView(act).apply {
+                    text = label
+                    setTextColor(t.dim2)
+                    textSize = 11f
+                    typeface = android.graphics.Typeface.MONOSPACE
+                    width = t.dp(58f)
+                },
+            )
+            val v = TextView(act).apply {
+                text = "—"
+                setTextColor(t.ink)
+                textSize = 11f
+                typeface = android.graphics.Typeface.MONOSPACE
+            }
+            diagValues[label] = v
+            row.addView(v)
+            diag.addView(row)
+        }
+        diag.visibility = View.GONE
+    }
+
+    fun setDiag(visible: Boolean, values: Map<String, String>) {
+        diag.visibility = if (visible) View.VISIBLE else View.GONE
+        if (!visible) return
+        for ((k, v) in values) diagValues[k]?.text = v
+    }
+
     private fun buildWalk() {
         walkPanel.orientation = LinearLayout.VERTICAL
         val p = t.dp(18f)
@@ -1677,6 +1841,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
             .option("theme", act.getString(R.string.opt_theme)) { onInput(InputToggle.THEME) }
             .option("hideui", act.getString(R.string.opt_hideui)) { onInput(InputToggle.HIDE_UI) }
             .option("walk", act.getString(R.string.opt_guide)) { onAction(Action.HELP) }
+            .option("diag", act.getString(R.string.opt_diag)) { onInput(InputToggle.DIAG) }
         body.addView(viewGrid, matchWrap(t.dp(4f)))
 
         val views = OptionGrid(act, t, 6)
@@ -1867,6 +2032,14 @@ class Chrome(private val act: Activity, val t: Tokens) {
         root.addView(sysMenu, lp(Gravity.CENTER, width = t.px(R.dimen.sysMenuW)))
         root.addView(colorCard, lp(Gravity.START or Gravity.CENTER_VERTICAL, left = t.px(R.dimen.brushGridLeft), width = t.px(R.dimen.colorCardW)))
         root.addView(slidePop, lp(Gravity.START or Gravity.CENTER_VERTICAL, left = t.px(R.dimen.brushGridLeft), width = t.px(R.dimen.slidePopW)))
+        root.addView(
+            diag,
+            lp(
+                Gravity.TOP or Gravity.END,
+                top = t.px(R.dimen.stageTop), right = t.px(R.dimen.edge), width = t.dp(184f),
+            ),
+        )
+        root.addView(keypad, lp(Gravity.CENTER))
         root.addView(
             walkPanel,
             lp(
@@ -2202,8 +2375,9 @@ class Chrome(private val act: Activity, val t: Tokens) {
     fun setSettings(
         finger: Boolean, autoGuide: Boolean, isolate: Boolean, clamp: Boolean,
         holdShape: Boolean, stableOn: Boolean, stable: Double, radial: Int,
-        focal: Double, ortho: Boolean, hideUi: Boolean, save: String,
+        focal: Double, ortho: Boolean, hideUi: Boolean, diag: Boolean, save: String,
     ) {
+        optDiag = diag
         optFinger = finger; optAutoGuide = autoGuide; optIsolate = isolate
         optClamp = clamp; optHoldShape = holdShape; optStable = stableOn
         stableAmt = stable; radialAmt = radial; focalMm = focal
@@ -2386,6 +2560,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
         inputGrid.setOn("stable", optStable)
         viewGrid.setOn("proj", optOrtho)
         viewGrid.setOn("hideui", optHideUi)
+        viewGrid.setOn("diag", optDiag)
         stableBar.value = stableAmt
         stableValue.text = (stableAmt * 100).toInt().toString()
         radialBar.value = radialAmt.toDouble()
