@@ -415,10 +415,29 @@ class MainActivity : Activity(), Gestures.Listener {
                 )
             }
         }
+        /*
+         * Long press on a row. `Tools.selectGroup`, including the two things
+         * it says out loud: a hidden group cannot be selected INTO, and an
+         * empty one says so rather than looking like a press that missed.
+         *
+         * Both mattered more once hiding started working — selecting a hidden
+         * group put curves in the selection that the very next refresh dropped
+         * again, so the press did nothing and explained nothing.
+         */
         chrome.onGroupSelect = { id ->
-            val before = sketch.selection
-            sketch.selectOnly(sketch.membersOf(id))
-            commitSelectionChange("Select group", before)
+            val g = sketch.groupById(id)
+            val members = sketch.membersOf(id)
+            when {
+                g == null -> {}
+                !g.visible -> toast(getString(R.string.group_is_hidden, g.name))
+                members.isEmpty() -> toast(getString(R.string.group_is_empty, g.name))
+                else -> {
+                    val before = sketch.selection
+                    sketch.selectOnly(members)
+                    commitSelectionChange("Select group", before)
+                    toast(getString(R.string.group_selected, members.size, g.name))
+                }
+            }
         }
         chrome.onGroupAssign = { id -> assignSelectionTo(id) }
         chrome.onGroupVisible = { id, visible -> setGroupVisible(id, visible) }
@@ -1426,6 +1445,28 @@ class MainActivity : Activity(), Gestures.Listener {
         dragMoved = false
         lastPen = Px(x.toDouble(), y.toDouble())
 
+        /*
+         * YOU CANNOT DRAW INTO A GROUP YOU CANNOT SEE.
+         *
+         * A new curve joins the ACTIVE group, and once hiding actually hid
+         * things that opened a state with no way out of it: hide the group you
+         * are working in, draw, and the live preview follows the pen the whole
+         * way and then vanishes the instant it lifts. The stroke is really
+         * there, in a group nothing draws.
+         *
+         * Refusing it is what every layer-based app does, and it is better
+         * than the alternatives — unhiding the group behind your back, or
+         * moving you to another one — because neither of those is what the
+         * hand asked for, and both change state you did not touch.
+         */
+        if (tool == Tool.DRAW || tool == Tool.SHAPE) {
+            val g = sketch.groupById(sketch.activeGroup)
+            if (g != null && !g.visible) {
+                toast(getString(R.string.group_hidden_cannot_draw, g.name))
+                return
+            }
+        }
+
         when (tool) {
             Tool.DRAW, Tool.SHAPE, Tool.GUIDE, Tool.FLATGUIDE ->
                 beginStroke(x, y, pressure)
@@ -2424,6 +2465,13 @@ class MainActivity : Activity(), Gestures.Listener {
         when (val r = Fill.fillGuide(g, proto)) {
             is Fill.Result.Refused -> toast(r.reason)
             is Fill.Result.Filled -> {
+                /* FILL'S CURVES JOIN THE ACTIVE GROUP like every other curve.
+                   They were the one path that made ungrouped strokes, which
+                   left them outside the group system entirely: not in any
+                   count, not selectable by a group, and not hideable by any
+                   row in the panel. */
+                val into = sketch.ensureGroup().id
+                for (st in r.strokes) st.group = into
                 history.run(
                     Step(
                         "Fill", cost = r.strokes.sumOf { it.pts.size },

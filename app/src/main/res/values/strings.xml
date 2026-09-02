@@ -111,6 +111,10 @@
     <string name="nothing_selected">Nothing selected</string>
     <string name="moved_to_group">Moved %1$d into %2$s</string>
     <string name="group_duplicated">Duplicated %1$d curves</string>
+    <string name="group_hidden_cannot_draw">%1$s is hidden — show it to draw in it</string>
+    <string name="group_is_hidden">%1$s is hidden</string>
+    <string name="group_is_empty">%1$s is empty</string>
+    <string name="group_selected">%1$d selected in %2$s</string>
     <string name="group_deleted">Group deleted with %1$d curves — undo puts both back</string>
     <string name="last_group">The last group cannot be deleted</string>
 

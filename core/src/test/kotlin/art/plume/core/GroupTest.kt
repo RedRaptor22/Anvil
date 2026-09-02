@@ -375,6 +375,29 @@ class GroupTest {
     }
 
     @Test
+    fun `ensureGroup only adopts loose curves when there are no groups at all`() {
+        /* Worth stating outright, because it is easy to read the adoption as a
+           general tidy-up that catches anything ungrouped on every refresh. It
+           is not: it runs ONCE, when the first group is made. A curve that
+           goes ungrouped after that stays ungrouped — outside every count,
+           unselectable by a group, and unhideable by any row in the panel.
+           That is why nothing is allowed to make one. */
+        val f = Fixture()
+        val loose = strokeAt(5.0)
+        f.sketch.add(loose)
+        f.sketch.ensureGroup()
+        assertEquals(null, loose.group, "a loose curve was adopted after the fact")
+        assertTrue(f.sketch.visible(loose), "and it is visible, so it just floats")
+
+        // whereas the first group ever made does adopt what came before it
+        val fresh = Sketch()
+        val early = strokeAt(0.0)
+        fresh.add(early)
+        val g = fresh.ensureGroup()
+        assertEquals(g.id, early.group)
+    }
+
+    @Test
     fun `removing a curve takes it out of the selection too`() {
         val f = Fixture()
         f.sketch.selectOnly(f.inA)
