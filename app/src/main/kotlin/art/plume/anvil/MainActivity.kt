@@ -3047,7 +3047,17 @@ class MainActivity : Activity(), Gestures.Listener {
      * a different one would be unforgivable.
      */
     private fun openWork(id: String?) {
-        writeAutosave()
+        /*
+         * WRITTEN BEFORE WE LEAVE, ON THIS THREAD.
+         *
+         * The ordinary autosave hands the write to the IO queue, which is
+         * right while you are drawing and wrong here: switching A to B and
+         * back to A fast enough would have A's restore read the file before
+         * A's own write had come off the queue, and load the sketch as it was
+         * two changes ago. A page change is rare and a lost drawing is not, so
+         * this one waits.
+         */
+        saveWorkNow(currentWorkId())
         writeThumbnail(currentWorkId())
 
         val target = id ?: newWorkId()
@@ -3067,6 +3077,14 @@ class MainActivity : Activity(), Gestures.Listener {
         announce(
             getString(if (id == null) R.string.work_new else R.string.work_opened),
         )
+    }
+
+    /** The current document, written to [id]'s file before anything moves on. */
+    private fun saveWorkNow(id: String) {
+        if (sketch.strokes.isEmpty() && guides.active == null) return
+        val text = currentDocumentText()
+        val ok = runCatching { workFile(id).writeText(text) }.isSuccess
+        setSaveState(if (ok) 0 else 2)
     }
 
     private fun deleteWork(id: String) {
@@ -3131,8 +3149,23 @@ class MainActivity : Activity(), Gestures.Listener {
     private fun writeAutosave() {
         if (sketch.strokes.isEmpty() && guides.active == null) { setSaveState(0); return }
         val text = currentDocumentText()
+        /*
+         * WHICH FILE IS DECIDED HERE, NOT ON THE IO THREAD.
+         *
+         * `autosaveFile()` used to be resolved inside the lambda, which was
+         * harmless while there was one autosave and a data-loss bug the moment
+         * there were many: leaving a work writes it, then changes which work
+         * is current, and the write would land a beat later — putting the
+         * OUTGOING sketch into the INCOMING work's file and destroying the
+         * drawing you had just opened.
+         *
+         * The executor is single-threaded, so capturing the destination on the
+         * calling thread also fixes the ordering: each work's write completes
+         * before the next one's begins.
+         */
+        val into = autosaveFile()
         io.execute {
-            val ok = runCatching { autosaveFile().writeText(text) }.isSuccess
+            val ok = runCatching { into.writeText(text) }.isSuccess
             /*
              * A save you were told about that then quietly did not happen is
              * the one failure a sketchbook must never have, so the dot reports
