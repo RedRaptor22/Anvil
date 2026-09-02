@@ -178,6 +178,15 @@ class SketchRenderer : GLSurfaceView.Renderer {
     private val shadowList = ArrayList<Stroke>()
 
     private var shadowBuiltAt = 0L
+
+    /**
+     * Ask for another frame.
+     *
+     * The renderer has no handle on the view it draws into — deliberately, it
+     * is driven rather than driving — so anything it defers has to be able to
+     * say so. Wired to the surface by the activity.
+     */
+    var needsFrame: () -> Unit = {}
     private var shadowVisible = false
     /** The sketch's extent, recomputed on the UI thread when the ink changes. */
     private var strokeBounds = Bounds()
@@ -700,6 +709,18 @@ class SketchRenderer : GLSurfaceView.Renderer {
                 GroundShadow.fit(bounds, sun, shadowFit)
                 shadowFit.viewProj.into(shadowVp)
                 renderSilhouette(list)
+            } else {
+                /*
+                 * SOMETHING HAS TO COME BACK FOR THE ONE WE SKIPPED.
+                 *
+                 * The surface renders WHEN DIRTY, so a frame only happens
+                 * because something asked for one. Dropping this rebuild on
+                 * the last frame of a drag would leave the flag up with
+                 * nothing left to act on it, and the shadow would stay a drag
+                 * behind until some unrelated touch happened to draw again.
+                 * The throttle has to schedule its own catch-up.
+                 */
+                needsFrame()
             }
         }
         shadowVisible = true

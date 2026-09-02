@@ -336,6 +336,10 @@ class MainActivity : Activity(), Gestures.Listener {
         setContentView(root)
 
         chrome.setPalettes(readPalettes())
+        /* the renderer defers the ground shadow when changes arrive faster
+           than it can rebuild it, and a WHEN_DIRTY surface will not come back
+           on its own — so it asks */
+        renderer.needsFrame = { surface.requestRender() }
         history.addListener { refreshControls() }
         restoreAutosave()
         refreshGroups()
