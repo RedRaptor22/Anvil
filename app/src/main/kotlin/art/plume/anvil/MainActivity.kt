@@ -693,10 +693,17 @@ class MainActivity : Activity(), Gestures.Listener {
     }
 
     /**
-     * The tools with no behaviour behind them yet say so. A button that looks
-     * live and does nothing is worse than one that is honest about the gap —
-     * and the gap is real: Bend, Loft and Primitives are all ported in `:core`
-     * and under test, but none of them has its interaction wired up here.
+     * Switching tools, and the three that need something before they can run.
+     *
+     * Bend wants a guide to bend, Loft wants at least two curves already
+     * selected, and Primitives stages one for you. Each says so and stays put
+     * rather than switching to a tool that would do nothing.
+     *
+     * (This comment used to say Bend, Loft and Primitives were ported in
+     * `:core` but had no interaction wired up here. That stopped being true
+     * when they were wired, and a comment describing a gap that has been
+     * filled is worse than no comment: it sends the next reader looking for
+     * work that is already done.)
      */
     private fun setTool(t: Tool) {
         /* leaving a staging tool throws away what it was building */
