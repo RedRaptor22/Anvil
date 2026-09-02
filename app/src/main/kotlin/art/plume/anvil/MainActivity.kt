@@ -1305,8 +1305,8 @@ class MainActivity : Activity(), Gestures.Listener {
         history.run(
             Step(
                 if (visible) "Show group" else "Hide group",
-                onRedo = { g.visible = visible; refreshScene(); refreshGroups() },
-                onUndo = { g.visible = !visible; refreshScene(); refreshGroups() },
+                onRedo = { g.visible = visible; refreshScene() },
+                onUndo = { g.visible = !visible; refreshScene() },
             ),
         )
     }
@@ -1319,10 +1319,10 @@ class MainActivity : Activity(), Gestures.Listener {
         history.run(
             Step(
                 "Move to group",
-                onRedo = { for (s in sel) sketch.assign(s, g); refreshScene(); refreshGroups() },
+                onRedo = { for (s in sel) sketch.assign(s, g); refreshScene() },
                 onUndo = {
                     for (i in sel.indices) sel[i].group = was[i]
-                    refreshScene(); refreshGroups()
+                    refreshScene()
                 },
             ),
         )
@@ -1342,12 +1342,12 @@ class MainActivity : Activity(), Gestures.Listener {
                 onRedo = {
                     sketch.restoreGroup(copy, at)
                     for (c in copies) if (sketch.indexOf(c) < 0) sketch.add(c)
-                    sketch.setActiveGroup(copy.id); refreshScene(); refreshGroups()
+                    sketch.setActiveGroup(copy.id); refreshScene()
                 },
                 onUndo = {
                     for (c in copies) sketch.remove(c)
                     sketch.deleteGroup(copy)
-                    sketch.setActiveGroup(previous); refreshScene(); refreshGroups()
+                    sketch.setActiveGroup(previous); refreshScene()
                 },
             ),
         )
@@ -1381,7 +1381,7 @@ class MainActivity : Activity(), Gestures.Listener {
                 onRedo = {
                     for (s in members) sketch.remove(s)
                     sketch.deleteGroup(g)
-                    sketch.setActiveGroup(null); refreshScene(); refreshGroups()
+                    sketch.setActiveGroup(null); refreshScene()
                 },
                 onUndo = {
                     /* at the row it was on, not at the bottom: the list is a
@@ -1391,7 +1391,7 @@ class MainActivity : Activity(), Gestures.Listener {
                     /* and each curve at the depth it was drawn at, since draw
                        order is what decides who is on top */
                     for (i in members.indices) sketch.addAt(atStroke[i], members[i])
-                    sketch.setActiveGroup(previous); refreshScene(); refreshGroups()
+                    sketch.setActiveGroup(previous); refreshScene()
                 },
             ),
         )
@@ -2796,7 +2796,19 @@ class MainActivity : Activity(), Gestures.Listener {
     private fun refreshScene() {
         pushFold()
         pushStrokes()
-        refreshControls()
+        /*
+         * THE PANEL COUNTS CURVES, SO IT HAS TO BE TOLD WHEN THERE ARE MORE.
+         *
+         * refreshGroups was called only by the group actions themselves — new,
+         * delete, rename, assign — so drawing a stroke, erasing one, or
+         * undoing either left the numbers on the rows at whatever they were
+         * the last time somebody touched the panel. Open the Curves tab after
+         * ten minutes of drawing and it still claimed the count from before.
+         *
+         * It also carries refreshControls, which is why that is no longer
+         * called separately here.
+         */
+        refreshGroups()
         scheduleAutosave()
         surface.requestRender()
     }
