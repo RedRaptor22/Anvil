@@ -62,8 +62,32 @@ cat > "$SD/gen/androidx/core/view/WindowInsetsCompat.java" <<'J'
 package androidx.core.view;
 import androidx.core.graphics.Insets;
 public final class WindowInsetsCompat {
-  public static final class Type { public static int systemBars() { return 0; } }
+  public static final class Type {
+    public static int systemBars() { return 0; }
+    public static int displayCutout() { return 0; }
+  }
   public Insets getInsets(int typeMask) { return null; }
+}
+J
+
+cat > "$SD/gen/androidx/core/view/WindowCompat.java" <<'J'
+package androidx.core.view;
+import android.view.Window;
+public final class WindowCompat {
+  public static void setDecorFitsSystemWindows(Window w, boolean fits) {}
+}
+J
+
+cat > "$SD/gen/androidx/core/view/WindowInsetsControllerCompat.java" <<'J'
+package androidx.core.view;
+import android.view.View;
+import android.view.Window;
+public final class WindowInsetsControllerCompat {
+  public static final int BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE = 2;
+  public WindowInsetsControllerCompat(Window w, View v) {}
+  public void hide(int types) {}
+  public void setSystemBarsBehavior(int b) {}
+  public int getSystemBarsBehavior() { return 0; }
 }
 J
 mkdir -p "$SD/gen/androidx/core/graphics"
@@ -102,6 +126,8 @@ java -cp "$CP:$STD:$ANN:$COR:$TRV" org.jetbrains.kotlin.cli.jvm.K2JVMCompiler \
   "$SD/gen/art/plume/anvil/R.java" \
   "$SD/gen/androidx/core/view/ViewCompat.java" \
   "$SD/gen/androidx/core/view/WindowInsetsCompat.java" \
+  "$SD/gen/androidx/core/view/WindowCompat.java" \
+  "$SD/gen/androidx/core/view/WindowInsetsControllerCompat.java" \
   "$SD/gen/androidx/core/graphics/Insets.java" 2>&1 \
   | grep -E '^app/.*error:' > "$SD/errors.txt" || true
 

@@ -18,6 +18,8 @@ import android.view.WindowManager
 import android.widget.FrameLayout
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import art.plume.core.Bounds
 import art.plume.core.Camera
 import art.plume.core.ColorSpace
@@ -307,8 +309,19 @@ class MainActivity : Activity(), Gestures.Listener {
          * stylesheet already uses for the compact dock.
          */
         ViewCompat.setOnApplyWindowInsetsListener(chrome.root) { v, insets ->
-            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-            v.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+            /*
+             * The CUTOUT, not the system bars. The bars are hidden, so padding
+             * the chrome by them held it a status bar's height clear of a top
+             * edge that nothing was occupying — the same empty strip the black
+             * band came from, kept even after the band was fixed.
+             *
+             * A cutout is the one thing immersive mode cannot hide, so it is
+             * the one thing the chrome still has to keep out of. This is
+             * `env(safe-area-inset-*)`, which the stylesheet already uses for
+             * the compact dock.
+             */
+            val safe = insets.getInsets(WindowInsetsCompat.Type.displayCutout())
+            v.setPadding(safe.left, safe.top, safe.right, safe.bottom)
             insets
         }
         setContentView(root)
@@ -368,14 +381,28 @@ class MainActivity : Activity(), Gestures.Listener {
         if (hasFocus) hideSystemBars()
     }
 
+    /**
+     * HIDING THE BARS IS NOT THE SAME AS TAKING THEIR SPACE.
+     *
+     * This asked for immersive mode and got it — and still left a black band
+     * across the top of the screen, because hiding a bar and LAYING OUT UNDER
+     * it are two different requests. The window was still sized to start below
+     * the status bar, so when the bar went away what was left was the gap it
+     * had been sitting in, painted with the window background.
+     *
+     * `setDecorFitsSystemWindows(false)` is the one that matters: it makes the
+     * window the whole display and hands the bar positions over as insets
+     * instead. The controller then hides the bars, and BY_SWIPE brings them
+     * back on an edge swipe and takes them away again by itself, which is what
+     * IMMERSIVE_STICKY meant.
+     */
     private fun hideSystemBars() {
-        @Suppress("DEPRECATION")
-        surface.systemUiVisibility = (
-            View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
-                View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
-                View.SYSTEM_UI_FLAG_FULLSCREEN or
-                View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-            )
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        WindowInsetsControllerCompat(window, surface).apply {
+            hide(WindowInsetsCompat.Type.systemBars())
+            systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
     }
 
     /**
@@ -1429,8 +1456,11 @@ class MainActivity : Activity(), Gestures.Listener {
         chrome.setSelection(sketch.selection.size)
         chrome.setGuideSelected(transformGuide != null)
         pushTransform()
+        /* the count is of what you can SEE. Hiding a group and watching the
+           number stay put says the hide did not work — which is exactly the
+           impression the renderer used to give as well. */
         chrome.setViewInfo(
-            camera.focal.toInt(), !camera.ortho, sketch.strokes.size, camera.pinned,
+            camera.focal.toInt(), !camera.ortho, sketch.editable().size, camera.pinned,
         )
     }
 

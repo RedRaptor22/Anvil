@@ -6,5 +6,9 @@
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowLightStatusBar">false</item>
+        <!-- the light theme's note applies here too, and this file redeclares
+             the style in full rather than inheriting it, so leaving it out
+             would letterbox the app in dark mode only -->
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
     </style>
 </resources>
