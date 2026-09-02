@@ -90,11 +90,11 @@ tool, and the same sketch measures identically in both builds.
 - [ ] Vacuum — `vacuumAt`
 - [ ] Smooth — `stepSmooth` + reprojection
 - [ ] Liquify: push, pinch, comb — `liquifyApply`
-- [ ] Select: tap, sweep, long-press — `tapSelect`, `sweepSelect`
+- [~] Select: long-press picks a curve — `Picking.kt`; sweep and lasso still to do
 - [ ] Lasso, with a visible boundary — `stepLasso`
 - [ ] Transform — needs a touch gizmo, not the desktop joystick
 - [ ] Duplicate, mirrored duplicate — `duplicateSelection`
-- [ ] Groups: create, delete, rename, hide, assign
+- [x] Groups: create, delete, rename, hide, assign — `Sketch.kt`, `GroupsPanel.kt`
 - [ ] Restyle a selection from the brush panel — `S.restyle`
 - [ ] Fill a whole guide — `fillGuide`
 - [ ] Shape snapping: line, curve, circle; hold-to-adjust; press-hold circle

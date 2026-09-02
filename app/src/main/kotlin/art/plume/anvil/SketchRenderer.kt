@@ -35,6 +35,26 @@ class SketchRenderer : GLSurfaceView.Renderer {
     private val uploaded = HashMap<Stroke, Buffers>()
     private var live: Stroke? = null
 
+    /*
+     * What the model says to show, copied across under the same lock as the
+     * stroke list. Two reasons it is a copy rather than a reference to the
+     * Sketch: the GL thread must not read a model the UI thread is editing,
+     * and a hidden stroke stays UPLOADED — a visibility toggle is a per-frame
+     * decision, not a reason to churn four VBOs per stroke every time an eye
+     * is pressed.
+     */
+    private val hidden = HashSet<Stroke>()
+    private val selected = HashSet<Stroke>()
+
+    /*
+     * Buffers whose stroke has gone, waiting for a thread that can delete them.
+     * glDeleteBuffers needs the GL context current, and every caller of
+     * release() — invalidate, clear, setStrokes — runs on the UI thread, where
+     * there is none. The calls were silently doing nothing and leaking the
+     * names; now the ids queue here and the next frame drains them.
+     */
+    private val pendingDelete = ArrayList<Int>()
+
     /** Camera, in the same terms as the web build's `P.VIEW`. */
     var theta = 0.6f
     var phi = 1.1f
@@ -47,6 +67,7 @@ class SketchRenderer : GLSurfaceView.Renderer {
     private var uMvp = 0; private var uModel = 0
     private var uLightDir = 0; private var uLightCol = 0
     private var uAmbient = 0; private var uIntensity = 0
+    private var uSelect = 0
 
     private val model = FloatArray(16)
     private val view = FloatArray(16)
@@ -77,9 +98,11 @@ class SketchRenderer : GLSurfaceView.Renderer {
         uLightCol = GLES30.glGetUniformLocation(program, "uLightCol")
         uAmbient = GLES30.glGetUniformLocation(program, "uAmbient")
         uIntensity = GLES30.glGetUniformLocation(program, "uIntensity")
+        uSelect = GLES30.glGetUniformLocation(program, "uSelect")
 
-        // anything already drawn has to be re-uploaded onto the new context
-        uploaded.clear()
+        // anything already drawn has to be re-uploaded onto the new context,
+        // and its old buffer names died with the old context
+        synchronized(strokes) { uploaded.clear(); pendingDelete.clear() }
     }
 
     override fun onSurfaceChanged(gl: GL10?, w: Int, h: Int) {
@@ -89,6 +112,7 @@ class SketchRenderer : GLSurfaceView.Renderer {
 
     override fun onDrawFrame(gl: GL10?) {
         GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT or GLES30.GL_DEPTH_BUFFER_BIT)
+        drainDeletes()
         buildCamera()
 
         GLES30.glUseProgram(program)
@@ -102,8 +126,12 @@ class SketchRenderer : GLSurfaceView.Renderer {
         GLES30.glUniform1f(uIntensity, 1.0f)
 
         synchronized(strokes) {
-            for (s in strokes) draw(s)
-            live?.let { draw(it) }
+            for (s in strokes) {
+                if (s in hidden) continue
+                GLES30.glUniform1f(uSelect, if (s in selected) 1f else 0f)
+                draw(s)
+            }
+            live?.let { GLES30.glUniform1f(uSelect, 0f); draw(it) }
         }
     }
 
@@ -125,19 +153,50 @@ class SketchRenderer : GLSurfaceView.Renderer {
     // ---- geometry in and out -------------------------------------------
 
     fun addStroke(s: Stroke) = synchronized(strokes) { strokes.add(s); invalidate(s) }
+
+    /**
+     * Tell the renderer what the model currently hides and selects.
+     *
+     * This is the whole of the visibility path. There is no second copy of the
+     * flag anywhere else to fall out of step with it: [Sketch] owns the answer,
+     * this hands over today's, and the next frame draws it.
+     */
+    fun setDisplay(hiddenNow: Collection<Stroke>, selectedNow: Collection<Stroke>) =
+        synchronized(strokes) {
+            hidden.clear(); hidden.addAll(hiddenNow)
+            selected.clear(); selected.addAll(selectedNow)
+        }
+
+    /** Replace the drawn set wholesale, keeping nothing uploaded that has gone. */
+    fun setStrokes(all: List<Stroke>) = synchronized(strokes) {
+        for (s in strokes) if (s !in all) release(s)
+        strokes.clear(); strokes.addAll(all)
+    }
     fun setLive(s: Stroke?) = synchronized(strokes) { live?.let { release(it) }; live = s }
     fun clear() = synchronized(strokes) {
         for (s in strokes) release(s)
         strokes.clear(); live?.let { release(it) }; live = null
+        hidden.clear(); selected.clear()
     }
 
     /** Drop the cached buffers so the next frame re-uploads. */
     fun invalidate(s: Stroke) { release(s) }
 
-    private fun release(s: Stroke) {
+    private fun release(s: Stroke) = synchronized(strokes) {
         uploaded.remove(s)?.let {
-            GLES30.glDeleteBuffers(4, intArrayOf(it.vbo, it.nbo, it.cbo, it.ibo), 0)
+            pendingDelete.add(it.vbo); pendingDelete.add(it.nbo)
+            pendingDelete.add(it.cbo); pendingDelete.add(it.ibo)
         }
+        Unit
+    }
+
+    /** GL thread only. */
+    private fun drainDeletes() {
+        val ids = synchronized(strokes) {
+            if (pendingDelete.isEmpty()) return
+            pendingDelete.toIntArray().also { pendingDelete.clear() }
+        }
+        GLES30.glDeleteBuffers(ids.size, ids, 0)
     }
 
     private fun upload(s: Stroke): Buffers? {
@@ -256,12 +315,17 @@ class SketchRenderer : GLSurfaceView.Renderer {
             uniform vec3 uLightCol;
             uniform float uAmbient;
             uniform float uIntensity;
+            uniform float uSelect;
             out vec4 fragColor;
             void main(){
               vec3 n = normalize(vNor);
               float d = dot(n, normalize(uLightDir)) * 0.5 + 0.5;
               float lit = uAmbient + (1.0 - uAmbient) * d * uIntensity;
-              fragColor = vec4(vCol.rgb * uLightCol * lit, vCol.a);
+              vec3 c = vCol.rgb * uLightCol * lit;
+              /* Selection is a tint, not a replacement: a solid highlight
+                 colour hides which curve you picked out of several. */
+              c = mix(c, vec3(0.35, 0.78, 0.60), uSelect * 0.55);
+              fragColor = vec4(c, vCol.a);
             }"""
     }
 }

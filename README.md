@@ -27,7 +27,7 @@ someone's phone drawing differently.
 |---|---|---|
 | language | ES5 JavaScript | Kotlin |
 | renderer | Three.js r128 (WebGL) | OpenGL ES 3.0, direct |
-| tests | 584 in-browser checks | 19 JVM unit tests |
+| tests | 584 in-browser checks | 47 JVM unit tests |
 | ships as | a URL | an APK |
 
 ## Modules
@@ -69,7 +69,7 @@ echo "sdk.dir=/path/to/Android/sdk" > local.properties
 
 ## What actually works
 
-Verified by `./gradlew :core:test` — 19 tests, all passing:
+Verified by `./gradlew :core:test` — 47 tests, all passing:
 
 - **Rotation-minimising frames** by double reflection (Wang et al. 2008), the
   same algorithm as the web build. Orthonormal along a helix to 1e-9, finite and
@@ -85,12 +85,24 @@ Verified by `./gradlew :core:test` — 19 tests, all passing:
 - **Reprojection**, which puts a stroke shoved off a surface back onto it.
 - **Spur removal**, which drops a folded sample before it can reverse a tangent,
   while keeping a deliberate sharp corner.
+- **Groups** — create, rename, hide, assign, duplicate, delete, with undo over
+  all of it. Visibility is derived from one flag rather than mirrored into a
+  scene graph, and a group is all-or-nothing: selecting, grouping or ungrouping
+  part of one widens to the whole of it. Several of these tests are written
+  against faults the web build shipped, so the port starts from the fixed
+  behaviour instead of rediscovering them on a phone.
+- **Picking**, a ray against a stroke's centreline and radius — including the
+  parallel case a stroke drawn straight at the camera produces, and the chisel
+  brushes that are 25x wider than they are thick. Hidden strokes are not
+  candidates, so a hidden group cannot swallow a tap.
 
 **Compiles, but has never been run:**
 
 - the GL ES 3.0 renderer (`app/SketchRenderer.kt`)
-- the gesture layer (`app/Gestures.kt`)
+- the gesture layer (`app/Gestures.kt`), long-press selection included
 - the activity shell (`app/MainActivity.kt`)
+- the groups sheet (`app/GroupsPanel.kt`) — the eye, and the Group / Ungroup /
+  Delete / Undo actions
 
 CI builds a debug APK on every push, so these are known to compile against the
 real SDK. Nothing has run them on a device or an emulator — no frame has ever

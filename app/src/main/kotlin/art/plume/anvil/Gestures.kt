@@ -31,6 +31,19 @@ class Gestures(private val listener: Listener) {
         fun onCamera(dx: Float, dy: Float, dScale: Float, dRotate: Float)
         fun onHover(x: Float, y: Float, pressure: Float)
         fun onHoverExit()
+
+        /**
+         * Held still on one pointer for [LONG_PRESS_MS].
+         *
+         * Selection hangs off a long press rather than a tap because a tap is
+         * already a stroke — a one-point one that gets thrown away, but the
+         * pen is committed to drawing from the moment it lands. A hold is the
+         * only single-pointer gesture left that does not fight the pen.
+         *
+         * The stroke in progress is cancelled first, so a hold never leaves a
+         * dot behind where the user was pointing.
+         */
+        fun onLongPress(x: Float, y: Float)
     }
 
     /** Finger drawing can be switched off, as on the desktop build. */
@@ -38,6 +51,12 @@ class Gestures(private val listener: Listener) {
 
     private var drawingPointer = -1
     private var gesturing = false
+
+    /** Long press: where the pointer landed, when, and whether it has fired. */
+    private var pressX = 0f
+    private var pressY = 0f
+    private var pressAt = 0L
+    private var pressLive = false
 
     private var lastCx = 0f
     private var lastCy = 0f
@@ -79,6 +98,7 @@ class Gestures(private val listener: Listener) {
                 val i = 0
                 if (isStylus(ev, i) || fingerDraws) {
                     drawingPointer = ev.getPointerId(i)
+                    beginPress(ev.getX(i), ev.getY(i), ev.eventTime)
                     listener.onDrawBegin(
                         ev.getX(i), ev.getY(i), pressureOf(ev, i),
                         tiltAz(ev, i).toFloat(), tiltAlt(ev, i)
@@ -97,11 +117,13 @@ class Gestures(private val listener: Listener) {
                     isStylus(ev, ev.findPointerIndex(drawingPointer).coerceAtLeast(0))
                 if (penDrawing) return true
 
+                pressLive = false            // a second pointer is never a hold
                 if (isStylus(ev, newIndex)) {
                     // the pen arrived after a finger: hand the stroke to the pen
                     if (drawingPointer >= 0) listener.onDrawCancel()
                     endGesture()
                     drawingPointer = ev.getPointerId(newIndex)
+                    beginPress(ev.getX(newIndex), ev.getY(newIndex), ev.eventTime)
                     listener.onDrawBegin(
                         ev.getX(newIndex), ev.getY(newIndex), pressureOf(ev, newIndex),
                         tiltAz(ev, newIndex).toFloat(), tiltAlt(ev, newIndex)
@@ -119,6 +141,13 @@ class Gestures(private val listener: Listener) {
             MotionEvent.ACTION_MOVE -> {
                 if (drawingPointer >= 0) {
                     val i = ev.findPointerIndex(drawingPointer)
+                    if (i >= 0 && stepPress(ev.getX(i), ev.getY(i), ev.eventTime)) {
+                        // the hold fired: the stroke becomes a selection instead
+                        listener.onDrawCancel()
+                        drawingPointer = -1
+                        listener.onLongPress(pressX, pressY)
+                        return true
+                    }
                     if (i >= 0) {
                         // every batched sample, not just the latest: at 240Hz the
                         // pen reports far faster than the display refreshes, and
@@ -148,15 +177,47 @@ class Gestures(private val listener: Listener) {
             }
 
             MotionEvent.ACTION_UP -> {
-                if (drawingPointer >= 0) { listener.onDrawEnd(); drawingPointer = -1 }
+                /* A hold that never moved gets no further ACTION_MOVE to fire
+                   it, so the release has to check the clock as well — holding
+                   perfectly still is the ONE case the move path cannot see. */
+                if (drawingPointer >= 0 && stepPress(pressX, pressY, ev.eventTime)) {
+                    listener.onDrawCancel()
+                    drawingPointer = -1
+                    listener.onLongPress(pressX, pressY)
+                } else if (drawingPointer >= 0) {
+                    listener.onDrawEnd(); drawingPointer = -1
+                }
+                pressLive = false
                 endGesture()
             }
 
             MotionEvent.ACTION_CANCEL -> {
                 if (drawingPointer >= 0) { listener.onDrawCancel(); drawingPointer = -1 }
+                pressLive = false
                 endGesture()
             }
         }
+        return true
+    }
+
+    // ---- long press -----------------------------------------------------
+
+    private fun beginPress(x: Float, y: Float, at: Long) {
+        pressX = x; pressY = y; pressAt = at; pressLive = true
+    }
+
+    /**
+     * True exactly once, on the event that takes the hold over the line.
+     *
+     * Moving past [LONG_PRESS_SLOP_PX] cancels it — that is a stroke, not a
+     * hold — and it stays cancelled for the rest of the pointer's life so a
+     * long drag that happens to pause cannot turn into a selection.
+     */
+    private fun stepPress(x: Float, y: Float, at: Long): Boolean {
+        if (!pressLive) return false
+        if (hypot(x - pressX, y - pressY) > LONG_PRESS_SLOP_PX) { pressLive = false; return false }
+        if (at - pressAt < LONG_PRESS_MS) return false
+        pressLive = false
         return true
     }
 
@@ -201,4 +262,11 @@ class Gestures(private val listener: Listener) {
     private operator fun Measure.component2() = cy
     private operator fun Measure.component3() = span
     private operator fun Measure.component4() = angle
+
+    companion object {
+        /** Android's own long-press default; a sketch should not feel different. */
+        const val LONG_PRESS_MS = 500L
+        /** Generous: a hand resting on glass drifts, and this must not need a vice. */
+        const val LONG_PRESS_SLOP_PX = 24f
+    }
 }

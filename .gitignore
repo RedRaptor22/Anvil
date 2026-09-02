@@ -4,3 +4,6 @@ local.properties
 *.iml
 .idea/
 .DS_Store
+
+# Kotlin compiler scratch output
+.kotlin/
