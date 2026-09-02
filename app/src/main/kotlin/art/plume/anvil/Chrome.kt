@@ -199,6 +199,9 @@ class Chrome(private val act: Activity, val t: Tokens) {
     private var guideActive = false
     private var guideOpacity = 0.42
     private var selectionCount = 0
+
+    /** A guide is held by the joystick, which is a target the count cannot see. */
+    private var guideSelected = false
     private var compact = false
 
     /** What the staging bar is showing, if anything. */
@@ -1227,7 +1230,11 @@ class Chrome(private val act: Activity, val t: Tokens) {
         /* the gizmo needs something to transform, and liquify owns the
            selection while it is running */
         joyPanel.visibility =
-            if (selectionCount > 0 && tool != Tool.LIQUIFY) View.VISIBLE else View.GONE
+            if ((selectionCount > 0 || guideSelected) && tool != Tool.LIQUIFY) {
+                View.VISIBLE
+            } else {
+                View.GONE
+            }
         liquifyPanel.visibility = View.GONE
     }
 
@@ -2490,6 +2497,21 @@ class Chrome(private val act: Activity, val t: Tokens) {
         for (p in popovers) p.visibility = View.GONE
     }
 
+    /**
+     * Put away any open popover, and say whether there was one.
+     *
+     * [closePopovers] on its own does not refresh, so the button that opened
+     * the card would go on looking lit after the card had gone. Callers
+     * outside the chrome want the refresh; the guard keeps a touch on an empty
+     * canvas from rebuilding every control for nothing.
+     */
+    fun dismissPopovers(): Boolean {
+        if (popovers.none { it.visibility == View.VISIBLE }) return false
+        closePopovers()
+        refresh()
+        return true
+    }
+
     fun setMenu(open: Boolean) {
         sysMenu.visibility = if (open) View.VISIBLE else View.GONE
         scrim.visibility = if (open) View.VISIBLE else View.GONE
@@ -2565,6 +2587,15 @@ class Chrome(private val act: Activity, val t: Tokens) {
     }
 
     fun setSelection(count: Int) { selectionCount = count; refresh() }
+
+    /**
+     * A guide picked by holding on it with Select is a joystick target too.
+     *
+     * The panel was shown on `selectionCount > 0` alone, so picking a guide
+     * put up a toast saying "use the joystick" and no joystick — the one
+     * control the whole gesture exists to reach.
+     */
+    fun setGuideSelected(on: Boolean) { guideSelected = on; refresh() }
 
     /**
      * What the staging bar shows while Loft or Primitives is building a guide.
@@ -2724,7 +2755,11 @@ class Chrome(private val act: Activity, val t: Tokens) {
         /* the gizmo needs something to transform, and liquify owns the
            selection while it is running */
         joyPanel.visibility =
-            if (selectionCount > 0 && tool != Tool.LIQUIFY) View.VISIBLE else View.GONE
+            if ((selectionCount > 0 || guideSelected) && tool != Tool.LIQUIFY) {
+                View.VISIBLE
+            } else {
+                View.GONE
+            }
         liquifyPanel.visibility =
             if (tool == Tool.LIQUIFY && selectionCount > 0) View.VISIBLE else View.GONE
         for ((k, b) in lqModes) b.on = k == lqMode

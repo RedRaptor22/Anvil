@@ -225,6 +225,10 @@ class MainActivity : Activity(), Gestures.Listener {
     /** A press-hold picked a guide, so the release is not also a tap select. */
     private var holdConsumedTap = false
 
+    /** Where the press landed, so a tap can be told from a drag by distance. */
+    private var dragStartX = 0f
+    private var dragStartY = 0f
+
     /** Everything one joystick drag did to a guide, for a single undo step. */
     private var guideAccum: Mat4? = null
 
@@ -236,7 +240,19 @@ class MainActivity : Activity(), Gestures.Listener {
         gestures = Gestures(this)
 
         surface = object : GLSurfaceView(this) {
-            override fun onTouchEvent(ev: MotionEvent): Boolean = gestures.onTouchEvent(ev)
+            override fun onTouchEvent(ev: MotionEvent): Boolean {
+                /*
+                 * TOUCHING THE SKETCH PUTS THE CARDS AWAY.
+                 *
+                 * The web build closes every popover on any pointerdown
+                 * outside one. Nothing here did, so the colour card, the brush
+                 * grid and the size popover stayed up over the drawing until
+                 * you found the button that opened them again — and on a phone
+                 * they cover most of the canvas you are trying to draw on.
+                 */
+                if (ev.actionMasked == MotionEvent.ACTION_DOWN) chrome.dismissPopovers()
+                return gestures.onTouchEvent(ev)
+            }
             override fun onHoverEvent(ev: MotionEvent): Boolean = gestures.onHoverEvent(ev)
 
             /*
@@ -1411,6 +1427,7 @@ class MainActivity : Activity(), Gestures.Listener {
         val g = guides.active
         chrome.setGuide(g != null, g?.name ?: "", g?.opacity ?: 0.42)
         chrome.setSelection(sketch.selection.size)
+        chrome.setGuideSelected(transformGuide != null)
         pushTransform()
         chrome.setViewInfo(
             camera.focal.toInt(), !camera.ortho, sketch.strokes.size, camera.pinned,
@@ -1450,6 +1467,7 @@ class MainActivity : Activity(), Gestures.Listener {
         }
         camera.killSpin()
         dragMoved = false
+        dragStartX = x; dragStartY = y
         lastPen = Px(x.toDouble(), y.toDouble())
 
         /*
@@ -1545,7 +1563,17 @@ class MainActivity : Activity(), Gestures.Listener {
     }
 
     override fun onDrawMove(x: Float, y: Float, pressure: Float, tiltAz: Float, tiltAlt: Float) {
-        dragMoved = true
+        /*
+         * A TAP IS A PRESS THAT DID NOT TRAVEL, not one that reported no moves.
+         *
+         * This was set on the FIRST move event, unconditionally — and a pen or
+         * a finger always reports a move or two before it lifts, so every tap
+         * was classified as a sweep. Select's tap path therefore never ran:
+         * tapping a curve did not select it and tapping empty space did not
+         * deselect, because a sweep that crosses nothing simply changes
+         * nothing. The same slop the gesture layer uses for a tap.
+         */
+        if (kotlin.math.hypot(x - dragStartX, y - dragStartY) > Gestures.TAP_SLOP) dragMoved = true
         when (tool) {
             Tool.DRAW, Tool.SHAPE, Tool.GUIDE, Tool.FLATGUIDE, Tool.BEND ->
                 moveStroke(x, y, pressure)

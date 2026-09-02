@@ -549,7 +549,7 @@ class Gestures(private val listener: Listener) {
         return Measure(cx, cy, hypot(bx - ax, by - ay), atan2(by - ay, bx - ax), n)
     }
 
-    private companion object {
+    companion object {
         /** All four are the web build's, in the same units. */
         const val HOLD_MS = 480L
         const val HOLD_SLOP = 12f
