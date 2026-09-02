@@ -398,6 +398,36 @@ class GroupTest {
     }
 
     @Test
+    fun `a group can be opened and undone without taking the work in it`() {
+        /* What importing a reference needs. The import opens a group named
+           after the file so the tracing has somewhere to live, and undoing the
+           IMPORT must not delete the tracing — those are two different
+           actions, and only one of them was asked for. */
+        val f = Fixture()
+        val g = f.sketch.newGroup("model.obj")
+        val at = f.sketch.indexOfGroup(g)
+        val previous = f.sketch.activeGroup
+        f.sketch.setActiveGroup(g.id)
+
+        // some tracing goes in
+        val traced = strokeAt(9.0).also { it.group = g.id; f.sketch.add(it) }
+        assertEquals(1, f.sketch.membersOf(g.id).size)
+
+        // undo of the import: the group goes, the curves stay
+        for (st in f.sketch.membersOf(g.id)) st.group = previous
+        f.sketch.deleteGroup(g)
+        f.sketch.setActiveGroup(previous)
+
+        assertEquals(2, f.sketch.groups.size, "the imported group stayed")
+        assertTrue(f.sketch.strokes.contains(traced), "undoing an import ate the tracing")
+        assertTrue(f.sketch.visible(traced), "the tracing came back invisible")
+
+        // and a redo puts the same group back on the row it had
+        f.sketch.restoreGroup(g, at)
+        assertEquals("model.obj", f.sketch.groups[at].name)
+    }
+
+    @Test
     fun `removing a curve takes it out of the selection too`() {
         val f = Fixture()
         f.sketch.selectOnly(f.inA)

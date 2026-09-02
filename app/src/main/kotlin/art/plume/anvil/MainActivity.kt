@@ -1297,16 +1297,45 @@ class MainActivity : Activity(), Gestures.Listener {
                 if (surface == null) { toast(getString(R.string.import_failed)); return@post }
                 val g = Import.asGuide(surface, name)
                 val previous = guides.active
+
+                /*
+                 * A REFERENCE ARRIVES WITH SOMEWHERE TO DRAW ON IT.
+                 *
+                 * You import a picture or a model to draw OVER it, and the
+                 * curves that come out of that belong together — they are a
+                 * tracing of this thing, not part of whatever you were working
+                 * on before. So the import opens a group named after the file
+                 * and makes it active, and the next stroke lands there.
+                 *
+                 * In the SAME history step as the guide, because they are one
+                 * action: an undo that took the reference away and left an
+                 * empty group named after it would be an undo that half
+                 * happened.
+                 */
+                val group = sketch.newGroup(name)
+                val groupAt = sketch.indexOfGroup(group)
+                val previousGroup = sketch.activeGroup
+
                 history.run(
                     Step(
                         "Import reference",
                         onRedo = {
                             guides.save(g); guides.setActive(g)
-                            pushGuides(); refreshResources()
+                            sketch.restoreGroup(group, groupAt)
+                            sketch.setActiveGroup(group.id)
+                            pushGuides(); refreshResources(); refreshScene()
                         },
                         onUndo = {
                             guides.remove(g); guides.setActive(previous)
-                            pushGuides(); refreshResources()
+                            /* the curves drawn into it are NOT taken: undoing
+                               an import undoes the import, and the tracing is
+                               work of its own. They come out of the group as
+                               the group goes, which is what deleting one does
+                               everywhere else. */
+                            for (st in sketch.membersOf(group.id)) st.group = previousGroup
+                            sketch.deleteGroup(group)
+                            sketch.setActiveGroup(previousGroup)
+                            pushGuides(); refreshResources(); refreshScene()
                         },
                     ),
                 )
