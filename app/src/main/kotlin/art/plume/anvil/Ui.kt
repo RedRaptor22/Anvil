@@ -7,6 +7,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Outline
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
@@ -20,6 +21,7 @@ import android.widget.GridLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
+import art.plume.core.StrokeGeometry
 import art.plume.core.ColorSpace
 import art.plume.core.Rgba
 import art.plume.core.Transform
@@ -440,10 +442,28 @@ object Tip {
          * the one pointer on Android that reports hover, which is why this is
          * worth wiring at all.
          */
+        /*
+         * ENTER AND MOVE BOTH SHOW IT, AND THE HIDE IS DEFERRED.
+         *
+         * A tip that blinked on and off while the pen sat still was two things
+         * at once. Android delivers HOVER_EXIT whenever the pointer crosses
+         * into a CHILD of the hovered view — an IcoButton's glyph is a child,
+         * so drifting a pixel over the icon exited the button and re-entered
+         * it, once per wobble. And only ENTER showed the card, so a pen that
+         * arrived mid-view (after a lift, or from a neighbouring button) got
+         * no tip at all until it left and came back.
+         *
+         * Showing on MOVE as well is idempotent — the card is already up — and
+         * covers the arrive-mid-view case. Deferring the hide by a couple of
+         * frames, and cancelling it on the next enter or move, swallows the
+         * exit/enter pair a child crossing produces while still hiding
+         * promptly when the pen really goes.
+         */
         view.setOnHoverListener { v, e ->
             when (e.actionMasked) {
-                MotionEvent.ACTION_HOVER_ENTER -> card.showFor(v, text)
-                MotionEvent.ACTION_HOVER_EXIT -> card.hide()
+                MotionEvent.ACTION_HOVER_ENTER, MotionEvent.ACTION_HOVER_MOVE ->
+                    card.showFor(v, text)
+                MotionEvent.ACTION_HOVER_EXIT -> card.hideSoon()
             }
             false
         }
@@ -468,7 +488,27 @@ class TipCard(ctx: Context, private val t: Tokens) : TextView(ctx) {
         visibility = GONE
     }
 
+    private var showingFor: View? = null
+
+    /**
+     * Hide, unless something asks for the card again first.
+     *
+     * The grace period is what swallows the exit/enter pair Android delivers
+     * when a hovering pointer crosses into a CHILD of the hovered view.
+     */
+    fun hideSoon() {
+        removeCallbacks(hideLater)
+        postDelayed(hideLater, EXIT_GRACE_MS)
+    }
+
     fun showFor(anchor: View, message: String) {
+        removeCallbacks(hideLater)
+        // already up for this control: re-laying it out is what made it jump
+        if (visibility == VISIBLE && showingFor === anchor && text == message) {
+            postDelayed(hideLater, LINGER_MS)
+            return
+        }
+        showingFor = anchor
         text = message
         visibility = VISIBLE
         val parent = this.parent as? ViewGroup ?: return
@@ -495,14 +535,23 @@ class TipCard(ctx: Context, private val t: Tokens) : TextView(ctx) {
         animate().cancel()
         animate().alpha(1f).setDuration(120).start()
         removeCallbacks(hideLater)
-        postDelayed(hideLater, 2600)
+        postDelayed(hideLater, LINGER_MS)
     }
 
     private val hideLater = Runnable { hide() }
 
     fun hide() {
         removeCallbacks(hideLater)
+        showingFor = null
         animate().alpha(0f).setDuration(120).withEndAction { visibility = GONE }.start()
+    }
+
+    private companion object {
+        /** Two frames or so — long enough to bridge a child crossing. */
+        const val EXIT_GRACE_MS = 90L
+
+        /** How long a tip stays up once it has been read. */
+        const val LINGER_MS = 2600L
     }
 }
 
@@ -1297,4 +1346,97 @@ class JoyStrip(
     }
 
     override fun performClick(): Boolean { super.performClick(); return true }
+}
+
+/**
+ * `#hoverCursor` — the nib, where the pen is about to put it.
+ *
+ * A stylus that hovers is asking a question: what will this leave, and how
+ * big. Answering it before the pen lands is worth more here than in a flat
+ * painting app, because a 3D sketch has no second chance to see the mark at
+ * the size you meant — you find out after it is on a guide, at whatever
+ * distance that guide happens to be.
+ *
+ * So the silhouette is the REAL section, not a circle standing in for one: the
+ * outline comes from [StrokeGeometry.sectionPoint] with the brush's own
+ * squareness, scaled by its own half-width and half-thickness, in the ink you
+ * are about to draw with. A blade shows as a blade. It is translucent because
+ * it is a promise rather than a mark.
+ */
+class HoverNib(ctx: Context, private val t: Tokens) : View(ctx) {
+
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val path = Path()
+
+    /** Where the pen is, in this view's pixels; null when it is not hovering. */
+    private var atX = 0f
+    private var atY = 0f
+
+    private var halfW = 0f
+    private var halfT = 0f
+    private var square = 0.0
+    private var ink = Color.BLACK
+
+    /**
+     * Show the nib at ([x], [y]) — [halfWidthPx] across, [halfThickPx] through,
+     * with the cross-section's [squareness] and the current [color].
+     */
+    fun showAt(
+        x: Float, y: Float,
+        halfWidthPx: Float, halfThickPx: Float, squareness: Double, color: Int,
+    ) {
+        atX = x; atY = y
+        /* a nib finer than this is a dot either way, and one bigger than the
+           screen is a wall of ink that says nothing about where it lands */
+        halfW = halfWidthPx.coerceIn(2f, width.coerceAtLeast(1) / 2f)
+        halfT = halfThickPx.coerceIn(1.5f, height.coerceAtLeast(1) / 2f)
+        square = squareness
+        ink = color
+        if (visibility != VISIBLE) visibility = VISIBLE
+        invalidate()
+    }
+
+    fun hideNib() {
+        if (visibility != GONE) { visibility = GONE; invalidate() }
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        if (visibility != VISIBLE) return
+
+        /* THE SECTION LIES FLAT ON THE GLASS. Which way the nib really points
+           is decided by the surface under it, and there is no surface under a
+           hovering pen — so the preview shows the section square to the screen,
+           which is its true size and shape without claiming an orientation it
+           cannot know yet. */
+        path.reset()
+        val steps = 48
+        for (i in 0 until steps) {
+            val a = i.toDouble() / steps * 2.0 * Math.PI
+            val (sx, sy) = StrokeGeometry.sectionPoint(a, square)
+            val px = atX + (sx * halfW).toFloat()
+            val py = atY + (sy * halfT).toFloat()
+            if (i == 0) path.moveTo(px, py) else path.lineTo(px, py)
+        }
+        path.close()
+
+        paint.style = Paint.Style.FILL
+        paint.color = ink
+        paint.alpha = 64                      // a promise, not a mark
+        canvas.drawPath(path, paint)
+
+        /* a rim at full-ish strength, so a pale ink on a pale page is still
+           findable — the fill alone vanishes on white */
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = t.dpf(1.25f)
+        paint.color = ink
+        paint.alpha = 150
+        canvas.drawPath(path, paint)
+
+        /* and a hairline of the page colour under it, which keeps the rim
+           readable over ink of its own shade */
+        paint.color = t.panel
+        paint.alpha = 90
+        paint.strokeWidth = t.dpf(2.5f)
+        canvas.drawPath(path, paint)
+    }
 }

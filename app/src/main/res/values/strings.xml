@@ -52,6 +52,8 @@
     <string name="guide_selected">Guide selected — use the joystick</string>
     <string name="guide_deselected">Guide released</string>
     <string name="pen_detected">Pen detected — one finger now orbits</string>
+    <string name="opt_hovernib">Nib preview</string>
+    <string name="favourites">SAVED</string>
     <string name="colour_ink">BRUSH COLOUR</string>
     <string name="colour_background">BACKGROUND</string>
     <string name="colour_light">LIGHT COLOUR</string>

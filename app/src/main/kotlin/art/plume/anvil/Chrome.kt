@@ -60,6 +60,7 @@ enum class ColorTarget { INK, BACKGROUND, LIGHT }
 /** The settings modal's switches — input behaviour and the view. */
 enum class InputToggle {
     FINGER, AUTO_GUIDE, ISOLATE, CLAMP, HOLD_SHAPE, STABLE, ORTHO, THEME, HIDE_UI, DIAG,
+    HOVER_NIB,
 }
 
 /** Everything a chrome button asks for that is not a change of tool. */
@@ -283,6 +284,19 @@ class Chrome(private val act: Activity, val t: Tokens) {
     private val scrim = View(act)
     private val toastCard = ToastCard(act, t)
     private val tipCard = TipCard(act, t)
+
+    /** The nib silhouette that follows a hovering stylus. */
+    private val hoverNib = HoverNib(act, t)
+
+    private var optHoverNib = true
+
+    private lateinit var favouriteRow: GridLayout
+
+    /** The colours you have kept, newest last. */
+    private val favourites = ArrayList<Int>()
+
+    /** The saved row changed, so somebody should write it down. */
+    var onFavourites: (List<Int>) -> Unit = {}
 
     private val toolButtons = HashMap<Tool, IcoButton>()
     private val brushTiles = HashMap<String, IcoButton>()
@@ -1930,8 +1944,109 @@ class Chrome(private val act: Activity, val t: Tokens) {
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
             ).apply { gravity = Gravity.CENTER_HORIZONTAL; topMargin = t.dp(8f) },
         )
+
+        /*
+         * FAVOURITES, under the fixed palette.
+         *
+         * The eight above are a starting set that never changes — they are
+         * there so a fresh sketch has ink without a decision. These are the
+         * ones YOU mixed, and the reason they need a home is that the wheel
+         * cannot get you back to a colour: it is a continuous surface, and a
+         * shade you found by eye an hour ago is not somewhere you can point
+         * again. Saving is the only way back.
+         */
+        colorCard.addView(
+            TextView(act).apply {
+                text = act.getString(R.string.favourites)
+                setTextColor(t.dim2)
+                textSize = 10f
+                letterSpacing = 0.08f
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { topMargin = t.dp(10f); bottomMargin = t.dp(4f) }
+            },
+        )
+        favouriteRow = GridLayout(act).apply { columnCount = FAVOURITE_SLOTS }
+        colorCard.addView(
+            favouriteRow,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { gravity = Gravity.CENTER_HORIZONTAL },
+        )
+        rebuildFavourites()
+
         colorCard.visibility = View.GONE
         popover(colorCard)
+    }
+
+    /**
+     * The saved row: every colour you have kept, then one empty slot to keep
+     * another in.
+     *
+     * Tap a swatch to use it, press and hold to forget it. The empty slot
+     * takes whatever the card is showing, which is the colour you have just
+     * finished mixing — that is the moment you want to keep it, and asking you
+     * to find a menu first is asking you to lose it.
+     */
+    private fun rebuildFavourites() {
+        favouriteRow.removeAllViews()
+
+        fun slot(build: View.() -> Unit) = View(act).apply {
+            layoutParams = GridLayout.LayoutParams().apply {
+                width = t.dp(19f); height = t.dp(19f)
+                setMargins(t.dp(3f), t.dp(3f), t.dp(3f), t.dp(3f))
+            }
+            build()
+        }
+
+        for (c in favourites) {
+            favouriteRow.addView(
+                slot {
+                    background = GradientDrawable().apply {
+                        shape = GradientDrawable.OVAL
+                        setColor(c)
+                        setStroke(t.dp(1f), t.line)
+                    }
+                    setOnClickListener { applyCardColor(c) }
+                    setOnLongClickListener {
+                        favourites.remove(c)
+                        onFavourites(favourites.toList())
+                        rebuildFavourites()
+                        true
+                    }
+                },
+            )
+        }
+
+        if (favourites.size < FAVOURITE_SLOTS) {
+            favouriteRow.addView(
+                slot {
+                    /* a dashed ring rather than a filled dot: an empty slot has
+                       to read as somewhere to PUT something */
+                    background = GradientDrawable().apply {
+                        shape = GradientDrawable.OVAL
+                        setColor(0x00000000)
+                        setStroke(t.dp(1.5f), t.dim2, t.dpf(3f), t.dpf(3f))
+                    }
+                    setOnClickListener {
+                        val c = cardColor()
+                        if (favourites.contains(c)) return@setOnClickListener
+                        favourites.add(c)
+                        onFavourites(favourites.toList())
+                        rebuildFavourites()
+                    }
+                },
+            )
+        }
+    }
+
+    /** Load the saved row, which the activity keeps between runs. */
+    fun setFavourites(list: List<Int>) {
+        favourites.clear()
+        favourites.addAll(list.take(FAVOURITE_SLOTS))
+        if (::favouriteRow.isInitialized) rebuildFavourites()
     }
 
     /** The colour the card is showing, which is whatever it is pointed at. */
@@ -2035,6 +2150,9 @@ class Chrome(private val act: Activity, val t: Tokens) {
             .option("hideui", act.getString(R.string.opt_hideui)) { onInput(InputToggle.HIDE_UI) }
             .option("walk", act.getString(R.string.opt_guide)) { onAction(Action.HELP) }
             .option("diag", act.getString(R.string.opt_diag)) { onInput(InputToggle.DIAG) }
+            .option("hovernib", act.getString(R.string.opt_hovernib)) {
+                onInput(InputToggle.HOVER_NIB)
+            }
         body.addView(viewGrid, matchWrap(t.dp(4f)))
 
         val views = OptionGrid(act, t, 6)
@@ -2192,6 +2310,17 @@ class Chrome(private val act: Activity, val t: Tokens) {
         /* z order is child order in a FrameLayout, so this list IS the
            stylesheet's z-index ladder: 5 chrome · 6 tabs · 25 dock · 26/28
            popovers and docked cards · 29/30 modal · 31 slide · 50 toast */
+        /* FIRST, so it sits UNDER every control: the preview belongs on the
+           drawing, and one that wandered over a button would be a button you
+           could not read. */
+        root.addView(
+            hoverNib,
+            lp(
+                Gravity.CENTER,
+                width = ViewGroup.LayoutParams.MATCH_PARENT,
+                height = ViewGroup.LayoutParams.MATCH_PARENT,
+            ),
+        )
         root.addView(ctxBar, lp(Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL, bottom = t.px(R.dimen.ctxBottom)))
         root.addView(toolPill, lp(Gravity.TOP or Gravity.END, top = e, right = e))
         root.addView(topLeft, lp(Gravity.TOP or Gravity.START, top = e, left = e))
@@ -2508,6 +2637,20 @@ class Chrome(private val act: Activity, val t: Tokens) {
         refresh()
     }
 
+    /**
+     * Show the nib silhouette under a hovering stylus, or hide it.
+     *
+     * The chrome does not know what a brush is, so the activity hands over the
+     * measured shape: how wide and how thick the section is IN PIXELS at the
+     * distance the pen is pointing, how square it is, and the ink.
+     */
+    fun setHoverNib(
+        x: Float, y: Float,
+        halfWidthPx: Float, halfThickPx: Float, squareness: Double, color: Int,
+    ) = hoverNib.showAt(x, y, halfWidthPx, halfThickPx, squareness, color)
+
+    fun hideHoverNib() = hoverNib.hideNib()
+
     fun closePopovers() {
         for (p in popovers) p.visibility = View.GONE
     }
@@ -2636,7 +2779,9 @@ class Chrome(private val act: Activity, val t: Tokens) {
         finger: Boolean, autoGuide: Boolean, isolate: Boolean, clamp: Boolean,
         holdShape: Boolean, stableOn: Boolean, stable: Double, radial: Int,
         focal: Double, ortho: Boolean, hideUi: Boolean, diag: Boolean, save: String,
+        hoverNib: Boolean = true,
     ) {
+        optHoverNib = hoverNib
         optDiag = diag
         optFinger = finger; optAutoGuide = autoGuide; optIsolate = isolate
         optClamp = clamp; optHoldShape = holdShape; optStable = stableOn
@@ -2826,6 +2971,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
         viewGrid.setOn("proj", optOrtho)
         viewGrid.setOn("hideui", optHideUi)
         viewGrid.setOn("diag", optDiag)
+        viewGrid.setOn("hovernib", optHoverNib)
         stableBar.value = stableAmt
         stableValue.text = (stableAmt * 100).toInt().toString()
         radialBar.value = radialAmt.toDouble()
@@ -2923,6 +3069,13 @@ class Chrome(private val act: Activity, val t: Tokens) {
             Tool.LIQUIFY to R.string.tip_liquify,
             Tool.INJECT to R.string.tip_inject,
         )
+
+        /**
+         * How many colours the saved row holds — one screen's width of them at
+         * the same 19dp as the fixed palette above it, so the two rows line up
+         * and the card does not grow.
+         */
+        const val FAVOURITE_SLOTS = 8
 
         /** The rail's swatches. Index 0 is the default near-black ink. */
         val PALETTE = intArrayOf(

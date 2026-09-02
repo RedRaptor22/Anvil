@@ -54,6 +54,7 @@ import art.plume.core.Sketch
 import art.plume.core.Stabilizer
 import art.plume.core.Step
 import art.plume.core.Stroke
+import art.plume.core.StrokeGeometry
 import art.plume.core.Symmetry
 import art.plume.core.StrokePoint
 import art.plume.core.StyleChange
@@ -224,6 +225,14 @@ class MainActivity : Activity(), Gestures.Listener {
     private var lastPen = Px(0.0, 0.0)
     private var dragMoved = false
 
+    /**
+     * Whether the hovering pen shows the nib it is about to lay down.
+     *
+     * On by default and switchable, because a preview under the pen is exactly
+     * what some people do not want under the pen.
+     */
+    private var hoverNibOn = true
+
     /** A press-hold picked a guide, so the release is not also a tap select. */
     private var holdConsumedTap = false
 
@@ -326,6 +335,12 @@ class MainActivity : Activity(), Gestures.Listener {
         }
         setContentView(root)
 
+        chrome.setFavourites(
+            getPreferences(MODE_PRIVATE).getString(PREF_FAVOURITES, "")
+                .orEmpty()
+                .split(",")
+                .mapNotNull { it.trim().toIntOrNull() },
+        )
         history.addListener { refreshControls() }
         restoreAutosave()
         refreshGroups()
@@ -444,6 +459,10 @@ class MainActivity : Activity(), Gestures.Listener {
             chrome.closePopovers()
             setTool(Tool.EYEDROP)
             toast(getString(R.string.eyedrop_hint))
+        }
+        chrome.onFavourites = { list ->
+            getPreferences(MODE_PRIVATE).edit()
+                .putString(PREF_FAVOURITES, list.joinToString(",")).apply()
         }
         chrome.onGroupPick = { id -> sketch.setActiveGroup(id); refreshGroups() }
         chrome.onGroupRename = { id, name ->
@@ -1000,6 +1019,10 @@ class MainActivity : Activity(), Gestures.Listener {
                 scheduleAutosave()
             }
             InputToggle.DIAG -> { diagOn = !diagOn; pushDiag() }
+            InputToggle.HOVER_NIB -> {
+                hoverNibOn = !hoverNibOn
+                if (!hoverNibOn) chrome.hideHoverNib()
+            }
             InputToggle.HIDE_UI -> {
                 hideUi = !hideUi
                 chrome.root.visibility = if (hideUi) View.GONE else View.VISIBLE
@@ -1022,6 +1045,7 @@ class MainActivity : Activity(), Gestures.Listener {
             gestures.fingerDraws, autoGuide, isolate, clampOff, shapeHoldOn,
             stableOn, stableAmount, radial, camera.focal, camera.ortho, hideUi, diagOn,
             getString(R.string.autosaves_here),
+            hoverNibOn,
         )
     }
 
@@ -2989,16 +3013,55 @@ class MainActivity : Activity(), Gestures.Listener {
      * which is what the diagnostics panel is for.
      */
     override fun onHover(x: Float, y: Float, pressure: Float) {
-        if (!diagOn) return
-        diagValues["hover"] = "yes"
-        diagValues["pressure"] = String.format("%.2f", pressure)
-        pushDiag()
+        if (diagOn) {
+            diagValues["hover"] = "yes"
+            diagValues["pressure"] = String.format("%.2f", pressure)
+            pushDiag()
+        }
+        showHoverNib(x, y)
     }
 
     override fun onHoverExit() {
-        if (!diagOn) return
-        diagValues["hover"] = "no"
-        pushDiag()
+        if (diagOn) { diagValues["hover"] = "no"; pushDiag() }
+        chrome.hideHoverNib()
+    }
+
+    /**
+     * THE NIB, AT THE SIZE IT WILL ACTUALLY BE.
+     *
+     * A brush size is in millimetres of WORLD, so how big the mark comes out
+     * depends on how far away the thing you are drawing on is — and in a 3D
+     * sketch that is not something you can judge by looking. Measuring it
+     * where the pen is pointing is the whole value of the preview: the same
+     * 14mm brush is a broad sweep on a guide under your nose and a hairline on
+     * one across the room, and finding that out after the stroke has landed is
+     * finding out too late.
+     *
+     * So the scale comes from the point the pen would actually hit — the
+     * guide if there is one under it, the draw plane if not — rather than from
+     * the pivot, which is the cheap answer and wrong by exactly the amount
+     * that matters.
+     */
+    private fun showHoverNib(x: Float, y: Float) {
+        if (hideUi || !hoverNibOn) return
+        // only the tools that lay ink down have a nib to promise
+        if (tool != Tool.DRAW && tool != Tool.SHAPE) { chrome.hideHoverNib(); return }
+
+        camera.rayFrom(x.toDouble(), y.toDouble(), penRay)
+        val at = guides.active
+            ?.let { GuidePainting.project(it, penRay, clampOffSurface = clampOff)?.point }
+            ?: camera.planePoint(x.toDouble(), y.toDouble(), scratch)
+            ?: run { chrome.hideHoverNib(); return }
+
+        val proto = Stroke(brush = brush, baseRadius = sizeMM * MM * 0.5)
+        val perWorld = 1.0 / camera.pxToWorldAt(at)
+        chrome.setHoverNib(
+            x, y,
+            (StrokeGeometry.halfWidth(proto, proto.baseRadius) * perWorld).toFloat(),
+            (StrokeGeometry.halfThick(proto, proto.baseRadius) * perWorld).toFloat(),
+            proto.cfg.square,
+            argbOf(color),
+        )
     }
 
     private companion object {
@@ -3033,6 +3096,15 @@ class MainActivity : Activity(), Gestures.Listener {
 
         /** Whether the first-run walkthrough has been seen. */
         const val PREF_WALKED = "walked"
+
+        /**
+         * The saved colours, as a comma-separated list of ARGB integers.
+         *
+         * In preferences rather than in the sketch file: a favourite is a
+         * property of the person, not of the drawing, and one that vanished
+         * when you opened somebody else's file would not be worth keeping.
+         */
+        const val PREF_FAVOURITES = "favouriteColors"
 
         /** The six steps, as (title, body) string pairs. */
         private val WALK = listOf(
