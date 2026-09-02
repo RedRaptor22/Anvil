@@ -533,6 +533,22 @@ object Document {
      * Read a document into [sketch] and [guides], moving [camera] to where it
      * was saved. Both are cleared first: opening a file replaces the drawing.
      */
+    /**
+     * How many curves a saved document holds, without building it.
+     *
+     * The gallery lists every work it can find, and restoring each one to
+     * count its curves would mean parsing every sketch you have ever made to
+     * draw one screen. This reads the array's length and stops.
+     */
+    fun curveCount(text: String): Int = runCatching {
+        Json.parse(text).asObject()?.arr("strokes")?.size ?: 0
+    }.getOrDefault(0)
+
+    /** A saved document's own name, when it has been given one. */
+    fun titleOf(text: String): String? = runCatching {
+        Json.parse(text).asObject()?.str("title")?.takeIf { it.isNotBlank() }
+    }.getOrNull()
+
     fun restore(
         text: String,
         sketch: Sketch,

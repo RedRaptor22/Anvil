@@ -8,6 +8,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.GridLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.EditText
@@ -60,7 +61,7 @@ enum class ColorTarget { INK, BACKGROUND, LIGHT }
 /** The settings modal's switches — input behaviour and the view. */
 enum class InputToggle {
     FINGER, AUTO_GUIDE, ISOLATE, CLAMP, HOLD_SHAPE, STABLE, ORTHO, THEME, HIDE_UI, DIAG,
-    HOVER_NIB,
+    HOVER_NIB, ACTION_PILL,
 }
 
 /** Everything a chrome button asks for that is not a change of tool. */
@@ -69,7 +70,7 @@ enum class Action {
     UNDO, REDO,
     MIRROR, STAGE,
     GUIDE_BEND, GUIDE_SAVE, GUIDE_CLOSE,
-    DUPLICATE, DUPLICATE_MIRROR, LIQUIFY, DELETE,
+    DUPLICATE, DUPLICATE_MIRROR, LIQUIFY, DELETE, SELECTION_TO_GUIDE,
     PRESSURE,
     NEW, SAVE, OPEN, CLEAR,
 }
@@ -282,13 +283,61 @@ class Chrome(private val act: Activity, val t: Tokens) {
     private val sysMenu = panel(act, t, large = true)
     private val dock = panel(act, t, radius = 0f)
     private val scrim = View(act)
+    /**
+     * `#gallery` — the works you have, over everything else.
+     *
+     * A full page rather than a card, because it is not something you do WHILE
+     * drawing: it is the other place the app can be. Until this there was one
+     * autosave, which made "your sketch" a thing the app had exactly one of —
+     * starting something new meant losing what was there, and a sketchbook
+     * with one page in it is a sheet of paper.
+     */
+    private val gallery = LinearLayout(act)
+    private lateinit var galleryList: LinearLayout
+
+    /** Open a work, or start a fresh one when the id is null. */
+    var onOpenWork: (String?) -> Unit = {}
+    var onDeleteWork: (String) -> Unit = {}
+
     private val toastCard = ToastCard(act, t)
+
+    /**
+     * `#actionPill` — what you just did, at the top of the screen.
+     *
+     * Separate from the toast, and the difference is the point. A toast
+     * explains something you might not know; this only ever names an action
+     * you just asked for. So it is small, it sits where the eye already is
+     * when you reach for undo, and it never says anything you HAVE to read.
+     * It is a receipt rather than a message, which is why it can be switched
+     * off without losing anything.
+     */
+    private val actionPill = TextView(act).apply {
+        setTextColor(t.onActive)
+        textSize = 11.5f
+        letterSpacing = 0.04f
+        setTypeface(typeface, android.graphics.Typeface.BOLD)
+        gravity = Gravity.CENTER
+        background = GradientDrawable().apply {
+            setColor(t.active)
+            cornerRadius = t.dpf(13f)
+        }
+        setPadding(t.dp(14f), t.dp(6f), t.dp(14f), t.dp(6f))
+        elevation = t.dpf(6f)
+        alpha = 0f
+        visibility = View.GONE
+    }
+
+    private val pillHide = Runnable {
+        actionPill.animate().alpha(0f).translationY(-t.dpf(6f)).setDuration(150)
+            .withEndAction { actionPill.visibility = View.GONE }.start()
+    }
     private val tipCard = TipCard(act, t)
 
     /** The nib silhouette that follows a hovering stylus. */
     private val hoverNib = HoverNib(act, t)
 
     private var optHoverNib = true
+    private var optActionPill = true
 
     private val wheelPage = LinearLayout(act)
     private val palettePage = LinearLayout(act)
@@ -457,6 +506,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
         buildSlidePop()
         buildColorCard()
         buildSysMenu()
+        buildGallery()
         place()
         applyMode()
         refresh()
@@ -568,6 +618,8 @@ class Chrome(private val act: Activity, val t: Tokens) {
 
         val typeBtn = IcoButton(act, t).icon("brush")
         typeBtn.setOnClickListener { togglePopover(brushGrid) }
+        /* swipe it to walk the eight without opening anything */
+        StepSwipe(typeBtn, t.dpf(SWIPE_STEP_DP)) { dir -> stepBrush(dir) }
         brushRail.addView(typeBtn)
         icons["brushType"] = typeBtn
 
@@ -577,6 +629,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
             ).apply { topMargin = t.px(R.dimen.gapRail) }
             setOnClickListener { openColorCard(ColorTarget.INK) }
         }
+        StepSwipe(colorDot, t.dpf(SWIPE_STEP_DP)) { dir -> stepColor(dir) }
         brushRail.addView(colorDot)
         brushRail.addView(separator(act, t))
 
@@ -804,6 +857,9 @@ class Chrome(private val act: Activity, val t: Tokens) {
      * how the reference uses colour."
      */
     private fun buildSelBar() {
+        /* the selection becomes scaffolding — the curve you drew is often
+           exactly the surface you want to draw the next one on */
+        selBar.addView(ico("guide", Action.SELECTION_TO_GUIDE))
         selBar.addView(ico("dup", Action.DUPLICATE))
         selBar.addView(ico("dupmir", Action.DUPLICATE_MIRROR))
         selBar.addView(
@@ -2265,6 +2321,9 @@ class Chrome(private val act: Activity, val t: Tokens) {
             .option("hovernib", act.getString(R.string.opt_hovernib)) {
                 onInput(InputToggle.HOVER_NIB)
             }
+            .option("actionpill", act.getString(R.string.opt_actionpill)) {
+                onInput(InputToggle.ACTION_PILL)
+            }
         body.addView(viewGrid, matchWrap(t.dp(4f)))
 
         val views = OptionGrid(act, t, 6)
@@ -2489,6 +2548,22 @@ class Chrome(private val act: Activity, val t: Tokens) {
         root.addView(
             tipCard,
             lp(Gravity.TOP or Gravity.START),
+        )
+        /* top centre, clear of the readout on the left and the tool pill on
+           the right — the one strip of the top edge nothing else uses */
+        root.addView(
+            actionPill,
+            lp(Gravity.TOP or Gravity.CENTER_HORIZONTAL, top = t.px(R.dimen.actionPillTop)),
+        )
+        /* over everything: it is the other place the app can be, not a card
+           laid on top of the one you are in */
+        root.addView(
+            gallery,
+            lp(
+                Gravity.CENTER,
+                width = ViewGroup.LayoutParams.MATCH_PARENT,
+                height = ViewGroup.LayoutParams.MATCH_PARENT,
+            ),
         )
         root.addView(toastCard, lp(Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL, bottom = t.px(R.dimen.toastBottom)))
     }
@@ -2892,8 +2967,10 @@ class Chrome(private val act: Activity, val t: Tokens) {
         holdShape: Boolean, stableOn: Boolean, stable: Double, radial: Int,
         focal: Double, ortho: Boolean, hideUi: Boolean, diag: Boolean, save: String,
         hoverNib: Boolean = true,
+        actionPillOn: Boolean = true,
     ) {
         optHoverNib = hoverNib
+        optActionPill = actionPillOn
         optDiag = diag
         optFinger = finger; optAutoGuide = autoGuide; optIsolate = isolate
         optClamp = clamp; optHoldShape = holdShape; optStable = stableOn
@@ -2971,7 +3048,235 @@ class Chrome(private val act: Activity, val t: Tokens) {
         vPivot.text = act.getString(if (pinned) R.string.pivot_pinned_short else R.string.pivot_auto)
     }
 
+    /** The next brush along, wrapping, so a swipe never dead-ends. */
+    private fun stepBrush(dir: Int) {
+        val order = BRUSH_ORDER
+        val at = order.indexOf(brush).let { if (it < 0) 0 else it }
+        val next = order[((at + dir) % order.size + order.size) % order.size]
+        brush = next
+        onBrush(next)
+        refresh()
+        announce(act.getString(BRUSH_NAMES.getValue(next)).substringBefore(" —"))
+    }
+
+    /**
+     * The next colour along.
+     *
+     * WHICH "along" DEPENDS ON THE PAGE YOU ARE ON, because that is what you
+     * were last thinking in. On the wheel there is no list, so a step turns
+     * the hue — the wheel's own axis, and the thing you reach a wheel for.
+     * On a palette there IS a list, and stepping past its end into a hue
+     * nobody chose would undo the point of having made the list.
+     */
+    private fun stepColor(dir: Int) {
+        val group = if (!onWheelPage) activePalette() else null
+        if (group != null && group.isNotEmpty()) {
+            val at = group.indexOf(cardColor())
+            val next = group[(((if (at < 0) 0 else at) + dir) % group.size + group.size) % group.size]
+            applyCardColor(next)
+            return
+        }
+        val c = cardColor()
+        val hsv = FloatArray(3)
+        Color.colorToHSV(c, hsv)
+        hsv[0] = ((hsv[0] + dir * HUE_STEP_DEG) % 360f + 360f) % 360f
+        applyCardColor(Color.HSVToColor(Color.alpha(c), hsv))
+    }
+
+    /**
+     * The palette a step walks along: the one holding the colour you are on,
+     * so stepping continues the set you were already in rather than whichever
+     * happens to be first.
+     */
+    private fun activePalette(): List<Int>? {
+        val c = cardColor()
+        for ((_, colors) in userPalettes) if (colors.contains(c)) return colors
+        for ((_, colors) in BUILT_IN_PALETTES) {
+            if (colors.contains(c)) return colors.toList()
+        }
+        return userPalettes.values.firstOrNull()
+            ?: BUILT_IN_PALETTES.values.firstOrNull()?.toList()
+    }
+
+    private fun buildGallery() {
+        gallery.orientation = LinearLayout.VERTICAL
+        gallery.setBackgroundColor(t.bg)
+        gallery.setPadding(t.dp(22f), t.dp(18f), t.dp(22f), t.dp(18f))
+        gallery.visibility = View.GONE
+        /* it covers the sketch, so it has to swallow what lands on it */
+        gallery.isClickable = true
+
+        val head = LinearLayout(act).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { bottomMargin = t.dp(14f) }
+        }
+        head.addView(
+            TextView(act).apply {
+                text = act.getString(R.string.gallery_title)
+                setTextColor(t.ink)
+                textSize = 20f
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+                layoutParams = LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f,
+                )
+            },
+        )
+        head.addView(
+            TextButton(act, t, filled = true, small = true).apply {
+                text = act.getString(R.string.gallery_new)
+                on = true
+                setOnClickListener { onOpenWork(null) }
+            },
+        )
+        head.addView(
+            IcoButton(act, t).icon("close").apply {
+                setOnClickListener { setGallery(false) }
+            },
+        )
+        gallery.addView(head)
+
+        galleryList = LinearLayout(act).apply { orientation = LinearLayout.VERTICAL }
+        gallery.addView(
+            android.widget.ScrollView(act).apply {
+                addView(galleryList)
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f,
+                )
+            },
+        )
+    }
+
+    fun setGallery(open: Boolean) {
+        gallery.visibility = if (open) View.VISIBLE else View.GONE
+        if (open) closeTop()
+    }
+
+    fun galleryOpen(): Boolean = gallery.visibility == View.VISIBLE
+
+    /**
+     * Fill the gallery.
+     *
+     * Rows rather than a tile grid: two sketches are not told apart by a
+     * thumbnail at this size, and the date and the curve count do tell them
+     * apart. The one you are in says so rather than merely being first,
+     * because "which of these am I looking at" is the question the page
+     * exists to answer.
+     */
+    fun setWorks(works: List<MainActivity.Work>, currentId: String? = null) {
+        if (!::galleryList.isInitialized) return
+        galleryList.removeAllViews()
+        if (works.isEmpty()) {
+            galleryList.addView(
+                TextView(act).apply {
+                    text = act.getString(R.string.gallery_empty)
+                    setTextColor(t.dim)
+                    textSize = 13f
+                    setPadding(0, t.dp(18f), 0, 0)
+                },
+            )
+            return
+        }
+        for (w in works) galleryList.addView(workRow(w, w.id == currentId))
+    }
+
+    private fun workRow(w: MainActivity.Work, current: Boolean): View {
+        val row = LinearLayout(act).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = GradientDrawable().apply {
+                setColor(if (current) t.panel3 else t.panel)
+                cornerRadius = t.rCard
+                if (current) setStroke(t.dp(1.5f), t.ink)
+            }
+            setPadding(t.dp(10f), t.dp(10f), t.dp(10f), t.dp(10f))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { bottomMargin = t.dp(8f) }
+            setOnClickListener { if (current) setGallery(false) else onOpenWork(w.id) }
+        }
+
+        row.addView(
+            ImageView(act).apply {
+                layoutParams = LinearLayout.LayoutParams(t.dp(76f), t.dp(52f))
+                    .apply { marginEnd = t.dp(12f) }
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                background = GradientDrawable().apply {
+                    setColor(t.panel2); cornerRadius = t.dpf(9f)
+                }
+                /* a thumbnail is a convenience: a work whose picture failed to
+                   decode still lists, with the empty panel behind it */
+                val thumb = w.thumb
+                if (thumb != null) {
+                    val bmp: android.graphics.Bitmap? =
+                        try {
+                            android.graphics.BitmapFactory.decodeFile(thumb.path)
+                        } catch (e: Throwable) {
+                            null
+                        }
+                    if (bmp != null) setImageBitmap(bmp)
+                }
+            },
+        )
+
+        val text = LinearLayout(act).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f,
+            )
+        }
+        text.addView(
+            TextView(act).apply {
+                this.text = w.title
+                setTextColor(t.ink)
+                textSize = 14f
+                isSingleLine = true
+                ellipsize = android.text.TextUtils.TruncateAt.END
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+            },
+        )
+        text.addView(
+            TextView(act).apply {
+                this.text = act.getString(R.string.gallery_curves, w.curves) +
+                    if (current) "  ·  " + act.getString(R.string.gallery_open_now) else ""
+                setTextColor(t.dim)
+                textSize = 11.5f
+            },
+        )
+        row.addView(text)
+
+        row.addView(
+            IcoButton(act, t, IcoButton.SIZE_SMALL).icon("trash").apply {
+                danger = true
+                setOnClickListener { onDeleteWork(w.id) }
+            },
+        )
+        return row
+    }
+
+
     fun toast(msg: String) = toastCard.show(msg)
+
+    /**
+     * Name the action just performed, unless the user has asked not to be
+     * told.
+     *
+     * Re-shown rather than queued: actions arrive faster than anyone reads,
+     * and five taps of undo should leave "Undo" sitting there rather than
+     * spelling it out five times over.
+     */
+    fun announce(text: String) {
+        if (!optActionPill) return
+        actionPill.removeCallbacks(pillHide)
+        actionPill.text = text
+        actionPill.visibility = View.VISIBLE
+        actionPill.animate().cancel()
+        actionPill.translationY = 0f
+        actionPill.alpha = 1f
+        actionPill.postDelayed(pillHide, ACTION_PILL_MS)
+    }
 
     /** `UI.refresh` — every button re-derives its own state from the model. */
     fun refresh() {
@@ -3084,6 +3389,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
         viewGrid.setOn("hideui", optHideUi)
         viewGrid.setOn("diag", optDiag)
         viewGrid.setOn("hovernib", optHoverNib)
+        viewGrid.setOn("actionpill", optActionPill)
         stableBar.value = stableAmt
         stableValue.text = (stableAmt * 100).toInt().toString()
         radialBar.value = radialAmt.toDouble()
@@ -3143,6 +3449,20 @@ class Chrome(private val act: Activity, val t: Tokens) {
     }
 
     companion object {
+        /** Long enough to read two words, short enough not to sit there. */
+        const val ACTION_PILL_MS = 1100L
+
+        /** How far a swipe travels per step. A thumb's comfortable nudge. */
+        const val SWIPE_STEP_DP = 26f
+
+        /** A step around the wheel: twelve to the turn, so a lap is findable. */
+        const val HUE_STEP_DEG = 30f
+
+        /** The order a swipe walks, which is the order the grid shows. */
+        val BRUSH_ORDER = listOf(
+            "pen", "sketch", "taper", "rectangle", "cube", "flat", "wide", "glow",
+        )
+
         /**
          * `data-tip` for the action buttons, in the web build's own words.
          * Keyed by icon name, which is how [ico] identifies them.

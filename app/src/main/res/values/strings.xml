@@ -53,6 +53,7 @@
     <string name="guide_deselected">Guide released</string>
     <string name="pen_detected">Pen detected — one finger now orbits</string>
     <string name="opt_hovernib">Nib preview</string>
+    <string name="opt_actionpill">Action pill</string>
     <string name="brush_pen">Pen — a round tube, even all the way</string>
     <string name="brush_sketch">Pencil — builds up, and a light press is fainter</string>
     <string name="brush_taper">Taper — a pen that narrows to a point at each end</string>
@@ -61,6 +62,19 @@
     <string name="brush_flat">Marker — a blade, held flat against the guide</string>
     <string name="brush_wide">Ribbon — a 3mm sheet lying on the guide</string>
     <string name="brush_glow">Glow — additive, and never shaded</string>
+    <string name="gallery_title">Your work</string>
+    <string name="gallery_new">New</string>
+    <string name="gallery_empty">Nothing here yet — start something.</string>
+    <string name="gallery_curves">%1$d curves</string>
+    <string name="gallery_open_now">open</string>
+    <string name="work_new">New sketch</string>
+    <string name="work_opened">Opened</string>
+    <string name="work_deleted">Deleted</string>
+    <string name="work_is_open">That one is open — switch away from it first</string>
+    <string name="did_undo">Undo · %1$s</string>
+    <string name="did_redo">Redo · %1$s</string>
+    <string name="guide_from_selection">Guide made from %1$d curves</string>
+    <string name="guide_from_selection_failed">These curves do not make a surface</string>
     <string name="palette_new">New group</string>
     <string name="palette_name_hint">Name this group</string>
     <string name="tip_wheel">Mix a colour</string>

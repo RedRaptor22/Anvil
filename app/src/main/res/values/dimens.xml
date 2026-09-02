@@ -44,6 +44,7 @@
     <dimen name="edgeCompact">8dp</dimen>
     <dimen name="helpLeft">160dp</dimen>       <!-- #helpBtn left -->
     <dimen name="viewInfoLeft">214dp</dimen>   <!-- #viewInfo left -->
+    <dimen name="actionPillTop">14dp</dimen>
     <dimen name="undoBottom">14dp</dimen>
     <!-- above the undo pill: its 14dp offset, its 48dp height (a 38dp .ico
          in 5dp of padding), and the same 12dp gap everything else uses -->

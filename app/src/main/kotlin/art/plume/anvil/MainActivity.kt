@@ -233,6 +233,9 @@ class MainActivity : Activity(), Gestures.Listener {
      */
     private var hoverNibOn = true
 
+    /** Whether the pill names each action as you perform it. */
+    private var actionPillOn = true
+
     /** A press-hold picked a guide, so the release is not also a tap select. */
     private var holdConsumedTap = false
 
@@ -425,6 +428,7 @@ class MainActivity : Activity(), Gestures.Listener {
      */
     @Deprecated("Activity.onBackPressed")
     override fun onBackPressed() {
+        if (chrome.galleryOpen()) { chrome.setGallery(false); return }
         if (chrome.walkShowing()) { endWalk(); return }
         if (chrome.closeTop()) return
         if (sketch.selection.isNotEmpty()) { deselectAll(); return }
@@ -460,6 +464,8 @@ class MainActivity : Activity(), Gestures.Listener {
             toast(getString(R.string.eyedrop_hint))
         }
         chrome.onPalettes = { groups -> writePalettes(groups) }
+        chrome.onOpenWork = { id -> openWork(id) }
+        chrome.onDeleteWork = { id -> deleteWork(id) }
         chrome.onGroupPick = { id -> sketch.setActiveGroup(id); refreshGroups() }
         chrome.onGroupRename = { id, name ->
             sketch.groupById(id)?.let { g ->
@@ -728,12 +734,41 @@ class MainActivity : Activity(), Gestures.Listener {
     )
 
     private fun doAction(a: Action) = when (a) {
-        Action.HOME -> { resetView(); pushCamera(); refreshControls() }
+        /*
+         * HOME IS THE GALLERY NOW, and reset-view moved to the F key and the
+         * hold-on-empty-space gesture that already did it. A grid icon in the
+         * top-left corner means "show me everything" in every app anyone has
+         * used, and it meant "re-frame this one" here.
+         */
+        Action.HOME -> openGallery()
+        Action.SELECTION_TO_GUIDE -> guideFromSelection()
         Action.EXPORT -> chooseExportFormat()
         Action.MENU -> chrome.setMenu(true)
         Action.HELP -> startWalk(0)
-        Action.UNDO -> { history.undo(); refreshScene() }
-        Action.REDO -> { history.redo(); refreshScene() }
+        /*
+         * THE PILL NAMES THE STEP, NOT THE BUTTON.
+         *
+         * History knows what each step was called — "Draw", "Erase", "Move to
+         * group" — and that is the useful thing to be told: five taps of undo
+         * that all say "Undo" tell you nothing about how far back you have
+         * gone, while "Erase / Smooth / Draw" tells you exactly.
+         */
+        Action.UNDO -> {
+            val what = history.undoLabel() ?: ""
+            if (history.undo()) {
+                refreshScene()
+                announce(getString(R.string.did_undo, what))
+            }
+            Unit
+        }
+        Action.REDO -> {
+            val what = history.redoLabel() ?: ""
+            if (history.redo()) {
+                refreshScene()
+                announce(getString(R.string.did_redo, what))
+            }
+            Unit
+        }
         Action.MIRROR -> cycleMirror()
         Action.STAGE -> chrome.toggleStage()
         Action.GUIDE_BEND -> { setTool(Tool.BEND); toast(getString(R.string.bend_hint)) }
@@ -1019,6 +1054,7 @@ class MainActivity : Activity(), Gestures.Listener {
                 hoverNibOn = !hoverNibOn
                 if (!hoverNibOn) chrome.hideHoverNib()
             }
+            InputToggle.ACTION_PILL -> actionPillOn = !actionPillOn
             InputToggle.HIDE_UI -> {
                 hideUi = !hideUi
                 chrome.root.visibility = if (hideUi) View.GONE else View.VISIBLE
@@ -1042,6 +1078,7 @@ class MainActivity : Activity(), Gestures.Listener {
             stableOn, stableAmount, radial, camera.focal, camera.ortho, hideUi, diagOn,
             getString(R.string.autosaves_here),
             hoverNibOn,
+            actionPillOn,
         )
     }
 
@@ -1545,6 +1582,15 @@ class MainActivity : Activity(), Gestures.Listener {
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
 
     private fun toast(msg: String) = chrome.toast(msg)
+
+    /**
+     * Name an action in the pill at the top of the screen.
+     *
+     * Distinct from [toast]: a toast explains, this only ever confirms. An
+     * action that has something to EXPLAIN — a refusal, a hint, a count you
+     * would not have guessed — still toasts.
+     */
+    private fun announce(msg: String) = chrome.announce(msg)
 
     // ---- the guide mask, which every tool honours -------------------------
 
@@ -2594,6 +2640,57 @@ class MainActivity : Activity(), Gestures.Listener {
         if (tool == Tool.GUIDE || tool == Tool.FLATGUIDE) setTool(Tool.DRAW)
     }
 
+    /**
+     * THE CURVES YOU HAVE ARE OFTEN THE SURFACE YOU WANT.
+     *
+     * Guides are made by drawing one, which means the shape you already spent
+     * a minute getting right cannot become the thing you draw ON without
+     * drawing it a second time. This takes the selection instead.
+     *
+     * One curve sweeps, exactly as Draw's own auto-guide does: extruded along
+     * the view, which is the operation the whole app is built around. Two or
+     * more LOFT — a surface stretched between them — because that is the only
+     * reading of several curves that gives one surface, and it is the same
+     * machinery the Loft tool already uses.
+     *
+     * The curves are left alone. They are not consumed by becoming a guide,
+     * and a guide is scaffolding you put away afterwards; deleting the work to
+     * make a surface out of it would be a trade nobody would take.
+     */
+    private fun guideFromSelection() {
+        val sel = sketch.selection
+        if (sel.isEmpty()) { toast(getString(R.string.nothing_selected)); return }
+
+        val fwd = Vec3()
+        camera.forward(fwd)
+        val right = Vec3(); val up = Vec3(); val back = Vec3()
+        camera.basis(right, up, back)
+
+        val g = if (sel.size == 1) {
+            Guides.createFromStroke(sel[0].pts.map { it.p.copy() }, fwd, right, camera.radius)
+        } else {
+            GuideEditing.loft(sel, loftTension)
+        }
+        if (g == null) { toast(getString(R.string.guide_from_selection_failed)); return }
+
+        val previous = guides.active
+        history.run(
+            Step(
+                "Guide from selection",
+                onRedo = { guides.setActive(g); pushGuides(); refreshScene() },
+                onUndo = { guides.setActive(previous); pushGuides(); refreshScene() },
+            ),
+        )
+        announce(getString(R.string.guide_from_selection, sel.size))
+    }
+
+    private fun openGallery() {
+        writeAutosave()
+        writeThumbnail(currentWorkId())
+        chrome.setWorks(listWorks(), currentWorkId())
+        chrome.setGallery(true)
+    }
+
     private fun closeActiveGuide() {
         val g = guides.active ?: return
         history.run(
@@ -2872,7 +2969,145 @@ class MainActivity : Activity(), Gestures.Listener {
 
     // ---- autosave -----------------------------------------------------------------
 
-    private fun autosaveFile() = java.io.File(filesDir, AUTOSAVE)
+    // ---- the library -----------------------------------------------------
+
+    /**
+     * ONE FILE PER WORK, in a directory of them.
+     *
+     * There used to be a single autosave, which made "your sketch" a thing the
+     * app had exactly one of: starting something new meant losing what was
+     * there, and there was no way back to last week's drawing. A sketchbook
+     * with one page in it is a sheet of paper.
+     *
+     * So a work is a file named by the moment it was started, and the app
+     * remembers which one you are in. Autosave writes to THAT file, so nothing
+     * about the save story changes except which name it lands under.
+     */
+    private fun worksDir() = java.io.File(filesDir, WORKS).also { it.mkdirs() }
+
+    private fun workFile(id: String) = java.io.File(worksDir(), "$id.plume.json")
+
+    private fun thumbFile(id: String) = java.io.File(worksDir(), "$id.png")
+
+    /** Which work is open. Made on demand, so a first run has one. */
+    private fun currentWorkId(): String {
+        val prefs = getPreferences(MODE_PRIVATE)
+        prefs.getString(PREF_WORK, null)?.let { return it }
+        val id = newWorkId()
+        prefs.edit().putString(PREF_WORK, id).apply()
+        return id
+    }
+
+    /** One row of the gallery: what to show, and what to open. */
+    class Work(
+        val id: String,
+        val title: String,
+        val curves: Int,
+        val modified: Long,
+        val thumb: java.io.File?,
+    )
+
+    /**
+     * Every work, newest first.
+     *
+     * The counts and titles are read out of the files rather than kept in a
+     * separate index, because an index is a second copy of the truth and the
+     * one that goes stale — a work deleted by the system, or restored from a
+     * backup, would still be listed by an index and would not be listed here.
+     */
+    private fun listWorks(): List<Work> =
+        worksDir().listFiles { f -> f.name.endsWith(".plume.json") }
+            ?.mapNotNull { f ->
+                val id = f.name.removeSuffix(".plume.json")
+                val text = runCatching { f.readText() }.getOrNull() ?: return@mapNotNull null
+                val n = Document.curveCount(text)
+                Work(
+                    id = id,
+                    title = Document.titleOf(text) ?: readableDate(id),
+                    curves = n,
+                    modified = f.lastModified(),
+                    thumb = thumbFile(id).takeIf { it.exists() },
+                )
+            }
+            ?.sortedByDescending { it.modified }
+            ?: emptyList()
+
+    /** `20260902-134501` as something a person would say. */
+    private fun readableDate(id: String): String = runCatching {
+        val d = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).parse(id)
+        java.text.SimpleDateFormat("d MMM, HH:mm", java.util.Locale.getDefault()).format(d!!)
+    }.getOrDefault(id)
+
+    /**
+     * Put the current work down and pick up another, or start a fresh one.
+     *
+     * The one now open is written first, in full and synchronously — leaving
+     * for another page is exactly the moment a debounced save has not fired
+     * yet, and losing the last stroke of a drawing because you went to look at
+     * a different one would be unforgivable.
+     */
+    private fun openWork(id: String?) {
+        writeAutosave()
+        writeThumbnail(currentWorkId())
+
+        val target = id ?: newWorkId()
+        getPreferences(MODE_PRIVATE).edit().putString(PREF_WORK, target).apply()
+
+        sketch.clear()
+        for (g in guides.resources.toList()) guides.remove(g)
+        guides.setActive(null)
+        history.clear()
+        if (id != null) restoreAutosave()
+        refreshGroups()
+        refreshResources()
+        pushGuides()
+        refreshScene()
+        resetView(); pushCamera()
+        chrome.setGallery(false)
+        announce(
+            getString(if (id == null) R.string.work_new else R.string.work_opened),
+        )
+    }
+
+    private fun deleteWork(id: String) {
+        if (id == currentWorkId()) { toast(getString(R.string.work_is_open)); return }
+        workFile(id).delete()
+        thumbFile(id).delete()
+        chrome.setWorks(listWorks(), currentWorkId())
+        announce(getString(R.string.work_deleted))
+    }
+
+    /**
+     * A picture of the work, for its row in the gallery.
+     *
+     * Taken from the GL thread at the end of a frame, so this is asked and
+     * answered rather than called — the same route the PNG export takes. A
+     * work with no thumbnail simply shows none; it is a convenience, and
+     * blocking a page change on a frame would not be.
+     */
+    private fun writeThumbnail(id: String) {
+        if (sketch.strokes.isEmpty()) return
+        renderer.requestSnapshot { bitmap ->
+            if (bitmap == null) return@requestSnapshot
+            io.execute {
+                runCatching {
+                    val w = 320
+                    val h = (bitmap.height.toFloat() / bitmap.width * w).toInt().coerceAtLeast(1)
+                    val small = android.graphics.Bitmap.createScaledBitmap(bitmap, w, h, true)
+                    thumbFile(id).outputStream().use {
+                        small.compress(android.graphics.Bitmap.CompressFormat.PNG, 90, it)
+                    }
+                }
+            }
+        }
+        surface.requestRender()
+    }
+
+    private fun newWorkId(): String =
+        java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US)
+            .format(java.util.Date())
+
+    private fun autosaveFile() = workFile(currentWorkId())
 
     /**
      * Debounced, because every stroke would otherwise serialise the whole
@@ -3182,5 +3417,11 @@ class MainActivity : Activity(), Gestures.Listener {
          */
         private val GENERIC_NAMES = setOf("Surface", "Loft", "Shape", "Image", "Model")
         const val AUTOSAVE = "autosave.plume.json"
+
+        /** Where the works live, one file each. */
+        const val WORKS = "works"
+
+        /** Which work is open, by id. */
+        const val PREF_WORK = "currentWork"
     }
 }

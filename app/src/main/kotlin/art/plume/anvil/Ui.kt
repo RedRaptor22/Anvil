@@ -1440,3 +1440,61 @@ class HoverNib(ctx: Context, private val t: Tokens) : View(ctx) {
         canvas.drawPath(path, paint)
     }
 }
+
+
+/**
+ * A VERTICAL SWIPE ON A CONTROL, without taking its tap away.
+ *
+ * The brush swatch and the colour dot each open a card to choose from, and
+ * that is the right thing when you are choosing. It is the wrong thing when
+ * you know exactly what you want and it is one along — a card, a look, a tap,
+ * a close, for a step you could have made with your thumb.
+ *
+ * So a drag past the threshold steps, and everything shorter is still a tap.
+ * The two cannot be confused: a tap that travels far enough to step was not a
+ * tap, and a step is reported per threshold crossed so a long drag walks
+ * several places rather than jumping to the end.
+ */
+class StepSwipe(
+    private val view: View,
+    private val stepPx: Float,
+    private val onStep: (Int) -> Unit,
+) : View.OnTouchListener {
+
+    private var downY = 0f
+    private var taken = 0
+    private var swiping = false
+
+    init { view.setOnTouchListener(this) }
+
+    override fun onTouch(v: View, e: MotionEvent): Boolean {
+        when (e.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                downY = e.y
+                taken = 0
+                swiping = false
+                v.parent?.requestDisallowInterceptTouchEvent(true)
+            }
+            MotionEvent.ACTION_MOVE -> {
+                /* UP IS THE NEXT ONE. Reading a list downwards, the thing
+                   after this one is below it, so pushing the list UP brings it
+                   into view — the same direction every scrollable list moves. */
+                val steps = ((downY - e.y) / stepPx).toInt()
+                if (steps != taken) {
+                    swiping = true
+                    repeat(kotlin.math.abs(steps - taken)) {
+                        onStep(if (steps > taken) 1 else -1)
+                    }
+                    taken = steps
+                }
+            }
+            MotionEvent.ACTION_UP -> {
+                /* a swipe is not also a tap: the click would open the card the
+                   swipe existed to avoid */
+                if (!swiping) v.performClick()
+                swiping = false
+            }
+        }
+        return true
+    }
+}
