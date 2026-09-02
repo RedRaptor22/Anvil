@@ -59,7 +59,17 @@ object Brushes {
         Brush("rectangle", 1.00, 1.00, 0.0, 0.00, true, 1.60, paint = true, halfWidthMM = 11.2),
         Brush("cube", 1.00, 1.00, 0.0, 0.00, true, 1.00, rise = true, paint = true),
         Brush("flat", 0.04, 1.00, 0.0, 0.00, true, 3.40, paint = true),
-        Brush("wide", 0.04, 1.00, 0.0, 0.00, true, 3.40, paint = true, thickMM = 2.0),
+        /*
+         * `wide` is 3mm thick and stands ON the guide rather than straddling
+         * it, so the three millimetres are measured FROM the surface: the near
+         * face touches, the far face is 3mm proud. Straddling put half the
+         * ribbon inside whatever it was painted on, which is invisible on a
+         * guide and wrong the moment the sketch is exported as a solid.
+         */
+        Brush(
+            "wide", 0.04, 1.00, 0.0, 0.00, true, 3.40,
+            paint = true, rise = true, thickMM = 3.0,
+        ),
         Brush("glow", 1.00, 0.00, 6.0, 0.10, true, 1.30, glow = true),
     ).associateBy { it.name }
 

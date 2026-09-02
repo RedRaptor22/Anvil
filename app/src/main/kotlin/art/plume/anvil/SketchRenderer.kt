@@ -173,6 +173,11 @@ class SketchRenderer : GLSurfaceView.Renderer {
     private val shadowVp = FloatArray(16)
     private var shadowKey = ""
     private var shadowDirty = true
+
+    /** Reused so the frame loop allocates nothing to read the stroke list. */
+    private val shadowList = ArrayList<Stroke>()
+
+    private var shadowBuiltAt = 0L
     private var shadowVisible = false
     /** The sketch's extent, recomputed on the UI thread when the ink changes. */
     private var strokeBounds = Bounds()
@@ -650,7 +655,15 @@ class SketchRenderer : GLSurfaceView.Renderer {
         }
         if (!on) { shadowVisible = false; return }
 
-        val list = synchronized(strokes) { ArrayList(strokes) }
+        /*
+         * ONE LIST, REUSED. This copied every stroke into a fresh ArrayList on
+         * EVERY FRAME — sixty allocations a second of a four-hundred-element
+         * list, which is not slow so much as a steady drip into the collector,
+         * and the collector is what stops the world.
+         */
+        synchronized(strokes) { shadowList.clear(); shadowList.addAll(strokes) }
+        val list = shadowList
+
         if (shadowDirty) {
             strokeBounds = Bounds()
             for (st in list) for (sp in st.pts) strokeBounds.add(sp.p)
@@ -665,11 +678,29 @@ class SketchRenderer : GLSurfaceView.Renderer {
 
         val key = GroundShadow.signature(bounds, sun)
         if (shadowDirty || key != shadowKey) {
-            shadowKey = key
-            shadowDirty = false
-            GroundShadow.fit(bounds, sun, shadowFit)
-            shadowFit.viewProj.into(shadowVp)
-            renderSilhouette(list)
+            /*
+             * THE SILHOUETTE IS REBUILT AT MOST SO OFTEN.
+             *
+             * Rebuilding it re-draws every stroke in the sketch into an
+             * offscreen target — a whole second scene. That was happening on
+             * every change to the stroke list, and the stroke list changes on
+             * every sample of an erase drag: four hundred curves re-rendered
+             * per pointer event, which is the freeze.
+             *
+             * A shadow that trails a tenth of a second behind the pen is not
+             * something anyone can see. A drag that stops responding is. So
+             * the rebuild is rate-limited, and the dirty flag stays up until
+             * one actually happens, which means the last state always lands.
+             */
+            val now = System.nanoTime()
+            if (now - shadowBuiltAt >= SHADOW_MIN_INTERVAL_NS) {
+                shadowBuiltAt = now
+                shadowKey = key
+                shadowDirty = false
+                GroundShadow.fit(bounds, sun, shadowFit)
+                shadowFit.viewProj.into(shadowVp)
+                renderSilhouette(list)
+            }
         }
         shadowVisible = true
         paintGround(m, bg)
@@ -1427,6 +1458,14 @@ class SketchRenderer : GLSurfaceView.Renderer {
     }
 
     private companion object {
+        /**
+         * How often the ground shadow's silhouette may be rebuilt.
+         *
+         * A tenth of a second: far below what the eye reads as lag on a soft
+         * shadow, and far above the rate an erase drag was asking for.
+         */
+        const val SHADOW_MIN_INTERVAL_NS = 100_000_000L
+
         /** Which of the three ordered passes a stroke belongs to. */
         const val OPAQUE = 0
         const val BLENDED = 1

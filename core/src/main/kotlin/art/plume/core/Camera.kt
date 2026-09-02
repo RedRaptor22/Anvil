@@ -232,8 +232,28 @@ class Camera {
      * clipped away when the projection has no perspective to push it off
      * screen.
      */
-    val near: Double get() = if (ortho) -4000.0 else 0.02
-    val far: Double get() = 8000.0
+    /**
+     * THE DEPTH RANGE IS SIZED TO THE VIEW, not to the biggest number anyone
+     * could imagine.
+     *
+     * These were 0.02 and 8000 — two centimetres to eight kilometres, a range
+     * of four hundred thousand to one. A depth buffer's precision is spent
+     * almost entirely near the front of that range, so at the distance you
+     * actually draw at there was nothing left: two surfaces a millimetre apart
+     * landed on the SAME depth value, and which one won was decided per pixel
+     * by rounding. That is the black wall bleeding through the strokes painted
+     * on top of it, in diagonal bands where the rounding tips one way and then
+     * the other.
+     *
+     * A sketchbook is human-scale, and the orbit radius says what scale that
+     * is right now. Near is a fiftieth of it, so a nib is never clipped as you
+     * lean in; far is forty times it, floored at 100m so the grid and the
+     * horizon stay put when you zoom all the way in. The worst ratio that
+     * leaves is 2000:1, which resolves a stroke's thickness with room to
+     * spare.
+     */
+    val near: Double get() = if (ortho) -4000.0 else clamp(radius * 0.02, 0.01, 1.0)
+    val far: Double get() = max(radius * 40.0, 100.0)
 
     /** Right, up and backward, the three columns of the camera's world matrix. */
     fun basis(right: Vec3, up: Vec3, backward: Vec3) {

@@ -335,12 +335,7 @@ class MainActivity : Activity(), Gestures.Listener {
         }
         setContentView(root)
 
-        chrome.setFavourites(
-            getPreferences(MODE_PRIVATE).getString(PREF_FAVOURITES, "")
-                .orEmpty()
-                .split(",")
-                .mapNotNull { it.trim().toIntOrNull() },
-        )
+        chrome.setPalettes(readPalettes())
         history.addListener { refreshControls() }
         restoreAutosave()
         refreshGroups()
@@ -460,10 +455,7 @@ class MainActivity : Activity(), Gestures.Listener {
             setTool(Tool.EYEDROP)
             toast(getString(R.string.eyedrop_hint))
         }
-        chrome.onFavourites = { list ->
-            getPreferences(MODE_PRIVATE).edit()
-                .putString(PREF_FAVOURITES, list.joinToString(",")).apply()
-        }
+        chrome.onPalettes = { groups -> writePalettes(groups) }
         chrome.onGroupPick = { id -> sketch.setActiveGroup(id); refreshGroups() }
         chrome.onGroupRename = { id, name ->
             sketch.groupById(id)?.let { g ->
@@ -1344,6 +1336,35 @@ class MainActivity : Activity(), Gestures.Listener {
         }
     }
 
+    /**
+     * THE PALETTES YOU MADE, one line per group: `name=aarrggbb,aarrggbb`.
+     *
+     * Preferences rather than the sketch file, for the reason a favourite was:
+     * a palette belongs to the person, not to the drawing, and one that
+     * vanished when you opened somebody else's file would not be worth
+     * building. A newline separates groups because a name may contain
+     * anything but that.
+     */
+    private fun readPalettes(): Map<String, List<Int>> {
+        val raw = getPreferences(MODE_PRIVATE).getString(PREF_PALETTES, "").orEmpty()
+        if (raw.isBlank()) return emptyMap()
+        val out = LinkedHashMap<String, List<Int>>()
+        for (line in raw.split("\n")) {
+            val at = line.indexOf('=')
+            if (at <= 0) continue
+            out[line.substring(0, at)] =
+                line.substring(at + 1).split(",").mapNotNull { it.trim().toIntOrNull() }
+        }
+        return out
+    }
+
+    private fun writePalettes(groups: Map<String, List<Int>>) {
+        val text = groups.entries.joinToString("\n") { (name, colors) ->
+            name.replace("\n", " ").replace("=", " ") + "=" + colors.joinToString(",")
+        }
+        getPreferences(MODE_PRIVATE).edit().putString(PREF_PALETTES, text).apply()
+    }
+
     /** The file's own name, so a reference is not called "Model 3". */
     private fun displayName(uri: Uri): String {
         val fallback = uri.lastPathSegment?.substringAfterLast('/') ?: "Model"
@@ -2128,14 +2149,19 @@ class MainActivity : Activity(), Gestures.Listener {
         if (adjusting != null || tool !in HOLD_TOOLS) return
 
         /*
-         * A press that never went anywhere has no shape to fit, so under the
-         * Shape tool it seeds a circle on the spot and hands the drag straight
-         * to its radius. Only under Shape: pausing to steady your hand before
-         * an ordinary stroke is ordinary, and turning that into a circle would
-         * ruin it.
+         * A press that never went anywhere has no shape to fit, so it seeds a
+         * circle on the spot and hands the drag straight to its radius.
+         *
+         * Shape and BEND only. Bend redraws a guide's sweep from a new
+         * viewpoint, and a circle is the one path that is a chore to draw by
+         * hand and exact when it matters — a bent guide that closes on itself
+         * has to CLOSE, and freehand does not. Pausing to steady your hand
+         * before an ordinary stroke is ordinary, though, so Draw is left
+         * alone: turning that into a circle would ruin it.
          */
         val travel = liveTravel()
-        val fitted = if (tool == Tool.SHAPE && travel <= STILL_PX) {
+        val seedsCircle = tool == Tool.SHAPE || tool == Tool.BEND
+        val fitted = if (seedsCircle && travel <= STILL_PX) {
             val a = liveScreen.firstOrNull() ?: return
             Shapes.Shape.Circle(a.x, a.y, SEED_R_PX)
         } else {
@@ -3127,13 +3153,13 @@ class MainActivity : Activity(), Gestures.Listener {
         const val PREF_WALKED = "walked"
 
         /**
-         * The saved colours, as a comma-separated list of ARGB integers.
+         * The palettes you made, as `name=argb,argb` lines.
          *
          * In preferences rather than in the sketch file: a favourite is a
          * property of the person, not of the drawing, and one that vanished
          * when you opened somebody else's file would not be worth keeping.
          */
-        const val PREF_FAVOURITES = "favouriteColors"
+        const val PREF_PALETTES = "colorPalettes"
 
         /** The six steps, as (title, body) string pairs. */
         private val WALK = listOf(

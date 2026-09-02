@@ -50,15 +50,39 @@ class NibTest {
         return worst / MM
     }
 
+    /**
+     * What "lies on the surface" means for a RISING brush.
+     *
+     * `wide` is 3mm thick and stands on the guide rather than straddling it,
+     * so the test is no longer "every vertex is near the plane" — it is that
+     * nothing sinks BELOW the plane and nothing stands more than the brush's
+     * own thickness above it. A blade tipped out of the surface fails both
+     * halves; a blade lying on it passes both.
+     */
+    private fun assertRestsOn(m: MeshData, axis: Int, at: Double, thickMM: Double) {
+        var below = 0.0
+        var above = 0.0
+        for (i in 0 until m.vertexCount) {
+            val d = (m.positions[i * 3 + axis].toDouble() - at) / MM
+            if (d < below) below = d
+            if (d > above) above = d
+        }
+        assertTrue(below > -0.01, "it sank ${-below}mm into the surface")
+        assertTrue(
+            above <= thickMM + 0.01,
+            "it stood ${above}mm proud of a surface it is ${thickMM}mm thick on",
+        )
+    }
+
     @Test
     fun `a wide blade lies on the surface it was painted on`() {
         val s = onFloor("wide", 7.0 * MM)
         Nib.freezeFrames(s)
         val m = StrokeGeometry.build(s)!!
-        /* `wide` is 2mm thick, so its half-thickness is 1mm and no vertex has
-           any business being further out than that. The nib is 3.4 * 7mm =
-           23.8mm wide: rolled onto its edge the same mesh reaches 23.8mm. */
-        assertTrue(standoffMM(m) < 1.1, "wide stood ${standoffMM(m)}mm off the floor")
+        /* `wide` is 3mm thick and RISES, so it sits on the floor and stands
+           3mm proud of it. The nib is 3.4 * 7mm = 23.8mm wide: tipped onto its
+           edge the same mesh reaches 23.8mm, which is what this rules out. */
+        assertRestsOn(m, axis = 1, at = 0.0, thickMM = 3.0)
     }
 
     @Test
@@ -314,7 +338,7 @@ class NibTest {
            the buffer rather than left at whatever transport chose. */
         val s = onFloor("wide", 7.0 * MM)
         val m = StrokeGeometry.build(s)!!
-        assertTrue(standoffMM(m) < 1.1, "an unfrozen wide stroke stood off the floor")
+        assertRestsOn(m, axis = 1, at = 0.0, thickMM = 3.0)
     }
 
     @Test
@@ -334,12 +358,7 @@ class NibTest {
         }
         Nib.freezeFrames(s)
         val m = StrokeGeometry.build(s)!!
-        var worst = 0.0
-        for (i in 0 until m.vertexCount) {
-            val d = abs(m.positions[i * 3 + 2].toDouble())
-            if (d > worst) worst = d
-        }
-        assertTrue(worst / MM < 1.1, "wide stood ${worst / MM}mm off the wall")
+        assertRestsOn(m, axis = 2, at = 0.0, thickMM = 3.0)
     }
 
     @Test
@@ -432,7 +451,8 @@ class NibTest {
             val d = abs(kotlin.math.hypot(x, z) - 0.3)
             if (d > worst) worst = d
         }
-        assertTrue(worst / MM < 1.1, "the mirrored blade stood ${worst / MM}mm off the cylinder")
+        // on the cylinder's surface, and no further out than it is thick
+        assertTrue(worst / MM < 3.1, "the mirrored blade stood ${worst / MM}mm off the cylinder")
     }
 
     @Test
@@ -456,7 +476,7 @@ class NibTest {
             val d = abs(mesh.positions[i * 3].toDouble())
             if (d > worst) worst = d
         }
-        assertTrue(worst / MM < 1.1, "the rotated blade stood ${worst / MM}mm off")
+        assertTrue(worst / MM < 3.1, "the rotated blade stood ${worst / MM}mm off")
     }
 
     @Test
@@ -475,6 +495,6 @@ class NibTest {
         }
         Nib.freezeFrames(s)
         val m = StrokeGeometry.build(s)!!
-        assertTrue(standoffMM(m) < 1.1, "a ring of paint stood ${standoffMM(m)}mm off")
+        assertRestsOn(m, axis = 1, at = 0.0, thickMM = 3.0)
     }
 }

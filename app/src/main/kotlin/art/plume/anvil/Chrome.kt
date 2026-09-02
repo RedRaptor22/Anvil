@@ -290,13 +290,18 @@ class Chrome(private val act: Activity, val t: Tokens) {
 
     private var optHoverNib = true
 
-    private lateinit var favouriteRow: GridLayout
+    private val wheelPage = LinearLayout(act)
+    private val palettePage = LinearLayout(act)
+    private lateinit var wheelTab: IcoButton
+    private lateinit var paletteTab: IcoButton
+    private var onWheelPage = true
 
-    /** The colours you have kept, newest last. */
-    private val favourites = ArrayList<Int>()
 
-    /** The saved row changed, so somebody should write it down. */
-    var onFavourites: (List<Int>) -> Unit = {}
+    /** The groups you made, name to colours, in the order you made them. */
+    private val userPalettes = LinkedHashMap<String, ArrayList<Int>>()
+
+    /** A group of your own changed, so somebody should write it down. */
+    var onPalettes: (Map<String, List<Int>>) -> Unit = {}
 
     private val toolButtons = HashMap<Tool, IcoButton>()
     private val brushTiles = HashMap<String, IcoButton>()
@@ -1766,6 +1771,13 @@ class Chrome(private val act: Activity, val t: Tokens) {
                     brush = name; onBrush(name); closePopovers(); refresh()
                 }
             }
+            /* THE TILES ARE GLYPHS, so the name has to come from somewhere.
+               Eight cross-sections drawn at 42x38 are distinguishable but not
+               nameable — you can see that one is a blade and one is a tube
+               without knowing which is `flat` and which is `wide`, and the
+               size and pressure controls beside them talk about the brush by
+               name. Hover or hold to be told. */
+            BRUSH_NAMES[name]?.let { r -> Tip.attach(tile, tipCard, act.getString(r)) }
             brushTiles[name] = tile
             grid.addView(tile)
         }
@@ -1859,6 +1871,44 @@ class Chrome(private val act: Activity, val t: Tokens) {
         val p = t.px(R.dimen.padPop)
         colorCard.setPadding(p, p, p, p)
 
+        /* the two pages, chosen from the header */
+        val header = LinearLayout(act).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { bottomMargin = t.dp(8f) }
+        }
+        cardTitle = TextView(act).apply {
+            setTextColor(t.dim2)
+            textSize = 10f
+            letterSpacing = 0.08f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            layoutParams = LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f,
+            )
+        }
+        header.addView(cardTitle)
+        wheelTab = IcoButton(act, t, IcoButton.SIZE_SMALL).icon("brush").apply {
+            setOnClickListener { showColorPage(wheel = true) }
+            Tip.attach(this, tipCard, act.getString(R.string.tip_wheel))
+        }
+        paletteTab = IcoButton(act, t, IcoButton.SIZE_SMALL).icon("stage").apply {
+            setOnClickListener { showColorPage(wheel = false) }
+            Tip.attach(this, tipCard, act.getString(R.string.tip_palettes))
+        }
+        header.addView(wheelTab)
+        header.addView(paletteTab)
+        colorCard.addView(header)
+
+        wheelPage.orientation = LinearLayout.VERTICAL
+        colorCard.addView(
+            wheelPage,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ),
+        )
+
         /* `#hexRow` — the field and the sample-from-sketch button */
         val hexRow = LinearLayout(act).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -1899,154 +1949,216 @@ class Chrome(private val act: Activity, val t: Tokens) {
         }
         hexRow.addView(eyedropButton)
 
-        /* THE CARD SAYS WHAT IT IS EDITING. One card serves the brush swatch,
-           Background and Light, and a wheel with no label on it is a wheel you
-           have to remember the context of. */
-        cardTitle = TextView(act).apply {
-            setTextColor(t.dim2)
-            textSize = 10f
-            letterSpacing = 0.08f
-            setTypeface(typeface, android.graphics.Typeface.BOLD)
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
-            ).apply { bottomMargin = t.dp(6f) }
-        }
-        colorCard.addView(cardTitle)
-        colorCard.addView(hexRow)
+        wheelPage.addView(hexRow)
 
         colorWheel = ColorWheel(act, t) { c -> onWheel(c) }
-        colorCard.addView(
+        wheelPage.addView(
             colorWheel,
             LinearLayout.LayoutParams(t.dp(ColorWheel.WHEEL_DP), t.dp(ColorWheel.WHEEL_DP))
                 .apply { gravity = Gravity.CENTER_HORIZONTAL; topMargin = t.dp(10f) },
         )
 
-        val grid = GridLayout(act).apply { columnCount = 8 }
-        for (c in PALETTE) {
-            grid.addView(
-                View(act).apply {
-                    background = GradientDrawable().apply {
-                        shape = GradientDrawable.OVAL
-                        setColor(c)
-                        setStroke(t.dp(1f), t.line)
-                    }
-                    layoutParams = GridLayout.LayoutParams().apply {
-                        width = t.dp(19f); height = t.dp(19f)
-                        setMargins(t.dp(3f), t.dp(3f), t.dp(3f), t.dp(3f))
-                    }
-                    setOnClickListener { applyCardColor(c) }
-                },
-            )
-        }
-        colorCard.addView(
-            grid,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
-            ).apply { gravity = Gravity.CENTER_HORIZONTAL; topMargin = t.dp(8f) },
-        )
-
         /*
-         * FAVOURITES, under the fixed palette.
+         * THE PALETTES LIVE ON THEIR OWN PAGE.
          *
-         * The eight above are a starting set that never changes — they are
-         * there so a fresh sketch has ink without a decision. These are the
-         * ones YOU mixed, and the reason they need a home is that the wheel
-         * cannot get you back to a colour: it is a continuous surface, and a
-         * shade you found by eye an hour ago is not somewhere you can point
-         * again. Saving is the only way back.
+         * They used to sit under the wheel — eight fixed swatches, then the
+         * saved ones — which made the card tall and gave the wheel, the thing
+         * you came for, the smaller half of it. Two pages instead, switched
+         * from the header: the wheel first, because mixing is what the card is
+         * FOR, and the palettes a tap away for when you want a colour you have
+         * already agreed with yourself about.
          */
+        palettePage.orientation = LinearLayout.VERTICAL
         colorCard.addView(
-            TextView(act).apply {
-                text = act.getString(R.string.favourites)
-                setTextColor(t.dim2)
-                textSize = 10f
-                letterSpacing = 0.08f
-                setTypeface(typeface, android.graphics.Typeface.BOLD)
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                ).apply { topMargin = t.dp(10f); bottomMargin = t.dp(4f) }
-            },
-        )
-        favouriteRow = GridLayout(act).apply { columnCount = FAVOURITE_SLOTS }
-        colorCard.addView(
-            favouriteRow,
+            palettePage,
             LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
-            ).apply { gravity = Gravity.CENTER_HORIZONTAL },
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ),
         )
-        rebuildFavourites()
+        rebuildPalettes()
+        showColorPage(wheel = true)
 
         colorCard.visibility = View.GONE
         popover(colorCard)
     }
 
     /**
-     * The saved row: every colour you have kept, then one empty slot to keep
-     * another in.
-     *
-     * Tap a swatch to use it, press and hold to forget it. The empty slot
-     * takes whatever the card is showing, which is the colour you have just
-     * finished mixing — that is the moment you want to keep it, and asking you
-     * to find a menu first is asking you to lose it.
+     * Which page the card is showing. The wheel is the default, because
+     * mixing is what the card is for and a palette is a shortcut past it.
      */
-    private fun rebuildFavourites() {
-        favouriteRow.removeAllViews()
-
-        fun slot(build: View.() -> Unit) = View(act).apply {
-            layoutParams = GridLayout.LayoutParams().apply {
-                width = t.dp(19f); height = t.dp(19f)
-                setMargins(t.dp(3f), t.dp(3f), t.dp(3f), t.dp(3f))
-            }
-            build()
-        }
-
-        for (c in favourites) {
-            favouriteRow.addView(
-                slot {
-                    background = GradientDrawable().apply {
-                        shape = GradientDrawable.OVAL
-                        setColor(c)
-                        setStroke(t.dp(1f), t.line)
-                    }
-                    setOnClickListener { applyCardColor(c) }
-                    setOnLongClickListener {
-                        favourites.remove(c)
-                        onFavourites(favourites.toList())
-                        rebuildFavourites()
-                        true
-                    }
-                },
-            )
-        }
-
-        if (favourites.size < FAVOURITE_SLOTS) {
-            favouriteRow.addView(
-                slot {
-                    /* a dashed ring rather than a filled dot: an empty slot has
-                       to read as somewhere to PUT something */
-                    background = GradientDrawable().apply {
-                        shape = GradientDrawable.OVAL
-                        setColor(0x00000000)
-                        setStroke(t.dp(1.5f), t.dim2, t.dpf(3f), t.dpf(3f))
-                    }
-                    setOnClickListener {
-                        val c = cardColor()
-                        if (favourites.contains(c)) return@setOnClickListener
-                        favourites.add(c)
-                        onFavourites(favourites.toList())
-                        rebuildFavourites()
-                    }
-                },
-            )
-        }
+    private fun showColorPage(wheel: Boolean) {
+        onWheelPage = wheel
+        wheelPage.visibility = if (wheel) View.VISIBLE else View.GONE
+        palettePage.visibility = if (wheel) View.GONE else View.VISIBLE
+        wheelTab.on = wheel
+        paletteTab.on = !wheel
+        refresh()
     }
 
-    /** Load the saved row, which the activity keeps between runs. */
-    fun setFavourites(list: List<Int>) {
-        favourites.clear()
-        favourites.addAll(list.take(FAVOURITE_SLOTS))
-        if (::favouriteRow.isInitialized) rebuildFavourites()
+    /**
+     * THE PALETTE PAGE: named groups of colours, and a group of your own.
+     *
+     * Grouped rather than one long row because a palette is a set that goes
+     * TOGETHER — the greys belong with the greys — and a flat strip of forty
+     * swatches is a strip you have to hunt through. The built-in groups are
+     * fixed; "Mine" is yours, and the empty slot on it takes whatever the
+     * wheel is currently showing.
+     */
+    private fun rebuildPalettes() {
+        palettePage.removeAllViews()
+
+        fun heading(text: String, action: (() -> Unit)? = null) {
+            val row = LinearLayout(act).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { topMargin = t.dp(8f); bottomMargin = t.dp(3f) }
+            }
+            row.addView(
+                TextView(act).apply {
+                    this.text = text
+                    setTextColor(t.dim2)
+                    textSize = 9.5f
+                    letterSpacing = 0.09f
+                    setTypeface(typeface, android.graphics.Typeface.BOLD)
+                    layoutParams = LinearLayout.LayoutParams(
+                        0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f,
+                    )
+                },
+            )
+            if (action != null) {
+                row.addView(
+                    IcoButton(act, t, IcoButton.SIZE_TINY).icon("trash").apply {
+                        danger = true
+                        setOnClickListener { action() }
+                    },
+                )
+            }
+            palettePage.addView(row)
+        }
+
+        fun swatchRow(colors: List<Int>, mine: Boolean, groupName: String) {
+            val grid = GridLayout(act).apply { columnCount = 8 }
+            fun cell(build: View.() -> Unit) = View(act).apply {
+                layoutParams = GridLayout.LayoutParams().apply {
+                    width = t.dp(19f); height = t.dp(19f)
+                    setMargins(t.dp(3f), t.dp(3f), t.dp(3f), t.dp(3f))
+                }
+                build()
+            }
+            for (c in colors) {
+                grid.addView(
+                    cell {
+                        background = GradientDrawable().apply {
+                            shape = GradientDrawable.OVAL
+                            setColor(c)
+                            setStroke(t.dp(1f), t.line)
+                        }
+                        setOnClickListener { applyCardColor(c) }
+                        if (mine) {
+                            setOnLongClickListener {
+                                userPalettes[groupName]?.remove(c)
+                                onPalettes(userPalettes)
+                                rebuildPalettes()
+                                true
+                            }
+                        }
+                    },
+                )
+            }
+            if (mine && colors.size < FAVOURITE_SLOTS) {
+                grid.addView(
+                    cell {
+                        /* a dashed ring: an empty slot has to read as somewhere
+                           to PUT something rather than as a colour */
+                        background = GradientDrawable().apply {
+                            shape = GradientDrawable.OVAL
+                            setColor(0x00000000)
+                            setStroke(t.dp(1.5f), t.dim2, t.dpf(3f), t.dpf(3f))
+                        }
+                        setOnClickListener {
+                            val c = cardColor()
+                            val into = userPalettes.getOrPut(groupName) { ArrayList() }
+                            if (!into.contains(c)) {
+                                into.add(c)
+                                onPalettes(userPalettes)
+                                rebuildPalettes()
+                            }
+                        }
+                    },
+                )
+            }
+            palettePage.addView(
+                grid,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                ),
+            )
+        }
+
+        for ((name, colors) in BUILT_IN_PALETTES) {
+            heading(name)
+            swatchRow(colors.toList(), mine = false, groupName = name)
+        }
+        for ((name, colors) in userPalettes) {
+            heading(name) {
+                userPalettes.remove(name)
+                onPalettes(userPalettes)
+                rebuildPalettes()
+            }
+            swatchRow(colors, mine = true, groupName = name)
+        }
+
+        palettePage.addView(
+            TextButton(act, t, small = true).apply {
+                text = act.getString(R.string.palette_new)
+                setOnClickListener { promptNewPalette() }
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { topMargin = t.dp(10f) }
+            },
+        )
+    }
+
+    /** Name a new group of your own, in place. */
+    private fun promptNewPalette() {
+        val field = EditText(act).apply {
+            hint = act.getString(R.string.palette_name_hint)
+            setTextColor(t.ink)
+            textSize = 13f
+            isSingleLine = true
+            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_DONE
+            background = GradientDrawable().apply {
+                setColor(t.panel2); cornerRadius = t.dpf(9f)
+            }
+            setPadding(t.dp(8f), t.dp(6f), t.dp(8f), t.dp(6f))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { topMargin = t.dp(6f) }
+        }
+        field.setOnEditorActionListener { _, _, _ ->
+            val name = field.text.toString().trim()
+            /* an unnamed group is a row you cannot tell from the next one, and
+               one that already exists would silently swallow the other */
+            if (name.isNotEmpty() && !userPalettes.containsKey(name) &&
+                !BUILT_IN_PALETTES.containsKey(name)
+            ) {
+                userPalettes[name] = ArrayList()
+                onPalettes(userPalettes)
+            }
+            rebuildPalettes()
+            true
+        }
+        palettePage.addView(field)
+        field.requestFocus()
+    }
+
+    /** The groups you made, loaded by the activity and written back by it. */
+    fun setPalettes(groups: Map<String, List<Int>>) {
+        userPalettes.clear()
+        for ((k, v) in groups) userPalettes[k] = ArrayList(v)
+        if (::wheelTab.isInitialized) rebuildPalettes()
     }
 
     /** The colour the card is showing, which is whatever it is pointed at. */
@@ -3071,11 +3183,23 @@ class Chrome(private val act: Activity, val t: Tokens) {
         )
 
         /**
-         * How many colours the saved row holds — one screen's width of them at
-         * the same 19dp as the fixed palette above it, so the two rows line up
-         * and the card does not grow.
+         * How many colours a group of your own holds — one row at the same
+         * 19dp as the built-in palettes, so every group lines up and the card
+         * does not grow sideways.
          */
         const val FAVOURITE_SLOTS = 8
+
+        /** What each cross-section is called, and what it is for. */
+        val BRUSH_NAMES = mapOf(
+            "pen" to R.string.brush_pen,
+            "sketch" to R.string.brush_sketch,
+            "taper" to R.string.brush_taper,
+            "rectangle" to R.string.brush_rectangle,
+            "cube" to R.string.brush_cube,
+            "flat" to R.string.brush_flat,
+            "wide" to R.string.brush_wide,
+            "glow" to R.string.brush_glow,
+        )
 
         /** The rail's swatches. Index 0 is the default near-black ink. */
         val PALETTE = intArrayOf(
@@ -3083,6 +3207,30 @@ class Chrome(private val act: Activity, val t: Tokens) {
             0xFFFF8A3D.toInt(), 0xFFF2C94C.toInt(), 0xFF4CC38A.toInt(), 0xFF2D8F6F.toInt(),
             0xFF5B9DFF.toInt(), 0xFF3B5BDB.toInt(), 0xFF8B5CF6.toInt(), 0xFFD6409F.toInt(),
             0xFF8B5E34.toInt(), 0xFFC9A227.toInt(), 0xFF4A5568.toInt(),
+        )
+
+        /**
+         * The palettes that ship with the app, grouped because a palette is a
+         * set that goes together — the greys belong with the greys, and a flat
+         * strip of forty swatches is a strip you have to hunt through.
+         */
+        val BUILT_IN_PALETTES: Map<String, IntArray> = linkedMapOf(
+            "INK" to PALETTE,
+            "GREYS" to intArrayOf(
+                0xFF1B1C21.toInt(), 0xFF3A3C45.toInt(), 0xFF5F606C.toInt(),
+                0xFF8A8B96.toInt(), 0xFFB6B7C0.toInt(), 0xFFD8D9E0.toInt(),
+                0xFFEFEFF4.toInt(), 0xFFFFFFFF.toInt(),
+            ),
+            "WARM" to intArrayOf(
+                0xFF7C2D12.toInt(), 0xFFB45309.toInt(), 0xFFE87326.toInt(),
+                0xFFF59E0B.toInt(), 0xFFFCD34D.toInt(), 0xFFC2410C.toInt(),
+                0xFF9A3412.toInt(), 0xFFFFE8B0.toInt(),
+            ),
+            "COOL" to intArrayOf(
+                0xFF0C2A4D.toInt(), 0xFF1D4ED8.toInt(), 0xFF5B9DFF.toInt(),
+                0xFF0E7490.toInt(), 0xFF14B8A6.toInt(), 0xFF2F8F66.toInt(),
+                0xFF4CC38A.toInt(), 0xFFBFE3FF.toInt(),
+            ),
         )
     }
 }

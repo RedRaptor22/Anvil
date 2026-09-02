@@ -1,6 +1,8 @@
 package art.plume.core
 
 import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.sin
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -329,5 +331,47 @@ class SelectionTest {
         // size is averaged rather than nulled: a spread still has a middle
         assertEquals(0.02, style.averageRadius, 1e-12)
         assertNull(Selection.styleOf(emptyList()))
+    }
+
+    @Test
+    fun `the bounding rejection never loses a curve the ray really hits`() {
+        /* The rejection is an optimisation, so the only thing worth asserting
+           is that it changes no ANSWER. A fan of curves at every angle, and
+           every one of them is still found by a ray aimed down its middle. */
+        val sketch = Sketch()
+        val cam = Camera().apply { resize(1000, 1000) }
+        val made = ArrayList<Stroke>()
+        for (k in 0 until 24) {
+            val a = k / 24.0 * 2 * PI
+            val s = Stroke(baseRadius = 0.004)
+            for (i in 0 until 8) {
+                s.pts.add(
+                    StrokePoint(
+                        Vec3(cos(a) * (0.05 + i * 0.02), sin(a) * (0.05 + i * 0.02), 0.0),
+                    ),
+                )
+            }
+            sketch.add(s)
+            made.add(s)
+        }
+        for (s in made) {
+            val mid = s.pts[4].p
+            val px = cam.worldToScreen(mid, Vec3())
+            assertEquals(
+                s, Selection.hitTest(sketch, cam, px.x, px.y),
+                "a curve the ray passes through was rejected",
+            )
+        }
+    }
+
+    @Test
+    fun `a ray well clear of everything hits nothing`() {
+        val sketch = Sketch()
+        val cam = Camera().apply { resize(1000, 1000) }
+        val s = Stroke(baseRadius = 0.004)
+        s.pts.add(StrokePoint(Vec3(0.0, 0.0, 0.0)))
+        s.pts.add(StrokePoint(Vec3(0.1, 0.0, 0.0)))
+        sketch.add(s)
+        assertEquals(null, Selection.hitTest(sketch, cam, 5.0, 5.0))
     }
 }

@@ -292,6 +292,9 @@ object Editing {
     }
 
     /** Does [ray] pass within the tube of [st]? Fills [out] with where. */
+    /** Scratch for the bounding-sphere rejection; the query is single-threaded. */
+    private val boundsCentre = Vec3()
+
     fun rayHitsStroke(ray: Ray, st: Stroke, out: Vec3): Boolean {
         val pts = st.pts
         if (pts.isEmpty()) return false
@@ -299,6 +302,37 @@ object Editing {
             StrokeGeometry.halfWidth(st, st.baseRadius),
             StrokeGeometry.halfThick(st, st.baseRadius),
         )
+
+        /*
+         * THE WHOLE STROKE, REJECTED IN ONE TEST.
+         *
+         * Below this every SEGMENT gets a ray-to-segment solve, which is a few
+         * dozen operations. A tap used to pay that for every segment of every
+         * curve in the sketch — four hundred curves of a hundred points each
+         * is forty thousand solves, on the main thread, and a sweep pays it
+         * again on every pointer sample. That is the selection that took a
+         * second to answer and the drag that stopped answering at all.
+         *
+         * A bounding sphere costs six comparisons per point to build and one
+         * test to use, and all but a handful of curves are nowhere near the
+         * ray. It is computed rather than cached on purpose: points are moved
+         * in place by smooth, liquify, bend and the joystick, and a cached
+         * bound that missed one of them would silently stop finding a curve
+         * the user can plainly see.
+         */
+        var cx = 0.0; var cy = 0.0; var cz = 0.0
+        for (p in pts) { cx += p.p.x; cy += p.p.y; cz += p.p.z }
+        val n = pts.size
+        cx /= n; cy /= n; cz /= n
+        var farSq = 0.0
+        for (p in pts) {
+            val dx = p.p.x - cx; val dy = p.p.y - cy; val dz = p.p.z - cz
+            val d = dx * dx + dy * dy + dz * dz
+            if (d > farSq) farSq = d
+        }
+        val reach = kotlin.math.sqrt(farSq) + radius
+        boundsCentre.set(cx, cy, cz)
+        if (ray.distanceSqToPoint(boundsCentre) > reach * reach) return false
         if (pts.size == 1) {
             val d = ray.distanceSqToPoint(pts[0].p)
             if (d <= radius * radius) { out.set(pts[0].p); return true }
