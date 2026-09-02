@@ -366,6 +366,45 @@ made a choice that its own medium forced, check what Feather did before
 copying it — and the tell is any control that a tablet user would reach for
 far more often than a laptop user would.
 
+### A third round: a subsystem nobody connected
+
+Twelve faults in the group system, and they are one fault repeated. Groups
+were built as a data model, tested as a data model, and then not wired to
+the things that read one:
+
+- `editable()` — the list of curves a hidden group should be missing from —
+  was written, tested, and called by NOBODY. Every route to the renderer
+  passed `sketch.strokes`, so hiding a group dimmed its row and changed
+  nothing on screen. An app comment stated the rule the code did not keep:
+  "the renderer draws what it is given rather than asking whether each
+  stroke is visible".
+- `refreshGroups` existed and was not called from `refreshScene`, the one
+  function every document change passes through, so the curve counts on the
+  rows were whatever they had been the last time somebody touched the panel.
+- `active` was written into the file and never read back, so reopening a
+  sketch always dropped you into the first group.
+- Fill made strokes and skipped the line that puts them in a group, which
+  put them outside the system entirely — no count, no selection, no row
+  that could hide them.
+- New group and Duplicate group made their group OUTSIDE the history step,
+  so undo left an empty group behind every time.
+
+Every piece worked on its own. Nothing checked that they worked together,
+and the reason nothing did is the twelfth fault: **the group test suite was
+in `ColorTest.kt`**. A suite nobody can find by its filename is a suite
+nobody extends, so groups were tested once at the port and never again.
+
+Three of the twelve were also divergences of the second kind above —
+deleting a group freed its curves instead of taking them, new groups
+appended instead of going on top, and a duplicate landed at the end of the
+list rather than beside its original.
+
+The lesson, and it is a different one: a phase that says "ported into core
+with tests" is not a phase that says "reaches the screen". For anything
+still open, the question to ask is not whether the logic exists but which
+function is supposed to CALL it — and if the answer takes more than a
+moment to find, it probably does not.
+
 ---
 
 ## Phase 07 — Ship it
