@@ -394,7 +394,22 @@ class Chrome(private val act: Activity, val t: Tokens) {
     private lateinit var stageValue2: TextView
 
     /** `POPOVERS` in ui.js: only one of these is ever open. */
+    /**
+     * The cards that a touch on the sketch puts away.
+     *
+     * Registered through [popover] rather than added directly, because each
+     * one has to SWALLOW the touches that land on it: a panel is not clickable
+     * by default, so a tap on a blank part of the colour card fell straight
+     * through to the GL surface underneath and closed the card the user was
+     * reaching into. The web build makes the same exception by hand, skipping
+     * its dismiss handler for anything inside a popover.
+     */
     private val popovers = ArrayList<View>()
+
+    private fun popover(v: View) {
+        v.isClickable = true
+        popovers.add(v)
+    }
     private var railHidden = false
 
     /*
@@ -873,7 +888,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
         }
         keypad.addView(grid)
         keypad.visibility = View.GONE
-        popovers.add(keypad)
+        popover(keypad)
     }
 
     /**
@@ -1743,7 +1758,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
         brushGrid.setPadding(t.dp(8f), t.dp(8f), t.dp(8f), t.dp(8f))
         brushGrid.addView(grid)
         brushGrid.visibility = View.GONE
-        popovers.add(brushGrid)
+        popover(brushGrid)
     }
 
     /** `#slidePop` — size 1..300, opacity 5..100. */
@@ -1792,7 +1807,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
         slidePop.addView(pressRow)
 
         slidePop.visibility = View.GONE
-        popovers.add(slidePop)
+        popover(slidePop)
     }
 
     private fun sliderRow(
@@ -1916,7 +1931,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
             ).apply { gravity = Gravity.CENTER_HORIZONTAL; topMargin = t.dp(8f) },
         )
         colorCard.visibility = View.GONE
-        popovers.add(colorCard)
+        popover(colorCard)
     }
 
     /** The colour the card is showing, which is whatever it is pointed at. */
