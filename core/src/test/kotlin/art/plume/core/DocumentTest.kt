@@ -202,13 +202,18 @@ class DocumentTest {
         assertTrue(Document.restore(text, out, GuideScene(), Camera().apply { resize(800, 800) }).ok)
 
         assertEquals(2, out.groups.size)
-        assertEquals("scaffold", out.groups[0].name)
-        assertFalse(out.groups[0].visible, "a hidden group came back visible")
-        assertTrue(out.groups[1].visible)
+        /* by name, not by index. A new group goes on TOP, so the list in
+           memory is [ink, scaffold] — and the round trip has to reproduce
+           THAT order rather than reverse it, which is the property worth
+           asserting here. */
+        assertEquals(listOf("ink", "scaffold"), out.groups.map { it.name })
+        val byName = out.groups.associateBy { it.name }
+        assertFalse(byName.getValue("scaffold").visible, "a hidden group came back visible")
+        assertTrue(byName.getValue("ink").visible)
 
         // the curves point at the right groups, by the NEW ids
-        assertEquals(out.groups[0].id, out.strokes[0].group)
-        assertEquals(out.groups[1].id, out.strokes[1].group)
+        assertEquals(byName.getValue("scaffold").id, out.strokes[0].group)
+        assertEquals(byName.getValue("ink").id, out.strokes[1].group)
         assertNull(out.strokes[2].group, "an ungrouped curve should stay ungrouped")
         assertFalse(out.visible(out.strokes[0]), "the hidden group is not hiding anything")
     }
@@ -241,8 +246,13 @@ class DocumentTest {
         assertEquals(2, sketch.strokes.size)
         assertEquals(2, sketch.groups.size, "one group per distinct id")
         assertTrue(sketch.groups.all { it.name.isNotEmpty() }, "an invented group needs a name")
-        assertEquals(sketch.groups[0].id, sketch.strokes[0].group)
-        assertEquals(sketch.groups[1].id, sketch.strokes[1].group)
+        /* by identity rather than by index: what matters is that each stroke
+           lands in the group invented for ITS id, and the invented groups keep
+           the order the ids appear in the file */
+        val byName = sketch.groups.associateBy { it.name }
+        assertEquals(byName["Group 7"]?.id, sketch.strokes[0].group)
+        assertEquals(byName["Group 9"]?.id, sketch.strokes[1].group)
+        assertEquals(listOf("Group 7", "Group 9"), sketch.groups.map { it.name })
     }
 
     @Test

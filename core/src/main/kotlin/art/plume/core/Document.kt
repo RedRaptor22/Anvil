@@ -484,10 +484,14 @@ object Document {
                 JsonObject().put("id", grp.id).put("name", grp.name).put("visible", grp.visible),
             )
         }
+        /* THE ACTIVE GROUP IS THE ACTIVE ONE, not the first. Writing the
+           first meant reopening a sketch always dropped you back into Group 1
+           however long you had been working in another — and the next stroke
+           went in there. */
         doc.put(
             "groups",
             JsonObject()
-                .put("active", sketch.groups.firstOrNull()?.id ?: 0)
+                .put("active", sketch.activeGroup ?: sketch.groups.firstOrNull()?.id ?: 0)
                 .put("list", groupList),
         )
 
@@ -642,14 +646,25 @@ object Document {
      * grouped stay ungrouped.
      */
     private fun restoreGroups(root: JsonObject, sketch: Sketch): Map<Int, StrokeGroup> {
-        val list = root.obj("groups")?.arr("list")
+        val groups = root.obj("groups")
+        val list = groups?.arr("list")
         val byOldId = HashMap<Int, StrokeGroup>()
         if (list != null && list.size > 0) {
+            /* APPENDED, NOT UNSHIFTED. A new group goes on top, but restoring
+               a file is not creating groups — it is reproducing a list that
+               already has an order, and unshifting each one in turn would
+               reverse the whole panel on every save-and-open cycle. */
             for (item in list.items) {
                 val o = item.asObject() ?: continue
-                val g = sketch.newGroup(o.str("name") ?: "Group")
+                val g = sketch.newGroup(o.str("name") ?: "Group", sketch.groups.size)
                 g.visible = o.bool("visible", true)
                 o["id"]?.asInt()?.let { byOldId[it] = g }
+            }
+            /* the file's ids are its own, so the active one is looked up the
+               same way every stroke's is — it was not read back at all before,
+               which undid half of writing it */
+            groups["active"]?.asInt()?.let { old ->
+                byOldId[old]?.let { sketch.setActiveGroup(it.id) }
             }
         } else {
             // v1: invent one group per distinct id the strokes mention
@@ -657,7 +672,7 @@ object Document {
             root.arr("strokes")?.items?.forEach { s ->
                 s.asObject()?.get("group")?.asInt()?.let { ids.add(it) }
             }
-            for (id in ids) byOldId[id] = sketch.newGroup("Group $id")
+            for (id in ids) byOldId[id] = sketch.newGroup("Group $id", sketch.groups.size)
         }
         return byOldId
     }

@@ -315,7 +315,7 @@ class MainActivity : Activity(), Gestures.Listener {
         pushSettings()
         refreshControls()
         syncBrushControls()
-        renderer.setStrokes(sketch.strokes)
+        pushStrokes()
         pushGuides()
         hideSystemBars()
     }
@@ -1248,12 +1248,30 @@ class MainActivity : Activity(), Gestures.Listener {
 
     private fun newGroup() {
         val g = sketch.newGroup(getString(R.string.group_new, sketch.groups.size + 1))
+        val at = sketch.indexOfGroup(g)
         val previous = sketch.activeGroup
+        /*
+         * THE STEP HAS TO OWN THE GROUP, NOT JUST THE ACTIVE ONE.
+         *
+         * This used to create the group here and let the step move the active
+         * marker only — so undoing "New group" put you back in the group you
+         * came from and LEFT THE NEW ONE SITTING THERE, empty. Two taps of new
+         * and two of undo, and the panel had two groups nobody asked for.
+         *
+         * restoreGroup puts the same object back, ids and all, so the curves
+         * a redo re-points at it still find it.
+         */
         history.run(
             Step(
                 "New group",
-                onRedo = { sketch.setActiveGroup(g.id); refreshGroups() },
-                onUndo = { sketch.setActiveGroup(previous); refreshGroups() },
+                onRedo = {
+                    sketch.restoreGroup(g, at)
+                    sketch.setActiveGroup(g.id); refreshGroups()
+                },
+                onUndo = {
+                    sketch.deleteGroup(g)
+                    sketch.setActiveGroup(previous); refreshGroups()
+                },
             ),
         )
     }
@@ -1295,16 +1313,21 @@ class MainActivity : Activity(), Gestures.Listener {
     private fun duplicateActiveGroup() {
         val g = sketch.groupById(sketch.activeGroup) ?: return
         val (copy, copies) = sketch.duplicateGroup(g)
+        val at = sketch.indexOfGroup(copy)
         val previous = sketch.activeGroup
+        /* the copy's GROUP is part of the step too, for the reason above: undo
+           took the copied curves away and left the empty copy behind */
         history.run(
             Step(
                 "Duplicate group", cost = copies.sumOf { it.pts.size },
                 onRedo = {
+                    sketch.restoreGroup(copy, at)
                     for (c in copies) if (sketch.indexOf(c) < 0) sketch.add(c)
                     sketch.setActiveGroup(copy.id); refreshScene(); refreshGroups()
                 },
                 onUndo = {
                     for (c in copies) sketch.remove(c)
+                    sketch.deleteGroup(copy)
                     sketch.setActiveGroup(previous); refreshScene(); refreshGroups()
                 },
             ),
@@ -1313,25 +1336,42 @@ class MainActivity : Activity(), Gestures.Listener {
     }
 
     /**
-     * FACT (C.8): deleting a group frees its curves rather than taking them
-     * with it. Removing a folder should not remove the work in it, and there
-     * is no undo prompt that makes the other reading safe.
+     * DELETING A GROUP TAKES ITS CURVES WITH IT, as a layer does.
+     *
+     * This used to free them instead — the group went, the work stayed — on
+     * the argument that removing a folder should not remove what is in it and
+     * that no undo prompt made the other reading safe. The reference does the
+     * opposite and says why: "undo puts both back — which is the reason this
+     * is not behind a confirmation dialog." It is one tap.
+     *
+     * Freeing them was also worse than it looked. `ensureGroup` adopts
+     * anything ungrouped on the next refresh, so deleting a group did not
+     * leave its curves loose — it quietly moved every one of them into another
+     * group, which is neither of the two things anyone expected.
      */
     private fun deleteActiveGroup() {
         val g = sketch.groupById(sketch.activeGroup) ?: return
         if (sketch.groups.size <= 1) { toast(getString(R.string.last_group)); return }
         val members = sketch.membersOf(g.id)
+        val at = sketch.indexOfGroup(g)          // put it back where it was
+        val atStroke = members.map { sketch.indexOf(it) }
         val previous = sketch.activeGroup
         history.run(
             Step(
-                "Delete group",
+                "Delete group", cost = members.sumOf { it.pts.size },
                 onRedo = {
+                    for (s in members) sketch.remove(s)
                     sketch.deleteGroup(g)
                     sketch.setActiveGroup(null); refreshScene(); refreshGroups()
                 },
                 onUndo = {
-                    sketch.restoreGroup(g)
-                    for (s in members) s.group = g.id
+                    /* at the row it was on, not at the bottom: the list is a
+                       stack you can read, and an undo that moved a group to
+                       the end would not read as an undo */
+                    sketch.restoreGroup(g, at)
+                    /* and each curve at the depth it was drawn at, since draw
+                       order is what decides who is on top */
+                    for (i in members.indices) sketch.addAt(atStroke[i], members[i])
                     sketch.setActiveGroup(previous); refreshScene(); refreshGroups()
                 },
             ),
@@ -2092,7 +2132,7 @@ class MainActivity : Activity(), Gestures.Listener {
         } else {
             Editing.vacuumAt(sketch, camera, x, y, m)
         }
-        renderer.setStrokes(sketch.strokes)
+        pushStrokes()
     }
 
     private fun stepSmooth(x: Double, y: Double) {
@@ -2707,10 +2747,27 @@ class MainActivity : Activity(), Gestures.Listener {
 
     private fun refreshScene() {
         pushFold()
-        renderer.setStrokes(sketch.strokes)
+        pushStrokes()
         refreshControls()
         scheduleAutosave()
         surface.requestRender()
+    }
+
+    /**
+     * WHAT THE RENDERER IS ALLOWED TO DRAW.
+     *
+     * The renderer draws what it is given rather than asking whether each
+     * stroke is visible, which is why this is the only route to it — every
+     * call site used to pass `sketch.strokes` and a hidden group went on
+     * drawing. The row dimmed, the eye closed, and nothing left the screen.
+     *
+     * Hiding also drops the hidden curves from the selection: the joystick
+     * would otherwise go on driving them, and the selection bar go on offering
+     * to duplicate and delete curves nobody can see.
+     */
+    private fun pushStrokes() {
+        if (sketch.dropHiddenFromSelection() > 0) chrome.setSelection(sketch.selection.size)
+        renderer.setStrokes(sketch.editable())
     }
 
     /** Points moved in place, so the meshes built from them are stale. */

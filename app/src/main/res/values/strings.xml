@@ -111,7 +111,7 @@
     <string name="nothing_selected">Nothing selected</string>
     <string name="moved_to_group">Moved %1$d into %2$s</string>
     <string name="group_duplicated">Duplicated %1$d curves</string>
-    <string name="group_deleted">Group deleted, %1$d curves kept</string>
+    <string name="group_deleted">Group deleted with %1$d curves — undo puts both back</string>
     <string name="last_group">The last group cannot be deleted</string>
 
     <!-- the liquify strip -->

@@ -54,23 +54,43 @@ class Sketch {
 
     // ---- groups ---------------------------------------------------------
 
-    fun newGroup(name: String): StrokeGroup =
-        StrokeGroup(StrokeGroup.freshId(), name).also { groupList.add(it) }
+    /**
+     * A NEW GROUP GOES ON TOP.
+     *
+     * `S.groups.unshift(g)` — the newest layer is the one you are working in,
+     * so it belongs at the head of the list where the eye starts, and
+     * [ensureGroup]'s fallback picks index 0 for the same reason. This build
+     * appended instead, which put every new group at the bottom of a panel you
+     * then had to scroll.
+     */
+    fun newGroup(name: String, at: Int = 0): StrokeGroup =
+        StrokeGroup(StrokeGroup.freshId(), name).also {
+            groupList.add(clamp(at, 0, groupList.size), it)
+        }
 
     fun groupById(id: Int?): StrokeGroup? =
         if (id == null) null else groupList.firstOrNull { it.id == id }
 
     /**
-     * Delete a group. The curves in it are NOT deleted — they come out of the
-     * group and stay in the drawing. Removing a folder should not remove the
-     * work in it, and there is no undo prompt that makes the other reading
-     * safe.
+     * Delete a group, and hand back the curves that were in it.
+     *
+     * THE CURVES ARE NOT REMOVED HERE — the caller decides what happens to
+     * them. Two readings are possible and this build had the wrong one: it
+     * used to null out every member's group and leave the curves in the
+     * drawing, on the argument that removing a folder should not remove the
+     * work in it.
+     *
+     * The reference deletes them, as a layer does, and its own note gives the
+     * reason the cautious reading is not needed: "undo puts both back — which
+     * is the reason this is not behind a confirmation dialog". Freeing them
+     * was also worse than it looked, because [ensureGroup] adopts anything
+     * ungrouped on the next refresh: deleting a group quietly MOVED all of its
+     * work into another one.
      */
     fun deleteGroup(g: StrokeGroup): List<Stroke> {
-        val freed = list.filter { it.group == g.id }
-        for (s in freed) s.group = null
+        val members = list.filter { it.group == g.id }
         groupList.remove(g)
-        return freed
+        return members
     }
 
     fun assign(s: Stroke, g: StrokeGroup?) { s.group = g?.id }
@@ -83,6 +103,27 @@ class Sketch {
     fun restoreGroup(g: StrokeGroup, at: Int = groupList.size) {
         if (groupList.any { it.id == g.id }) return
         groupList.add(clamp(at, 0, groupList.size), g)
+    }
+
+    /** Where a group sits in the list, so an undo can put it back there. */
+    fun indexOfGroup(g: StrokeGroup): Int = groupList.indexOf(g)
+
+    /**
+     * A CURVE NOBODY CAN SEE IS NOT SELECTED.
+     *
+     * `S.applyVisibility`, which deselects anything that has just become
+     * invisible. Without it, hiding a group left its curves in the selection:
+     * the joystick went on driving them, the selection bar went on offering to
+     * duplicate and delete them, and the count in the corner claimed a number
+     * of curves that were not on screen.
+     *
+     * @return how many were dropped, so a caller can tell whether anything
+     *   changed without diffing the selection itself.
+     */
+    fun dropHiddenFromSelection(): Int {
+        val gone = selectionSet.filter { !visible(it) }
+        for (s in gone) { s.selected = false; selectionSet.remove(s) }
+        return gone.size
     }
 
     /** Every curve in a group, in draw order. */
@@ -123,7 +164,9 @@ class Sketch {
      * draw order — which is what decides who is on top.
      */
     fun duplicateGroup(g: StrokeGroup): Pair<StrokeGroup, List<Stroke>> {
-        val copy = newGroup(g.name + " copy")
+        /* beside the original in the PANEL as well as in draw order: a copy
+           that jumps to the top of the list is a copy you have to hunt for */
+        val copy = newGroup(g.name + " copy", indexOfGroup(g).coerceAtLeast(0))
         copy.visible = g.visible
         val members = membersOf(g.id)
         val copies = members.map { m -> m.copyStroke().also { c -> c.group = copy.id } }
