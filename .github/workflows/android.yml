@@ -29,6 +29,11 @@ jobs:
       # whether or not you want it, so without this the job that is meant to
       # prove core needs no SDK quietly configures the Android module too.
       - run: ./gradlew :core:test -PcoreOnly --no-daemon
+      # The APK job proves :app compiles, which is not the same as
+      # proving it launches: a control read before its builder has made
+      # it is a runtime fault, and it kept the app from opening at all
+      # for four commits. This is the check that sees it.
+      - run: python3 tools/initorder.py
 
   apk:
     name: Debug APK

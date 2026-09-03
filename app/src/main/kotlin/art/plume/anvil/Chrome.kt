@@ -487,6 +487,26 @@ class Chrome(private val act: Activity, val t: Tokens) {
      */
     private var openSheet: LinearLayout? = null
 
+    /*
+     * NOTHING REFRESHES UNTIL EVERYTHING EXISTS.
+     *
+     * refresh() reads every control on the screen, and the controls are made
+     * by nineteen builders in a row — so a builder that refreshes reads the
+     * controls of every builder after it, which have not been assigned yet.
+     * buildColorCard does exactly that: it opens on the wheel through
+     * showColorPage, which refreshes, and the settings grids it then reads
+     * are built two steps later. The result was an
+     * UninitializedPropertyAccessException thrown out of this constructor,
+     * out of onCreate, and an app that would not open at all.
+     *
+     * The guard sits here rather than at that one call site because the fault
+     * is the shape of construction and not one builder: any of them can reach
+     * refresh() through a helper, and none of them needs the screen synced
+     * before the screen exists. The last line of init syncs it once, when
+     * there is something to sync.
+     */
+    private var built = false
+
     init {
         buildTopLeft()
         buildViewInfo()
@@ -508,6 +528,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
         buildSysMenu()
         buildGallery()
         place()
+        built = true
         applyMode()
         refresh()
     }
@@ -3280,6 +3301,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
 
     /** `UI.refresh` — every button re-derives its own state from the model. */
     fun refresh() {
+        if (!built) return
         for ((which, b) in toolButtons) b.on = which == tool
         showLiveHalves()
         for ((name, tile) in brushTiles) tile.solid = name == brush
