@@ -26,8 +26,15 @@ import kotlin.math.min
  */
 object Curves {
 
-    /** How many points a comparison and an average are made on. */
-    const val SAMPLES = 24
+    /**
+     * How many points a comparison and an average are made on.
+     *
+     * The same count a guide's profile is built at, because the averaged curve
+     * goes straight into one: averaging at a coarser resolution would hand the
+     * sweep a 24-segment polyline to smooth back up, and a merged bundle would
+     * come out visibly more angular than any of the strokes that made it.
+     */
+    const val SAMPLES = Tune.GUIDE_PROFILE_SEG
 
     /**
      * Curves grouped by proximity, each group averaged into one.
