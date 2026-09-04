@@ -51,8 +51,29 @@ object Tune {
     const val BRUSH_MIN_MM = 1.0
     const val BRUSH_MAX_MM = 300.0
 
-    /** GUESS: orbit sensitivity, radians per pixel. */
-    const val ORBIT_PER_PX = 0.0062
+    /**
+     * Orbit sensitivity, radians per DENSITY-INDEPENDENT PIXEL.
+     *
+     * The web build's number was 0.0062 radians per CSS pixel, and it was
+     * carried over here against DEVICE pixels — so on a phone at 3x the same
+     * finger travel swung the camera three times as far, which is the
+     * "navigation is too sensitive" that it felt like.
+     *
+     * A dp is 1/160 inch and a CSS pixel is 1/96, so matching the browser's
+     * feel per inch of travel is 0.0062 x 96/160. An inch of drag is then
+     * about 34 degrees, the same as an inch of mouse.
+     */
+    const val ORBIT_PER_DP = 0.0037
+
+    /**
+     * GUESS: how close two curves must run to be read as one.
+     *
+     * A fraction of their own length, not a distance: 0.12 means curves whose
+     * average separation is under an eighth of their length are the same line
+     * drawn more than once. Chosen so a bundle of overdrawn strokes merges and
+     * two sides of a form — which are the width of the form apart — do not.
+     */
+    const val CURVE_MERGE_FRACTION = 0.12
 
     /** GUESS: release-momentum decay per frame, tuned by feel. */
     const val SPIN_DECAY = 0.92

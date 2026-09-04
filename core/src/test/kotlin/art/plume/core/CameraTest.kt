@@ -135,7 +135,7 @@ class CameraTest {
         assertEquals(r0, c.eye.distanceTo(c.pivot), 1e-9)
         assertTrue(c.eye.distanceTo(eye0) > 1e-3, "the eye did not actually move")
         // the documented sensitivity, not just "some rotation"
-        assertEquals(Math.PI * 0.25 - 80.0 * Tune.ORBIT_PER_PX, c.theta, 1e-12)
+        assertEquals(Math.PI * 0.25 - 80.0 * Tune.ORBIT_PER_DP, c.theta, 1e-12)
     }
 
     @Test

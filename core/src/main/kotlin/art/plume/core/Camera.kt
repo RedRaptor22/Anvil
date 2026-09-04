@@ -332,10 +332,16 @@ class Camera {
 
     // ---- navigation -----------------------------------------------------
 
-    /** One finger, dragging: swing the camera around the pivot. */
-    fun orbitBy(dxPx: Double, dyPx: Double): Camera {
-        theta -= dxPx * Tune.ORBIT_PER_PX
-        phi -= dyPx * Tune.ORBIT_PER_PX
+    /**
+     * One finger, dragging: swing the camera around the pivot.
+     *
+     * The deltas are DENSITY-INDEPENDENT pixels, which is the caller's job to
+     * hand over: a screen's pixels are not a unit of hand movement, and the
+     * same swipe on a dense phone is several times the pixels of a laptop's.
+     */
+    fun orbitBy(dxDp: Double, dyDp: Double): Camera {
+        theta -= dxDp * Tune.ORBIT_PER_DP
+        phi -= dyDp * Tune.ORBIT_PER_DP
         return apply()
     }
 

@@ -482,7 +482,16 @@ class TipCard(ctx: Context, private val t: Tokens) : TextView(ctx) {
             cornerRadius = t.dpf(9f)
         }
         setPadding(t.dp(11f), t.dp(6f), t.dp(11f), t.dp(6f))
-        elevation = t.dpf(8f)
+        /*
+         * ABOVE EVERY PANEL, because it is always ABOUT one.
+         *
+         * Android draws by elevation first and child order second, so at the
+         * 8dp a panel has, a card added later still lost to the large panels
+         * at 18 — and the brush names, which exist to label the tiles of the
+         * brush panel, came up behind the brush panel. A label has to outrank
+         * whatever it is labelling.
+         */
+        elevation = t.dpf(26f)
         maxWidth = t.dp(240f)
         alpha = 0f
         visibility = GONE

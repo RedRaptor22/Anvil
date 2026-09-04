@@ -23,6 +23,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import art.plume.core.Bounds
 import art.plume.core.Camera
 import art.plume.core.ColorSpace
+import art.plume.core.Curves
 import art.plume.core.Dedupe
 import art.plume.core.Document
 import art.plume.core.DocumentEnv
@@ -162,6 +163,9 @@ class MainActivity : Activity(), Gestures.Listener {
      * not come back re-lit after a trip through the phone.
      */
     private var carried: Document.Carried? = null
+
+    /** Device pixels per dp, for the gestures that mean a distance of hand. */
+    private val density: Float by lazy { resources.displayMetrics.density }
 
     private val io = java.util.concurrent.Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
@@ -837,8 +841,27 @@ class MainActivity : Activity(), Gestures.Listener {
 
     // ---- staging ----------------------------------------------------------
 
+    /**
+     * OVERDRAWN CURVES ARE ONE SECTION.
+     *
+     * A loft interpolates between its sections in the order they were picked,
+     * so a bundle of strokes laid over each other — which is how a line gets
+     * drawn — spent most of the surface crossing four millimetres and left the
+     * span you actually wanted as a sliver. Curves close enough to be the same
+     * line are averaged into the line they were aiming at, and the loft runs
+     * from THAT to the next distinct curve.
+     *
+     * If everything merged into one there is nothing to loft between, and the
+     * honest answer is the curves as they were: refusing a selection because
+     * this step was too eager would be worse than a busy surface.
+     */
     private fun previewLoft() {
-        stagedGuide = GuideEditing.loft(loftSel, loftTension)
+        val merged = Curves.mergeStrokes(loftSel)
+        stagedGuide = if (merged.size >= 2) {
+            GuideEditing.loftFromCurves(merged, loftTension)
+        } else {
+            GuideEditing.loft(loftSel, loftTension)
+        }
         pushGuides()
         showStaging()
     }
@@ -1772,7 +1795,7 @@ class MainActivity : Activity(), Gestures.Listener {
 
     override fun onDrawCancel() {
         // put back anything the drag had already changed
-        dragPositions?.let { snap -> dragTargets?.let { Editing.restore(it, snap) } }
+        dragPositions?.let { snap -> dragTargets?.let { restorePoints(it, snap) } }
         dragStrokes?.let { setDocument(it) }
         dragSelection?.let { sketch.selectOnly(it) }
         synchronized(liveBuffer) { live = null }
@@ -2398,6 +2421,24 @@ class MainActivity : Activity(), Gestures.Listener {
         refreshScene()
     }
 
+    /**
+     * Put moved points back, AND DROP THE MESHES BUILT FROM THEM.
+     *
+     * The renderer keeps one uploaded mesh per stroke and holds onto it for as
+     * long as the stroke is in the list — which is right, and is why moving a
+     * curve has to say so. A point moves IN PLACE, so the stroke that owns it
+     * is the same object it always was and setStrokes sees nothing to rebuild:
+     * undo restored every coordinate and the screen kept drawing the curve
+     * where the drag had left it. Every tool that nudges points rather than
+     * adding or removing them undid nothing you could see — transform, smooth,
+     * liquify, the lot — which is the report that "transform can't be undone".
+     */
+    private fun restorePoints(targets: List<Stroke>, snap: List<List<Vec3>>) {
+        Editing.restore(targets, snap)
+        for (s in targets) renderer.invalidate(s)
+        refreshScene()
+    }
+
     /** The same, for a tool that nudges points rather than adding or removing. */
     private fun commitPointChange(label: String) {
         val targets = dragTargets ?: return
@@ -2407,8 +2448,8 @@ class MainActivity : Activity(), Gestures.Listener {
         history.push(
             Step(
                 label, cost = targets.sumOf { it.pts.size },
-                onRedo = { Editing.restore(targets, after); refreshScene() },
-                onUndo = { Editing.restore(targets, before); refreshScene() },
+                onRedo = { restorePoints(targets, after) },
+                onUndo = { restorePoints(targets, before) },
             ),
         )
         refreshScene()
@@ -2666,10 +2707,20 @@ class MainActivity : Activity(), Gestures.Listener {
         val right = Vec3(); val up = Vec3(); val back = Vec3()
         camera.basis(right, up, back)
 
-        val g = if (sel.size == 1) {
-            Guides.createFromStroke(sel[0].pts.map { it.p.copy() }, fwd, right, camera.radius)
+        /*
+         * The same reading as the loft's: a bundle of overdrawn strokes is one
+         * curve, and one curve makes a surface by being SWEPT ALONG THE VIEW —
+         * the guide stands up out of the screen, facing you, which is the
+         * surface you were about to draw the next stroke on. Two or more
+         * distinct curves still loft between themselves, because a span
+         * between them is a shape you can point at and a sweep of each would
+         * only be several walls.
+         */
+        val merged = Curves.mergeStrokes(sel)
+        val g = if (merged.size == 1) {
+            Guides.createFromStroke(merged[0], fwd, right, camera.radius)
         } else {
-            GuideEditing.loft(sel, loftTension)
+            GuideEditing.loftFromCurves(merged, loftTension)
         }
         if (g == null) { toast(getString(R.string.guide_from_selection_failed)); return }
 
@@ -3271,6 +3322,19 @@ class MainActivity : Activity(), Gestures.Listener {
         camera.killSpin()
         val navFingers = if (gestures.fingerDraws) fingers - 1 else fingers
 
+        /*
+         * A PIXEL IS NOT A UNIT OF HAND MOVEMENT.
+         *
+         * Orbit and the lens are ported from a web build whose deltas were CSS
+         * pixels; here they arrive as device pixels, so on a 3x phone the same
+         * swipe turned the camera three times as far and the whole thing
+         * handled like ice. They are converted; PAN IS NOT, because panBy
+         * already turns pixels into world units through the viewport and its
+         * whole contract is that the sketch keeps up with your finger.
+         */
+        val ddx = dx / density
+        val ddy = dy / density
+
         /* THREE FINGERS SET THE LENS, and nothing else: a focal change that
            also orbited would be two things at once, and it is a vertical
            gesture on purpose.
@@ -3280,7 +3344,7 @@ class MainActivity : Activity(), Gestures.Listener {
         if (navFingers >= 3) {
             lastGestureOrbited = false
             camera.focal = clamp(
-                camera.focal * exp(-dy.toDouble() * 0.006),
+                camera.focal * exp(-ddy.toDouble() * 0.006),
                 Tune.FOCAL_MIN, Tune.FOCAL_MAX,
             )
             camera.apply()
@@ -3292,7 +3356,7 @@ class MainActivity : Activity(), Gestures.Listener {
         }
 
         lastGestureOrbited = navFingers <= 1
-        if (lastGestureOrbited) camera.orbitBy(dx.toDouble(), dy.toDouble())
+        if (lastGestureOrbited) camera.orbitBy(ddx.toDouble(), ddy.toDouble())
         else camera.panBy(dx.toDouble(), dy.toDouble())
         /* zoom and roll are what two fingers ADD; one finger has neither a
            span nor a twist to read, and Gestures reports 1 and 0 for them */
@@ -3305,7 +3369,10 @@ class MainActivity : Activity(), Gestures.Listener {
         // only an orbit coasts: a pan that kept sliding would drift the pivot
         // away from whatever you had just lined up
         if (!lastGestureOrbited) return
-        camera.addSpin(-dx.toDouble() * Tune.ORBIT_PER_PX, -dy.toDouble() * Tune.ORBIT_PER_PX)
+        camera.addSpin(
+            -dx.toDouble() / density * Tune.ORBIT_PER_DP,
+            -dy.toDouble() / density * Tune.ORBIT_PER_DP,
+        )
         if (camera.spinning) startSpin()
     }
 

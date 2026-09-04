@@ -322,7 +322,9 @@ class Chrome(private val act: Activity, val t: Tokens) {
             cornerRadius = t.dpf(13f)
         }
         setPadding(t.dp(14f), t.dp(6f), t.dp(14f), t.dp(6f))
-        elevation = t.dpf(6f)
+        /* over the panels too: naming what just happened is no use behind
+           the card you did it from */
+        elevation = t.dpf(24f)
         alpha = 0f
         visibility = View.GONE
     }
@@ -338,6 +340,20 @@ class Chrome(private val act: Activity, val t: Tokens) {
 
     private var optHoverNib = true
     private var optActionPill = true
+
+    /**
+     * The palette group you are working out of, or null for none.
+     *
+     * Held rather than guessed. It used to be inferred from whichever group
+     * contained the current colour, which is wrong twice over: a colour in two
+     * groups belongs to whichever was searched first, and a colour you nudged
+     * off a swatch belongs to none, so the set you had chosen quietly stopped
+     * being the set you were stepping through.
+     */
+    private var pickedPalette: String? = null
+
+    /** Which brush the rail button is currently drawn as. */
+    private var brushIconShown = ""
 
     private val wheelPage = LinearLayout(act)
     private val palettePage = LinearLayout(act)
@@ -2085,17 +2101,26 @@ class Chrome(private val act: Activity, val t: Tokens) {
         palettePage.removeAllViews()
 
         fun heading(text: String, action: (() -> Unit)? = null) {
+            val chosen = text == pickedPalette
             val row = LinearLayout(act).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
                 layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
                 ).apply { topMargin = t.dp(8f); bottomMargin = t.dp(3f) }
+                /* THE WHOLE HEADING PICKS THE GROUP. A swipe steps through one
+                   group and there was no way to say WHICH — you got the group
+                   your current colour happened to be in, which is not a choice
+                   anyone made. */
+                setOnClickListener {
+                    pickedPalette = if (chosen) null else text
+                    rebuildPalettes()
+                }
             }
             row.addView(
                 TextView(act).apply {
                     this.text = text
-                    setTextColor(t.dim2)
+                    setTextColor(if (chosen) t.active else t.dim2)
                     textSize = 9.5f
                     letterSpacing = 0.09f
                     setTypeface(typeface, android.graphics.Typeface.BOLD)
@@ -2116,7 +2141,20 @@ class Chrome(private val act: Activity, val t: Tokens) {
         }
 
         fun swatchRow(colors: List<Int>, mine: Boolean, groupName: String) {
-            val grid = GridLayout(act).apply { columnCount = 8 }
+            val chosen = groupName == pickedPalette
+            val grid = GridLayout(act).apply {
+                columnCount = 8
+                /* the group you are stepping through is drawn as a set rather
+                   than as eight loose dots, so "only these" is visible */
+                if (chosen) {
+                    background = GradientDrawable().apply {
+                        setColor(t.panel2)
+                        cornerRadius = t.dpf(10f)
+                        setStroke(t.dp(1f), t.active)
+                    }
+                    setPadding(t.dp(3f), t.dp(3f), t.dp(3f), t.dp(3f))
+                }
+            }
             fun cell(build: View.() -> Unit) = View(act).apply {
                 layoutParams = GridLayout.LayoutParams().apply {
                     width = t.dp(19f); height = t.dp(19f)
@@ -2132,7 +2170,13 @@ class Chrome(private val act: Activity, val t: Tokens) {
                             setColor(c)
                             setStroke(t.dp(1f), t.line)
                         }
-                        setOnClickListener { applyCardColor(c) }
+                        /* taking a colour out of a group is also choosing the
+                           group: it is what you were reaching for */
+                        setOnClickListener {
+                            pickedPalette = groupName
+                            applyCardColor(c)
+                            rebuildPalettes()
+                        }
                         if (mine) {
                             setOnLongClickListener {
                                 userPalettes[groupName]?.remove(c)
@@ -3097,26 +3141,30 @@ class Chrome(private val act: Activity, val t: Tokens) {
             applyCardColor(next)
             return
         }
+        /*
+         * ON THE WHEEL A SWIPE IS BRIGHTNESS, not hue.
+         *
+         * The wheel already gives hue away — it is the angle, and you set it by
+         * putting a finger on the colour you want. What the wheel does NOT give
+         * you without a second gesture is the same colour lighter or darker,
+         * which is the adjustment you actually make while drawing: shading a
+         * form is one hue at several values. Stepping the hue instead moved you
+         * off the colour you had just chosen, which is the one thing a swipe
+         * should never do.
+         */
         val c = cardColor()
         val hsv = FloatArray(3)
         Color.colorToHSV(c, hsv)
-        hsv[0] = ((hsv[0] + dir * HUE_STEP_DEG) % 360f + 360f) % 360f
+        /* never all the way to black: a value of zero is a colour with no hue
+           left in it, and no amount of swiping back recovers the one you had */
+        hsv[2] = (hsv[2] + dir * VALUE_STEP).coerceIn(VALUE_FLOOR, 1f)
         applyCardColor(Color.HSVToColor(Color.alpha(c), hsv))
     }
 
-    /**
-     * The palette a step walks along: the one holding the colour you are on,
-     * so stepping continues the set you were already in rather than whichever
-     * happens to be first.
-     */
+    /** The group a step walks along: the one you picked, and only that one. */
     private fun activePalette(): List<Int>? {
-        val c = cardColor()
-        for ((_, colors) in userPalettes) if (colors.contains(c)) return colors
-        for ((_, colors) in BUILT_IN_PALETTES) {
-            if (colors.contains(c)) return colors.toList()
-        }
-        return userPalettes.values.firstOrNull()
-            ?: BUILT_IN_PALETTES.values.firstOrNull()?.toList()
+        val name = pickedPalette ?: return null
+        return userPalettes[name] ?: BUILT_IN_PALETTES[name]?.toList()
     }
 
     private fun buildGallery() {
@@ -3305,6 +3353,19 @@ class Chrome(private val act: Activity, val t: Tokens) {
         for ((which, b) in toolButtons) b.on = which == tool
         showLiveHalves()
         for ((name, tile) in brushTiles) tile.solid = name == brush
+        /*
+         * THE RAIL BUTTON IS THE BRUSH YOU ARE HOLDING.
+         *
+         * It showed a generic bristle, which told you where the brush popover
+         * was and nothing about what the next stroke would look like — and now
+         * that a swipe changes the brush without opening anything, "which one
+         * am I on" is a question the button has to answer by itself. The
+         * lookup is a string, so it only runs when the answer changed.
+         */
+        if (brushIconShown != brush) {
+            icons["brushType"]?.icon("brush_$brush")
+            brushIconShown = brush
+        }
         (colorDot.background as? GradientDrawable ?: GradientDrawable()).let { d ->
             d.shape = GradientDrawable.OVAL
             d.setColor(inkColor)
@@ -3477,8 +3538,11 @@ class Chrome(private val act: Activity, val t: Tokens) {
         /** How far a swipe travels per step. A thumb's comfortable nudge. */
         const val SWIPE_STEP_DP = 26f
 
-        /** A step around the wheel: twelve to the turn, so a lap is findable. */
-        const val HUE_STEP_DEG = 30f
+        /** A step of brightness: twenty from black to white, so a nudge shows. */
+        const val VALUE_STEP = 0.05f
+
+        /** Dark, but still a colour. */
+        const val VALUE_FLOOR = 0.06f
 
         /** The order a swipe walks, which is the order the grid shows. */
         val BRUSH_ORDER = listOf(
