@@ -218,6 +218,32 @@ class DocumentTest {
         assertFalse(out.visible(out.strokes[0]), "the hidden group is not hiding anything")
     }
 
+    @Test
+    fun `a faded group comes back faded, and an old file comes back solid`() {
+        val sketch = Sketch()
+        val faint = sketch.newGroup("underdrawing")
+        faint.opacity = 0.25
+        sketch.newGroup("ink")
+
+        val text = Document.toJsonText(sketch, GuideScene(), Camera().apply { resize(800, 800) })
+        val out = Sketch()
+        assertTrue(Document.restore(text, out, GuideScene(), Camera().apply { resize(800, 800) }).ok)
+
+        val byName = out.groups.associateBy { it.name }
+        assertEquals(0.25, byName.getValue("underdrawing").opacity, 1e-9)
+        assertEquals(1.0, byName.getValue("ink").opacity, 1e-9, "an untouched group is solid")
+
+        /* A FILE FROM BEFORE THE SLIDER EXISTED has no opacity on its groups,
+           and every one of them must read as fully drawn — a missing field
+           taken as zero would open an old sketch as a blank page. */
+        val field = "\"opacity\":0.25"
+        assertTrue(text.contains(field), "the field this test removes is not written that way")
+        val older = text.replace(field, "\"nothing\":0.25")
+        val back = Sketch()
+        assertTrue(Document.restore(older, back, GuideScene(), Camera().apply { resize(800, 800) }).ok)
+        for (g in back.groups) assertEquals(1.0, g.opacity, 1e-9, "\${g.name} came back faded")
+    }
+
     // ---- reading what this build did not write --------------------------------
 
     @Test

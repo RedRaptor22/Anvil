@@ -481,7 +481,8 @@ object Document {
         val groupList = JsonArray()
         for (grp in sketch.groups) {
             groupList.add(
-                JsonObject().put("id", grp.id).put("name", grp.name).put("visible", grp.visible),
+                JsonObject().put("id", grp.id).put("name", grp.name)
+                    .put("visible", grp.visible).put("opacity", grp.opacity),
             )
         }
         /* THE ACTIVE GROUP IS THE ACTIVE ONE, not the first. Writing the
@@ -674,6 +675,7 @@ object Document {
                 val o = item.asObject() ?: continue
                 val g = sketch.newGroup(o.str("name") ?: "Group", sketch.groups.size)
                 g.visible = o.bool("visible", true)
+                g.opacity = o.num("opacity", 1.0)
                 o["id"]?.asInt()?.let { byOldId[it] = g }
             }
             /* the file's ids are its own, so the active one is looked up the

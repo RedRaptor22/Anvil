@@ -28,6 +28,7 @@ import java.nio.FloatBuffer
 import java.nio.IntBuffer
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
+import kotlin.math.min
 
 /**
  * The GL ES 3.0 renderer.
@@ -110,7 +111,7 @@ class SketchRenderer : GLSurfaceView.Renderer {
     private var uEye = 0; private var uFogCol = 0
     private var uFogNear = 0; private var uFogFar = 0
     private var uShade = 0; private var uGlow = 0
-    private var uGrit = 0; private var uSelect = 0
+    private var uGrit = 0; private var uSelect = 0; private var uFade = 0
 
     private var lineProgram = 0
     private var lPos = 0; private var lCol = 0; private var lMvp = 0
@@ -238,6 +239,18 @@ class SketchRenderer : GLSurfaceView.Renderer {
             background.r.toFloat(), background.g.toFloat(), background.b.toFloat(), 1f,
         )
         GLES30.glEnable(GLES30.GL_DEPTH_TEST)
+        /*
+         * LESS-OR-EQUAL, WHICH IS THREE.JS'S DEFAULT AND NOT GL'S.
+         *
+         * The web build never says so because it never had to: three.js sets
+         * LessEqualDepth on every material, and this port took GL's own
+         * default of LESS instead. On a flat guide that is the difference
+         * between "the curve you just drew wins" and "whichever curve the
+         * rasteriser happened to favour wins, pixel by pixel" — which is where
+         * the black diagonals came from, the fill and the strokes over it
+         * splitting each quad along its triangulation.
+         */
+        GLES30.glDepthFunc(GLES30.GL_LEQUAL)
         GLES30.glEnable(GLES30.GL_CULL_FACE)
         GLES30.glCullFace(GLES30.GL_BACK)
 
@@ -260,6 +273,7 @@ class SketchRenderer : GLSurfaceView.Renderer {
         uGlow = GLES30.glGetUniformLocation(program, "uGlow")
         uGrit = GLES30.glGetUniformLocation(program, "uGrit")
         uSelect = GLES30.glGetUniformLocation(program, "uSelect")
+        uFade = GLES30.glGetUniformLocation(program, "uFade")
 
         shadowProgram = link(SHADOW_VERT, SHADOW_FRAG)
         sPos = GLES30.glGetAttribLocation(shadowProgram, "aPos")
@@ -997,12 +1011,15 @@ class SketchRenderer : GLSurfaceView.Renderer {
 
         GLES30.glDepthMask(true)
         GLES30.glDisable(GLES30.GL_BLEND)
-        for (s in list) if (pass(s) == OPAQUE) drawStroke(s, l.shaded)
+        /* the age bias is the stroke's place in the DRAWING, not in this pass:
+           a blended curve drawn after an opaque one is still the newer one */
+        GLES30.glEnable(GLES30.GL_POLYGON_OFFSET_FILL)
+        for ((i, s) in list.withIndex()) if (pass(s) == OPAQUE) drawStroke(s, l.shaded, i)
 
         GLES30.glEnable(GLES30.GL_BLEND)
         GLES30.glBlendFunc(GLES30.GL_SRC_ALPHA, GLES30.GL_ONE_MINUS_SRC_ALPHA)
         GLES30.glDepthMask(false)
-        for (s in list) if (pass(s) == BLENDED) drawStroke(s, l.shaded)
+        for ((i, s) in list.withIndex()) if (pass(s) == BLENDED) drawStroke(s, l.shaded, i)
 
         /*
          * FACT (C.5): "a Glow material enables glowing lines" — additive
@@ -1010,12 +1027,16 @@ class SketchRenderer : GLSurfaceView.Renderer {
          * stacking, and it is why glow is never shaded.
          */
         GLES30.glBlendFunc(GLES30.GL_SRC_ALPHA, GLES30.GL_ONE)
-        for (s in list) if (pass(s) == GLOWING) drawStroke(s, l.shaded)
+        for ((i, s) in list.withIndex()) if (pass(s) == GLOWING) drawStroke(s, l.shaded, i)
 
-        /* the live stroke last: it is the one on top of the drawing */
+        /* the live stroke last, and newer than everything: it is the one you
+           are drawing right now */
         GLES30.glBlendFunc(GLES30.GL_SRC_ALPHA, GLES30.GL_ONE_MINUS_SRC_ALPHA)
+        GLES30.glPolygonOffset(-1f, -(1f + min(list.size, DEPTH_ORDER_CAP)))
         drawLive(l.shaded)
 
+        GLES30.glDisable(GLES30.GL_POLYGON_OFFSET_FILL)
+        GLES30.glPolygonOffset(0f, 0f)
         GLES30.glDepthMask(true)
         GLES30.glDisable(GLES30.GL_BLEND)
     }
@@ -1030,17 +1051,36 @@ class SketchRenderer : GLSurfaceView.Renderer {
         val c = s.cfg
         return when {
             c.glow -> GLOWING
-            c.grit || s.opacity < 1.0 -> BLENDED
+            c.grit || s.opacity < 1.0 || fadeOf(s) < 1f -> BLENDED
             else -> OPAQUE
         }
     }
 
-    private fun drawStroke(s: Stroke, shadedNow: Boolean) {
+    /**
+     * One stroke, nudged towards the eye by where it comes in the drawing.
+     *
+     * LEQUAL settles an exact tie, and two flat curves on one guide are rarely
+     * an exact tie: they are triangulated differently, so their interpolated
+     * depths differ by an ULP or two and which one shows varies ACROSS THE
+     * SURFACE. That is the diagonal — it follows the diagonal of the quad.
+     *
+     * The offset is in units of the smallest resolvable depth difference, so
+     * [order] steps is [order] ULPs: enough to settle a tie by age, far too
+     * little to lift a curve off the surface it was painted onto. A stroke
+     * drawn later is a stroke drawn ON TOP, which is what a pen does.
+     *
+     * The slope term is there for the same reason a decal wants one: on a
+     * surface seen edge-on, depth changes fast enough across one pixel that a
+     * constant nudge is not a nudge at all.
+     */
+    private fun drawStroke(s: Stroke, shadedNow: Boolean, order: Int) {
         val c = s.cfg
+        GLES30.glPolygonOffset(-1f, -(1f + min(order, DEPTH_ORDER_CAP)))
         GLES30.glUniform1f(uShade, if (shadedNow && !c.glow) 1f else 0f)
         GLES30.glUniform1f(uGlow, if (c.glow) 1f else 0f)
         GLES30.glUniform1f(uGrit, if (c.grit) 1f else 0f)
         GLES30.glUniform1f(uSelect, if (s.selected) 1f else 0f)
+        GLES30.glUniform1f(uFade, fadeOf(s))
         draw(s)
     }
 
@@ -1122,6 +1162,26 @@ class SketchRenderer : GLSurfaceView.Renderer {
     // ---- guides ---------------------------------------------------------
 
     fun setGuides(list: List<Guide>): Unit = synchronized(strokes) { guides = list }
+
+    /**
+     * How strongly each group draws, by group id, and which group the live
+     * stroke will join.
+     *
+     * A UNIFORM rather than a rebuild. Opacity is baked into the vertex
+     * colours when a mesh is built, so fading a group that way would mean
+     * rebuilding every curve in it on every step of a slider drag — hundreds
+     * of meshes for a control that is still moving. One float per draw call
+     * costs nothing and the slider stays live.
+     */
+    fun setGroupFade(m: Map<Int, Float>, live: Int): Unit = synchronized(strokes) {
+        groupFade = m
+        liveGroup = live
+    }
+
+    private var groupFade: Map<Int, Float> = emptyMap()
+    private var liveGroup = 0
+
+    private fun fadeOf(s: Stroke): Float = groupFade[s.group] ?: 1f
 
     private fun drawGuides(m: FloatArray, e: FloatArray) {
         val list = synchronized(strokes) { guides }
@@ -1372,6 +1432,9 @@ class SketchRenderer : GLSurfaceView.Renderer {
             GLES30.glUniform1f(uGlow, if (c.glow) 1f else 0f)
             GLES30.glUniform1f(uGrit, if (c.grit) 1f else 0f)
             GLES30.glUniform1f(uSelect, 0f)
+            /* at the strength of the group it is about to join, or it would
+               jump the moment the pen came up */
+            GLES30.glUniform1f(uFade, groupFade[liveGroup] ?: 1f)
             bindAndDraw(b.vbo, b.nbo, b.cbo, b.ibo, buffer.indexCount)
         }
     }
@@ -1487,6 +1550,17 @@ class SketchRenderer : GLSurfaceView.Renderer {
          */
         const val SHADOW_MIN_INTERVAL_NS = 100_000_000L
 
+        /**
+         * The most depth-buffer steps the age bias may add up to.
+         *
+         * Each stroke asks for one more step than the one before it, and a
+         * step is the smallest difference the depth buffer can hold — so a
+         * thousand curves is a thousandth of nothing. The cap is only so that
+         * a drawing of a hundred thousand curves cannot turn a tie-breaker
+         * into a visible lift off the guide.
+         */
+        const val DEPTH_ORDER_CAP = 4096
+
         /** Which of the three ordered passes a stroke belongs to. */
         const val OPAQUE = 0
         const val BLENDED = 1
@@ -1555,6 +1629,7 @@ class SketchRenderer : GLSurfaceView.Renderer {
             uniform float uGlow;
             uniform float uGrit;
             uniform float uSelect;
+            uniform float uFade;
             uniform vec3 uEye;
             uniform vec3 uFogCol;
             uniform float uFogNear;
@@ -1604,7 +1679,7 @@ class SketchRenderer : GLSurfaceView.Renderer {
               }
 
               rgb = mix(rgb, vec3(0.36, 0.62, 1.0), uSelect * 0.55);
-              float a = vCol.a;
+              float a = vCol.a * uFade;
 
               if(uGrit > 0.5){
                 vec3 mm = vPos * 1000.0;

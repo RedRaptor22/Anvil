@@ -128,6 +128,9 @@ class Chrome(private val act: Activity, val t: Tokens) {
     var onGroupSelect: (Int) -> Unit = {}
     var onGroupAssign: (Int) -> Unit = {}
     var onGroupVisible: (id: Int, visible: Boolean) -> Unit = { _, _ -> }
+
+    /** How strongly a whole group draws. Live while the slider moves. */
+    var onGroupOpacity: (id: Int, value: Double) -> Unit = { _, _ -> }
     var onGroupNew: () -> Unit = {}
     var onGroupDuplicate: () -> Unit = {}
     var onGroupDelete: () -> Unit = {}
@@ -1581,6 +1584,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
         val count: Int,
         val visible: Boolean,
         val active: Boolean,
+        val opacity: Double = 1.0,
     )
 
     fun setGroups(rows: List<GroupRow>) {
@@ -1592,8 +1596,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
     /** `.grpRow` — the active one is outlined, a hidden one is dimmed. */
     private fun groupRow(g: Chrome.GroupRow): View {
         val row = LinearLayout(act).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
+            orientation = LinearLayout.VERTICAL
             background = GradientDrawable().apply {
                 setColor(if (g.active) t.panel3 else t.panel2)
                 cornerRadius = t.dpf(12f)
@@ -1603,6 +1606,15 @@ class Chrome(private val act: Activity, val t: Tokens) {
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
             ).apply { topMargin = t.dp(4f) }
+        }
+
+        /* the name, the count and the switches: one line, as it always was */
+        val line = LinearLayout(act).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            )
         }
 
         val name = TextView(act).apply {
@@ -1623,12 +1635,12 @@ class Chrome(private val act: Activity, val t: Tokens) {
              * for switching groups rather than a sliver beside the name.
              */
             setOnClickListener {
-                if (g.active) beginRename(row, this, g) else onGroupPick(g.id)
+                if (g.active) beginRename(line, this, g) else onGroupPick(g.id)
             }
         }
-        row.addView(name)
+        line.addView(name)
 
-        row.addView(
+        line.addView(
             TextView(act).apply {
                 text = if (g.count > 0) g.count.toString() else ""
                 setTextColor(t.dim2)
@@ -1637,12 +1649,12 @@ class Chrome(private val act: Activity, val t: Tokens) {
                 setPadding(t.dp(2f), 0, t.dp(2f), 0)
             },
         )
-        row.addView(
+        line.addView(
             IcoButton(act, t, IcoButton.SIZE_TINY).icon("enter").apply {
                 setOnClickListener { onGroupAssign(g.id) }
             },
         )
-        row.addView(
+        line.addView(
             IcoButton(act, t, IcoButton.SIZE_TINY)
                 .icon(if (g.visible) "eye" else "eye_off").apply {
                     if (!g.visible) {
@@ -1650,6 +1662,29 @@ class Chrome(private val act: Activity, val t: Tokens) {
                     }
                     setOnClickListener { onGroupVisible(g.id, !g.visible) }
                 },
+        )
+        row.addView(line)
+
+        /*
+         * HOW STRONGLY THE GROUP DRAWS, under its own name.
+         *
+         * Not the same control as the eye. Hiding takes a group out of the
+         * drawing; fading leaves it there to be worked against, which is what
+         * anyone means by a reference layer — the sketch underneath held back
+         * to a whisper while the line over it is drawn at full strength.
+         *
+         * On every row rather than only the active one: the group you want to
+         * hold back is by definition the one you are NOT drawing into, and
+         * making you select it first would fade the wrong thing on the way.
+         */
+        row.addView(
+            HSlider(act, t, 0.0, 1.0) { v -> onGroupOpacity(g.id, v) }.apply {
+                value = g.opacity
+                alpha = if (g.visible) 1f else 0.4f
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, t.dp(13f),
+                ).apply { topMargin = t.dp(4f); rightMargin = t.dp(4f) }
+            },
         )
 
         /* tap the row to make it active, hold to select everything in it */

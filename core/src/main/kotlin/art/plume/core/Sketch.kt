@@ -7,6 +7,18 @@ package art.plume.core
  * can be assigned to one.
  */
 class StrokeGroup(val id: Int, var name: String, var visible: Boolean = true) {
+
+    /**
+     * How strongly the whole group draws, 0 to 1.
+     *
+     * Separate from visibility rather than a special case of it: hiding takes
+     * a group out of the drawing — out of the render list, out of selection —
+     * while fading LEAVES IT THERE to be worked against. That is what a
+     * reference layer is, and it is the reason a slider is worth having next
+     * to a switch that can already reach zero.
+     */
+    var opacity: Double = 1.0
+
     companion object {
         private var counter = 0
         fun freshId(): Int = ++counter

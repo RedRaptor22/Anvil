@@ -357,10 +357,29 @@ class MainActivity : Activity(), Gestures.Listener {
          * restored a drawing has plainly been here before, whatever the flag
          * says.
          */
-        if (!getPreferences(MODE_PRIVATE).getBoolean(PREF_WALKED, false) &&
+        val firstRun = !getPreferences(MODE_PRIVATE).getBoolean(PREF_WALKED, false) &&
             sketch.strokes.isEmpty()
-        ) {
+        if (firstRun) {
             startWalk(0)
+        } else {
+            /*
+             * OPEN ON THE SHELF, NOT ON THE PAGE.
+             *
+             * Once there is more than one drawing, dropping straight into
+             * whichever was last touched is a guess — and the wrong guess costs
+             * you a trip to a menu you did not know was there. A sketchbook
+             * opens by being picked up and chosen from.
+             *
+             * The last work is still restored behind it, so closing the shelf
+             * without choosing puts you back exactly where you were, and the
+             * shelf is skipped entirely when there is nothing to choose
+             * between.
+             */
+            val works = listWorks()
+            if (works.isNotEmpty()) {
+                chrome.setWorks(works, currentWorkId())
+                chrome.setGallery(true)
+            }
         }
         pushSettings()
         refreshControls()
@@ -509,6 +528,7 @@ class MainActivity : Activity(), Gestures.Listener {
         }
         chrome.onGroupAssign = { id -> assignSelectionTo(id) }
         chrome.onGroupVisible = { id, visible -> setGroupVisible(id, visible) }
+        chrome.onGroupOpacity = { id, v -> setGroupOpacity(id, v) }
         chrome.onGroupNew = { newGroup() }
         chrome.onGroupDuplicate = { duplicateActiveGroup() }
         chrome.onGroupDelete = { deleteActiveGroup() }
@@ -1446,7 +1466,7 @@ class MainActivity : Activity(), Gestures.Listener {
             sketch.groups.map { g ->
                 Chrome.GroupRow(
                     g.id, g.name, sketch.membersOf(g.id).size, g.visible,
-                    g.id == sketch.activeGroup,
+                    g.id == sketch.activeGroup, g.opacity,
                 )
             },
         )
@@ -1497,6 +1517,22 @@ class MainActivity : Activity(), Gestures.Listener {
                 onUndo = { g.visible = !visible; refreshScene() },
             ),
         )
+    }
+
+    /**
+     * Fade a whole group, live.
+     *
+     * No history step, for the same reason the guide's own opacity slider has
+     * none: it is a knob you hold and watch, and one entry per pixel of travel
+     * would bury the drawing you did before it under a hundred fades. What
+     * lands in the file is where you left it.
+     */
+    private fun setGroupOpacity(id: Int, v: Double) {
+        val g = sketch.groupById(id) ?: return
+        g.opacity = v.coerceIn(0.0, 1.0)
+        pushStrokes()
+        surface.requestRender()
+        scheduleAutosave()
     }
 
     private fun assignSelectionTo(id: Int) {
@@ -3294,6 +3330,13 @@ class MainActivity : Activity(), Gestures.Listener {
      */
     private fun pushStrokes() {
         if (sketch.dropHiddenFromSelection() > 0) chrome.setSelection(sketch.selection.size)
+        /* how strongly each group draws, alongside what there is to draw:
+           the renderer holds the curves by identity and the fades by id, and
+           they have to arrive together or a faded group flashes at full */
+        renderer.setGroupFade(
+            sketch.groups.associate { it.id to it.opacity.toFloat() },
+            sketch.activeGroup ?: 0,
+        )
         renderer.setStrokes(sketch.editable())
     }
 
