@@ -2071,6 +2071,17 @@ class Chrome(private val act: Activity, val t: Tokens) {
         rebuildPalettes()
         showColorPage(wheel = true)
 
+        /*
+         * THE CARD ITSELF TAKES THE SWIPE.
+         *
+         * The rail dot has it because that is where you reach when the card is
+         * shut, but with the card OPEN the dot is behind it and the panel is
+         * what is under your thumb. A ViewGroup only sees a touch its children
+         * left alone, so this costs the wheel, the hex field and the swatches
+         * nothing — a swipe anywhere else on the card steps the colour.
+         */
+        StepSwipe(colorCard, t.dpf(SWIPE_STEP_DP)) { dir -> stepColor(dir) }
+
         colorCard.visibility = View.GONE
         popover(colorCard)
     }
