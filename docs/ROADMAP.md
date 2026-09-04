@@ -405,6 +405,40 @@ still open, the question to ask is not whether the logic exists but which
 function is supposed to CALL it — and if the answer takes more than a
 moment to find, it probably does not.
 
+### A fourth round: what compiling proves, and what it does not
+
+The fourth round of device reports had one fault that made the app
+unopenable and two that made it feel broken, and all three share a property:
+they are invisible to everything CI runs.
+
+- **Construction order.** `buildColorCard` opened its default page through a
+  helper that refreshes the whole screen, halfway through a nineteen-step
+  build — so it read the settings grids two builders before they existed.
+  `UninitializedPropertyAccessException` out of the constructor, out of
+  `onCreate`, on every launch for four commits. `:core` has no Android in it
+  and the APK job only proves the code COMPILES, so a phone was the only
+  thing in the world that could report it. `tools/initorder.py` now reads
+  Chrome.kt for exactly this shape and runs in the job with no SDK.
+- **A cache invariant broken by mutation in place.** The renderer keeps one
+  uploaded mesh per stroke and holds it while the stroke is in the list. Undo
+  restores point positions, and a point that moves in place leaves the stroke
+  the same object — so `setStrokes` found nothing to rebuild and the screen
+  went on drawing the curve where the drag had left it. Every tool that
+  nudges points rather than adding or removing them undid nothing visible.
+  The rule the code did not keep: whoever moves points owes the renderer an
+  `invalidate`.
+- **A ported constant whose UNIT changed.** Orbit sensitivity came over as
+  radians per CSS pixel and was fed device pixels, so a 3x phone turned the
+  camera three times as far per inch of hand. The port was faithful and the
+  units were not, which is the kind of divergence that reads as "feels wrong"
+  rather than as a bug.
+
+The lesson: the first three rounds asked whether the logic was right and
+whether anything called it. This one asks a third question — **what does the
+check actually prove?** "It compiles" says nothing about construction order,
+"the model is correct" says nothing about the cache built from it, and a
+constant copied exactly is still wrong if its unit is not.
+
 ---
 
 ## Phase 07 — Ship it
