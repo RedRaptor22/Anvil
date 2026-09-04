@@ -1032,7 +1032,10 @@ class SketchRenderer : GLSurfaceView.Renderer {
         /* the live stroke last, and newer than everything: it is the one you
            are drawing right now */
         GLES30.glBlendFunc(GLES30.GL_SRC_ALPHA, GLES30.GL_ONE_MINUS_SRC_ALPHA)
-        GLES30.glPolygonOffset(-1f, -(1f + min(list.size, DEPTH_ORDER_CAP)))
+        GLES30.glPolygonOffset(
+            if (liveIsPaint()) -1f else 0f,
+            -(1f + min(list.size, DEPTH_ORDER_CAP)),
+        )
         drawLive(l.shaded)
 
         GLES30.glDisable(GLES30.GL_POLYGON_OFFSET_FILL)
@@ -1069,13 +1072,22 @@ class SketchRenderer : GLSurfaceView.Renderer {
      * little to lift a curve off the surface it was painted onto. A stroke
      * drawn later is a stroke drawn ON TOP, which is what a pen does.
      *
-     * The slope term is there for the same reason a decal wants one: on a
-     * surface seen edge-on, depth changes fast enough across one pixel that a
-     * constant nudge is not a nudge at all.
+     * The slope term is FOR THE PAINT BRUSHES ONLY, and that restriction is
+     * the point. A ribbon lying on a guide is a decal, and a decal seen
+     * edge-on needs one: depth changes fast enough across a single pixel that
+     * a constant nudge stops being a nudge. A round brush is not a decal but a
+     * tube, and its silhouette has the steepest slope in the drawing — giving
+     * that a slope term would pull the edge of every tube towards the eye and
+     * let strokes bleed through the guides they sit behind. So the tie-breaker
+     * they share is the constant one, and only the curves that lie flat on a
+     * surface get help with the surface's angle.
      */
     private fun drawStroke(s: Stroke, shadedNow: Boolean, order: Int) {
         val c = s.cfg
-        GLES30.glPolygonOffset(-1f, -(1f + min(order, DEPTH_ORDER_CAP)))
+        GLES30.glPolygonOffset(
+            if (c.paint) -1f else 0f,
+            -(1f + min(order, DEPTH_ORDER_CAP)),
+        )
         GLES30.glUniform1f(uShade, if (shadedNow && !c.glow) 1f else 0f)
         GLES30.glUniform1f(uGlow, if (c.glow) 1f else 0f)
         GLES30.glUniform1f(uGrit, if (c.grit) 1f else 0f)
@@ -1418,6 +1430,9 @@ class SketchRenderer : GLSurfaceView.Renderer {
     fun setLive(buffer: LiveStroke?) {
         synchronized(strokes) { live = buffer }
     }
+
+    private fun liveIsPaint(): Boolean =
+        synchronized(strokes) { live }?.cfg?.paint ?: false
 
     private fun drawLive(shadedNow: Boolean = shaded) {
         val buffer = synchronized(strokes) { live } ?: return
