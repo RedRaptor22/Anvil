@@ -1290,9 +1290,48 @@ class SketchRenderer : GLSurfaceView.Renderer {
             GLES30.glEnableVertexAttribArray(gUvw)
             GLES30.glVertexAttribPointer(gUvw, 2, GLES30.GL_FLOAT, false, 0, 0)
             GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, b.ibo)
+
+            /*
+             * A SHEET THAT CROSSES ITSELF IS STILL ONE SHEET.
+             *
+             * Bend a guide tightly and the surface passes through itself. Drawn
+             * as it was — every layer blended over the last — the crossing
+             * stacks its translucency and comes out as a hard bright wedge with
+             * an edge nothing in the drawing has. That is the "extrusion": not
+             * geometry sticking out, but the same faint sheet counted three
+             * times.
+             *
+             * So each guide lays down its depth first with the colour masked
+             * off, then draws only where that depth is EXACTLY what it wrote —
+             * the nearest layer, once. Overlaps read as one surface at one
+             * strength, and the opacity slider still means what it says, which
+             * rules out the cheaper tricks (a max blend would have thrown it
+             * away). Two draws of a few thousand triangles costs nothing next
+             * to what the strokes are already doing.
+             *
+             * TWO PRICES, both small and both deliberate. A guide now leaves
+             * its depth behind, so depth of field focuses on the scaffolding
+             * where it covers the ink — guides sit where the drawing is, so
+             * the difference is slight, and it is one line to skip this when
+             * DOF is on if it ever shows. And where two DIFFERENT guides
+             * cross, the nearer one now hides the further rather than the two
+             * blending: each is still visible everywhere it is in front, which
+             * is what a sheet does, and it is the same rule that stops a guide
+             * stacking with itself.
+             */
+            GLES30.glColorMask(false, false, false, false)
+            GLES30.glDepthMask(true)
+            GLES30.glDepthFunc(GLES30.GL_LESS)
+            GLES30.glDrawElements(GLES30.GL_TRIANGLES, b.count, GLES30.GL_UNSIGNED_INT, 0)
+
+            GLES30.glColorMask(true, true, true, true)
+            GLES30.glDepthMask(false)
+            GLES30.glDepthFunc(GLES30.GL_EQUAL)
             GLES30.glDrawElements(GLES30.GL_TRIANGLES, b.count, GLES30.GL_UNSIGNED_INT, 0)
         }
 
+        /* back to the frame's own rule, or the next thing drawn is invisible */
+        GLES30.glDepthFunc(GLES30.GL_LEQUAL)
         GLES30.glDisableVertexAttribArray(gPos)
         GLES30.glDisableVertexAttribArray(gNor)
         GLES30.glDisableVertexAttribArray(gUvw)
