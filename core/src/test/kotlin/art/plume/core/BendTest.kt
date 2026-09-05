@@ -267,4 +267,31 @@ class BendTest {
         assertEquals(0.0, worst, 1e-12, "a gentle bend must not be relaxed at all")
     }
 
+    @Test
+    fun `a revolve tighter than its profile keeps its size and its weld`() {
+        /*
+         * The two new behaviours could have fought each other: easing tight
+         * turns open is a smoothing pass, and smoothing a loop shrinks it —
+         * far enough and a small revolve would come out smaller than it was
+         * drawn, or open at the seam. It is bounded on purpose, so this pins
+         * what bounded means.
+         */
+        val profile = (0 until 20).map { i -> Vec3(-0.1 + 0.2 * i / 19.0, 0.0, 0.0) }
+        val g = Guides.createFromStroke(profile, view, right, 1.0)!!
+        assertTrue(GuideEditing.bend(g, ring(0.06, n = 50, gap = 0.15)))
+
+        val path = g.sweep!!.path
+        val c = Polyline.centroid(path)
+        var worstR = 0.0
+        for (q in path) worstR = maxOf(worstR, kotlin.math.abs(q.distanceTo(c) - 0.06))
+        assertTrue(worstR < 0.06 * 0.15, "the ring shrank by more than a seventh ($worstR)")
+
+        val rows = rowsOf(g)
+        var seam = 0.0
+        for (i in rows.first().indices) {
+            seam = maxOf(seam, rows.first()[i].distanceTo(rows.last()[i]))
+        }
+        assertEquals(0.0, seam, 1e-9, "and it is still welded")
+    }
+
 }
