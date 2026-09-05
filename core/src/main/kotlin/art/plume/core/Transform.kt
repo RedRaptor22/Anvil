@@ -231,4 +231,90 @@ object Transform {
      * stays where you last reached for it.
      */
     val ARC_ANGLES = listOf(Math.PI / 6, -Math.PI / 2, Math.PI * 5 / 6)
+
+    // ---- the 2D joystick ---------------------------------------------------
+
+    /**
+     * WHAT THE VIEW-BASED JOYSTICK'S FIVE HANDLES DO.
+     *
+     * FACT: "The 2D Joystick moves, rotates, and scales objects based on the
+     * view direction. It's very intuitive because it transforms as it
+     * appears." Its handles are "1. Move, 2. Rotate, 3. Free Scale, 4. Width
+     * Scale, 5. Height Scale".
+     *
+     * Every one of them is defined against the screen rather than against the
+     * world, which is the whole point of it: what you see is a flat picture,
+     * and moving something LEFT in that picture is a thing you can ask for
+     * without first working out which world axis left happens to be today.
+     */
+    enum class View2D { MOVE, ROTATE, SCALE_FREE, SCALE_WIDTH, SCALE_HEIGHT }
+
+    /**
+     * One sample of a drag on the 2D joystick.
+     *
+     * FACT: "The scaling reference point is the center of the screen, marked
+     * with a crosshair", and the same for rotation — so [centre] is the point
+     * the camera is looking at, not the middle of the selection. That is a
+     * real difference in feel: scaling about the selection's own middle grows
+     * it in place, and scaling about the screen centre also carries it towards
+     * or away from the crosshair, which is what lets you compose by eye.
+     */
+    fun view(
+        camera: Camera, kind: View2D, dx: Double, dy: Double, sweep: Double,
+        centre: Vec3, out: Mat4 = Mat4(),
+    ): Mat4 {
+        val r = Vec3(); val u = Vec3(); val back = Vec3()
+        camera.basis(r, u, back)
+        val world = camera.viewHeight() / camera.height
+        return when (kind) {
+            View2D.MOVE -> {
+                val v = Vec3()
+                v.addScaled(r, dx * world)
+                // screen y grows downward; the world's up does not
+                v.addScaled(u, -dy * world)
+                Mat4.translation(v.x, v.y, v.z, out)
+            }
+            /* about the direction you are looking, so the turn happens in the
+               plane of the picture and nothing swings towards or away */
+            View2D.ROTATE -> about(centre, rotationAxis(back, sweep), out)
+            View2D.SCALE_FREE -> {
+                val k = exp(-dy * SCALE_PER_PX)
+                about(centre, Mat4.scale(k, k, k, Mat4()), out)
+            }
+            View2D.SCALE_WIDTH -> about(centre, axisScale(r, exp(dx * SCALE_PER_PX)), out)
+            View2D.SCALE_HEIGHT -> about(centre, axisScale(u, exp(-dy * SCALE_PER_PX)), out)
+        }
+    }
+
+    /**
+     * FACT: locked, "tapping and dragging the stick only allows movement up,
+     * down, left, and right."
+     *
+     * The larger component of the drag wins and the other is dropped, so a
+     * drag that starts off sideways stays sideways for as long as it is more
+     * sideways than not — which is how every constrained drag in every editor
+     * behaves, and the reason it does not need explaining.
+     */
+    fun lockedDelta(dx: Double, dy: Double, out: DoubleArray = DoubleArray(2)): DoubleArray {
+        if (abs(dx) >= abs(dy)) { out[0] = dx; out[1] = 0.0 } else { out[0] = 0.0; out[1] = dy }
+        return out
+    }
+
+    /** FACT: locked, the rotate handle turns "in 15-degree increments". */
+    const val LOCK_TURN = Math.PI / 12
+
+    /**
+     * How much of a snapped rotation is still owed, given how far the handle
+     * has been spun in total and how much has already been applied.
+     *
+     * Returns zero until the spin crosses the next multiple, so the selection
+     * jumps a step at a time — "useful for rotating to specific angles like 90
+     * or 180 degrees", which is only true if the intermediate angles are never
+     * visited at all.
+     */
+    fun snapStep(total: Double, applied: Double, step: Double = LOCK_TURN): Double {
+        if (step <= 0.0) return total - applied
+        val want = kotlin.math.round(total / step) * step
+        return want - applied
+    }
 }

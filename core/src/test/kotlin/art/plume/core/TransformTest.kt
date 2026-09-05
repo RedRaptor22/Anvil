@@ -274,6 +274,133 @@ class TransformTest {
             Transform.pickAxis(x, y, 54.0, 19.0, Transform.ARC_ANGLES, listOf(false, false, false)),
         )
     }
+
+    // ---- the 2D joystick ---------------------------------------------------
+
+    /**
+     * FACT: "The 2D Joystick moves, rotates, and scales objects based on the
+     * view direction. It's very intuitive because it transforms as it
+     * appears."
+     */
+    @Test
+    fun `dragging the stick right moves the selection right on the glass`() {
+        val c = cam()
+        /* measured AT THE PIVOT, because the pad's pixels-per-unit is the
+           scale there: under perspective a curve nearer the eye covers more
+           screen for the same world step, which is the projection being
+           honest rather than the stick being wrong */
+        val p = c.pivot.copy()
+        val before = Vec3().also { c.worldToScreen(p, it) }
+
+        val m = Transform.view(c, Transform.View2D.MOVE, 40.0, 0.0, 0.0, c.pivot)
+        val after = Vec3().also { c.worldToScreen(apply(m, p), it) }
+
+        assertEquals(40.0, after.x - before.x, 0.4, "right on screen, whatever the angle")
+        assertEquals(0.0, after.y - before.y, 0.4, "and not up or down")
+
+        // and a curve off the pivot still goes right, and still not up
+        val off = Vec3(0.3, -0.2, 0.1)
+        val wasOff = Vec3().also { c.worldToScreen(off, it) }
+        val nowOff = Vec3().also { c.worldToScreen(apply(m, off), it) }
+        assertTrue(nowOff.x - wasOff.x > 20.0)
+        assertEquals(0.0, nowOff.y - wasOff.y, 0.6)
+    }
+
+    @Test
+    fun `dragging the stick down moves it down, not up`() {
+        val c = cam()
+        val p = Vec3(0.0, 0.0, 0.0)
+        val before = Vec3().also { c.worldToScreen(p, it) }
+        /* the sign of y is the whole test: screen y grows downward and the
+           world's up does not, and getting it wrong makes the stick fight the
+           hand rather than follow it */
+        val m = Transform.view(c, Transform.View2D.MOVE, 0.0, 30.0, 0.0, c.pivot)
+        val after = Vec3().also { c.worldToScreen(apply(m, p), it) }
+        assertEquals(30.0, after.y - before.y, 0.6)
+    }
+
+    @Test
+    fun `the rotate handle turns the picture, and nothing comes towards you`() {
+        val c = cam()
+        val p = Vec3(0.5, 0.0, 0.0)
+        val m = Transform.view(c, Transform.View2D.ROTATE, 0.0, 0.0, PI / 2, c.pivot)
+        val turned = apply(m, p)
+
+        /* a turn in the plane of the picture leaves depth alone: the distance
+           from the eye is what says whether something swung towards you */
+        val r = Vec3(); val u = Vec3(); val back = Vec3()
+        c.basis(r, u, back)
+        assertEquals(p dot back, turned dot back, 1e-9, "same depth")
+        assertEquals(0.5, hypotOf(p, c), 1e-9)
+        assertEquals(0.5, hypotOf(turned, c), 1e-9, "and the same distance out")
+    }
+
+    private fun hypotOf(p: Vec3, c: Camera): Double {
+        val d = Vec3(p.x - c.pivot.x, p.y - c.pivot.y, p.z - c.pivot.z)
+        return kotlin.math.sqrt(d.lengthSq())
+    }
+
+    @Test
+    fun `width scales across the glass only, height only up it`() {
+        val c = cam()
+        val r = Vec3(); val u = Vec3(); val back = Vec3()
+        c.basis(r, u, back)
+        val p = Vec3(r.x + u.x, r.y + u.y, r.z + u.z)   // one unit right, one up
+
+        val wide = apply(Transform.view(c, Transform.View2D.SCALE_WIDTH, 60.0, 0.0, 0.0, c.pivot), p)
+        assertTrue((wide dot r) > 1.2, "wider across")
+        assertEquals(1.0, wide dot u, 1e-9, "and exactly as tall as it was")
+
+        val tall = apply(Transform.view(c, Transform.View2D.SCALE_HEIGHT, 0.0, -60.0, 0.0, c.pivot), p)
+        assertTrue((tall dot u) > 1.2, "taller up")
+        assertEquals(1.0, tall dot r, 1e-9, "and exactly as wide")
+    }
+
+    @Test
+    fun `scaling is about the crosshair, so the centre of the screen holds still`() {
+        /* FACT: "The scaling reference point is the center of the screen,
+           marked with a crosshair." */
+        val c = cam()
+        val at = c.pivot.copy()
+        val m = Transform.view(c, Transform.View2D.SCALE_FREE, 0.0, -50.0, 0.0, c.pivot)
+        val moved = apply(m, at)
+        assertEquals(at.x, moved.x, 1e-9)
+        assertEquals(at.y, moved.y, 1e-9)
+        assertEquals(at.z, moved.z, 1e-9)
+    }
+
+    @Test
+    fun `locked, the stick only goes up, down, left and right`() {
+        /* FACT: "When the 2D Joystick is locked, tapping and dragging the
+           stick only allows movement up, down, left, and right." */
+        val mostlyAcross = Transform.lockedDelta(30.0, 8.0)
+        assertEquals(30.0, mostlyAcross[0], 1e-12)
+        assertEquals(0.0, mostlyAcross[1], 1e-12)
+
+        val mostlyDown = Transform.lockedDelta(-4.0, 22.0)
+        assertEquals(0.0, mostlyDown[0], 1e-12)
+        assertEquals(22.0, mostlyDown[1], 1e-12)
+    }
+
+    @Test
+    fun `locked, the rotate handle jumps fifteen degrees at a time`() {
+        /* FACT: "rotate… in 15-degree increments. It's useful for rotating to
+           specific angles like 90 or 180 degrees" — which is only true if the
+           angles in between are never visited at all. */
+        val step = Transform.LOCK_TURN
+        assertEquals(PI / 12, step, 1e-12, "fifteen degrees")
+
+        // barely turned: nothing has happened yet
+        assertEquals(0.0, Transform.snapStep(0.05, 0.0), 1e-12)
+        // past halfway to the first step: the whole step lands at once
+        assertEquals(step, Transform.snapStep(step * 0.6, 0.0), 1e-12)
+        // and having applied it, more of the same spin owes nothing
+        assertEquals(0.0, Transform.snapStep(step * 0.9, step), 1e-12)
+        // six steps is a right angle, exactly
+        assertEquals(PI / 2, Transform.snapStep(PI / 2 + 0.01, 0.0), 1e-12)
+        // and it goes back the other way
+        assertEquals(-step, Transform.snapStep(-step * 0.7, 0.0), 1e-12)
+    }
 }
 
 /** Where the symmetry folds, and why it is a plane rather than a line. */
