@@ -118,4 +118,48 @@ class GuideSceneTest {
         scene.clear()           // 5
         assertEquals(5, beats)
     }
+
+    @Test
+    fun `the last closed guide can be had back`() {
+        val scene = GuideScene()
+        val g = guide()
+        scene.setActive(g)
+        assertNull(scene.recent, "nothing has been closed yet")
+
+        scene.close()
+        assertSame(g, scene.recent)
+        assertNull(scene.active)
+
+        assertSame(g, scene.recall())
+        assertSame(g, scene.active, "and it is the one being drawn on again")
+        assertNull(scene.recent, "spent: recalling it twice would be two guides")
+        assertNull(scene.recall())
+    }
+
+    @Test
+    fun `only the last one, and only a closed one`() {
+        val scene = GuideScene()
+        val first = guide(); val second = guide()
+        scene.setActive(first); scene.close()
+        scene.setActive(second); scene.close()
+        assertSame(second, scene.recent, "one step back, not a stack")
+
+        /* saving is filing, not closing — it is in the Resource tab, and
+           offering it here as well would recall a guide already on screen */
+        val third = guide()
+        scene.setActive(third)
+        scene.save()
+        assertSame(second, scene.recent)
+    }
+
+    @Test
+    fun `a guide you deleted is not one you can recall`() {
+        val scene = GuideScene()
+        val g = guide()
+        scene.setActive(g)
+        scene.close()
+        scene.remove(g)
+        assertNull(scene.recent, "it was thrown away, not put down")
+        assertNull(scene.recall())
+    }
 }

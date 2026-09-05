@@ -47,4 +47,6 @@
   <symbol id="i-opacity" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 3.5a8.5 8.5 0 0 1 0 17z" fill="currentColor" stroke="none"/></symbol>
   <symbol id="i-reset" viewBox="0 0 24 24"><path d="M5 12a7 7 0 1 0 2.2-5.1"/><path d="M4.5 4.5v4h4"/></symbol>
   <symbol id="i-axis" viewBox="0 0 24 24"><path d="M6 4v14h14"/><path d="M17 15l3 3-3 3" transform="translate(0,-3)"/></symbol>
+  <symbol id="i-find" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l4.5 4.5"/></symbol>
+  <symbol id="i-stamp" viewBox="0 0 24 24"><path d="M9 4h6l-1.5 6H10.5z"/><path d="M4.5 14h15v3.5h-15z"/><path d="M6 20h12"/></symbol>
 </svg>

@@ -292,4 +292,17 @@
     <string name="sampled">Picked up the %1$s brush</string>
     <string name="no_guide">No guide to save</string>
     <string name="guide_saved">Guide saved</string>
+    <string name="tip_group_new">New group, and draw in it</string>
+    <string name="tip_find_group">Find group — tap a curve to work in its group</string>
+    <string name="tip_recall_guide">Bring back the guide you just closed</string>
+    <string name="tip_select_all">Select everything visible</string>
+    <string name="tip_stamp">Stamp — drag to lay down copies</string>
+    <string name="find_armed">Tap a curve to open its group</string>
+    <string name="find_none">No curve there</string>
+    <string name="find_found">Working in %1$s</string>
+    <string name="guide_recalled">Guide back</string>
+    <string name="stamp">Stamp</string>
+    <string name="stamp_hint">Drag to lay down a copy</string>
+    <string name="stamp_on">Stamp: drag to copy. Done when you are finished.</string>
+    <string name="stamp_off">Stamped %1$d</string>
 </resources>

@@ -551,6 +551,7 @@ class MainActivity : Activity(), Gestures.Listener {
         chrome.onGroupVisible = { id, visible -> setGroupVisible(id, visible) }
         chrome.onGroupOpacity = { id, v -> setGroupOpacity(id, v) }
         chrome.onGroupIsolate = { id -> isolateGroup(id) }
+        chrome.onStampDone = { endStamping() }
         chrome.onPresetAdd = { addPreset() }
         chrome.onPresetLoad = { i -> loadPreset(i) }
         chrome.onPresetDelete = { gone -> deletePresets(gone) }
@@ -868,6 +869,9 @@ class MainActivity : Activity(), Gestures.Listener {
         Action.SAVE -> chooseSaveTarget()
         Action.OPEN -> chooseOpenTarget()
         Action.CLEAR -> clearSketch()
+        Action.FIND_GROUP -> armFindGroup()
+        Action.RECALL_GUIDE -> recallGuide()
+        Action.STAMP -> setStamping(!stamping)
     }
 
     /**
@@ -889,6 +893,8 @@ class MainActivity : Activity(), Gestures.Listener {
         /* and leaving liquify keeps what it did: the drags are already in the
            history, so all that ends is the session you could compare against */
         if (tool != t && tool == Tool.LIQUIFY) endLiquifySession()
+        /* FACT: "Tap 'Done' or select another tool to finish stamping." */
+        if (tool != t) endStamping()
 
         when (t) {
             Tool.BEND -> if (guides.active == null) {
@@ -1514,12 +1520,17 @@ class MainActivity : Activity(), Gestures.Listener {
 
     private fun refreshGroups() {
         sketch.ensureGroup()
+        /* one pass over the selection rather than one per row: the panel is
+           rebuilt on every change to the drawing, selections included */
+        val picked = HashMap<Int, Int>()
+        for (s in sketch.selection) s.group?.let { id -> picked[id] = (picked[id] ?: 0) + 1 }
         chrome.setGroups(
             sketch.groups.map { g ->
                 Chrome.GroupRow(
                     g.id, g.name, sketch.membersOf(g.id).size, g.visible,
                     g.id == sketch.activeGroup, g.opacity,
                     g.id == sketch.isolatedGroup,
+                    picked[g.id] ?: 0,
                 )
             },
         )
@@ -1612,6 +1623,194 @@ class MainActivity : Activity(), Gestures.Listener {
             if (sketch.isolatedGroup == null) getString(R.string.isolation_off)
             else getString(R.string.isolation_on, sketch.groupById(id)?.name ?: ""),
         )
+    }
+
+
+    // ---- the quick menu, and the two modes it arms -------------------------
+
+    /**
+     * FACT: "A magical palette that appears wherever you are… It unfolds in
+     * the area you last interacted with", and its contents follow what you are
+     * doing: Add New Group and Recall Recent Guide with Draw active, Select
+     * All and Stamp with Select.
+     *
+     * The chrome is handed the answers rather than left to work them out,
+     * because every one of them is a question about the drawing.
+     */
+    override fun onQuickMenu(x: Float, y: Float) {
+        /* the chrome is what the menu is made of, so with it hidden the
+           gesture does the same thing every other one does: bring it back */
+        if (hideUi) { flipInput(InputToggle.HIDE_UI); return }
+        chrome.showQuickMenu(
+            x, y,
+            Chrome.QuickMenu(
+                canUndo = history.undoLabel() != null,
+                canRedo = history.redoLabel() != null,
+                drawing = tool == Tool.DRAW || tool == Tool.SHAPE,
+                selecting = tool == Tool.SELECT || tool == Tool.LASSO,
+                hasSelection = sketch.selection.isNotEmpty(),
+                canRecallGuide = guides.recent != null,
+            ),
+        )
+    }
+
+    /**
+     * FIND GROUP: the next press names the group under it and goes there.
+     *
+     * FACT: "Hover or place your Pencil over a curve to see the group's name.
+     * Lift your Pencil or press while hovering to activate the selected
+     * group."
+     *
+     * Hover is the Apple half of that and most Android tablets have none, so
+     * it is the press that does the work. Which is the useful half anyway: the
+     * question this answers is "which group is THAT curve in", asked because
+     * you want to draw in it, and one press both tells you and takes you
+     * there.
+     */
+    private var findingGroup = false
+
+    private fun armFindGroup() {
+        findingGroup = true
+        toast(getString(R.string.find_armed))
+    }
+
+    private fun findGroupAt(x: Float, y: Float) {
+        findingGroup = false
+        val hit = Selection.hitTest(sketch, camera, x.toDouble(), y.toDouble(), mask())
+        if (hit == null) { toast(getString(R.string.find_none)); return }
+        val g = hit.group?.let { sketch.groupById(it) }
+        if (g == null) { toast(getString(R.string.find_none)); return }
+        /* the same step Curves' own rows push, so undo goes back to the group
+           you were in rather than leaving you somewhere you did not choose */
+        val previous = sketch.activeGroup
+        history.run(
+            Step(
+                "Find group",
+                onRedo = { sketch.setActiveGroup(g.id); refreshGroups() },
+                onUndo = { sketch.setActiveGroup(previous); refreshGroups() },
+            ),
+        )
+        announce(getString(R.string.find_found, g.name))
+    }
+
+    /**
+     * RECALL RECENT GUIDE. FACT: "Reload the most recently closed 3D guide."
+     */
+    private fun recallGuide() {
+        val g = guides.recall() ?: return
+        history.run(
+            Step(
+                "Recall guide",
+                onRedo = { guides.setActive(g); pushGuides() },
+                onUndo = { guides.close(); pushGuides() },
+            ),
+        )
+        announce(getString(R.string.guide_recalled))
+    }
+
+    // ---- stamp --------------------------------------------------------------
+
+    /**
+     * STAMP: EACH DRAG LEAVES A COPY BEHIND.
+     *
+     * FACT: "Quickly duplicate and move selected curves or groups… After
+     * tapping Stamp, drag your Pencil to duplicate… Tap 'Done' or select
+     * another tool to finish stamping."
+     *
+     * Duplicate-then-move is two actions and a joystick; stamping is one
+     * gesture you can repeat, which is what you want when you are laying down
+     * a row of windows or a run of railings. The copy is made on the press and
+     * moves with the pen, so what you let go of is what you get — and the
+     * copy becomes the selection, so the next drag stamps from where the last
+     * one landed rather than from the original every time.
+     */
+    private var stamping = false
+    private var stampCopies: List<Stroke>? = null
+    private var stampFrom: List<Stroke>? = null
+    private var stampAt = Px(0.0, 0.0)
+    private var stampCount = 0
+
+    private fun setStamping(on: Boolean) {
+        if (stamping == on) return
+        stamping = on
+        stampCount = 0
+        chrome.setStamping(on)
+        if (on) toast(getString(R.string.stamp_on))
+    }
+
+    private fun endStamping() {
+        if (!stamping) return
+        val n = stampCount
+        setStamping(false)
+        if (n > 0) announce(getString(R.string.stamp_off, n))
+    }
+
+    /** True when the press was taken by the stamp rather than by the tool. */
+    private fun beginStamp(x: Float, y: Float): Boolean {
+        val sel = sketch.selection
+        if (sel.isEmpty()) { endStamping(); return false }
+        stampFrom = sel
+        val copies = sel.map { Selection.transformedCopy(it, Mat4()) }
+        for (c in copies) sketch.add(c)
+        sketch.selectOnly(copies)
+        stampCopies = copies
+        stampAt = Px(x.toDouble(), y.toDouble())
+        refreshScene()
+        return true
+    }
+
+    private fun moveStamp(x: Float, y: Float) {
+        val copies = stampCopies ?: return
+        val at = copies.firstOrNull()?.pts?.firstOrNull()?.p ?: return
+        /* THE COPY FOLLOWS THE PEN, which under perspective means the scale
+           has to be measured where the copy IS: a fixed pixels-per-unit taken
+           at the pivot slides the near copies past the pen and drags the far
+           ones behind it. */
+        val k = camera.pxToWorldAt(at)
+        val right = Vec3(); val up = Vec3(); val back = Vec3()
+        camera.basis(right, up, back)
+        val dx = (x - stampAt.x) * k
+        // screen y grows downward and world up does not
+        val dy = -(y - stampAt.y) * k
+        val m = Mat4.translation(
+            right.x * dx + up.x * dy,
+            right.y * dx + up.y * dy,
+            right.z * dx + up.z * dy,
+            Mat4(),
+        )
+        Selection.transform(copies, m)
+        for (c in copies) renderer.invalidate(c)
+        stampAt = Px(x.toDouble(), y.toDouble())
+        refreshScene()
+    }
+
+    private fun endStamp() {
+        val copies = stampCopies ?: return
+        val before = stampFrom ?: emptyList()
+        stampCopies = null; stampFrom = null
+        /*
+         * A stamp that never moved is a tap, and a tap should not leave a
+         * copy sitting exactly on top of its original — that is the one
+         * duplicate you cannot see and cannot get rid of without finding it
+         * first.
+         */
+        if (!dragMoved) {
+            for (c in copies) sketch.remove(c)
+            sketch.selectOnly(before)
+            refreshScene()
+            return
+        }
+        stampCount += copies.size
+        pushReversible("Stamp", copies, before)
+    }
+
+    private fun cancelStamp() {
+        val copies = stampCopies ?: return
+        val before = stampFrom ?: emptyList()
+        stampCopies = null; stampFrom = null
+        for (c in copies) sketch.remove(c)
+        sketch.selectOnly(before)
+        refreshScene()
     }
 
     // ---- brush presets ------------------------------------------------------
@@ -1896,6 +2095,11 @@ class MainActivity : Activity(), Gestures.Listener {
         dragStartX = x; dragStartY = y
         lastPen = Px(x.toDouble(), y.toDouble())
 
+        /* the two modes the quick menu arms take the press before any tool
+           sees it — that is what arming them meant */
+        if (findingGroup) { findGroupAt(x, y); return }
+        if (stamping && beginStamp(x, y)) return
+
         /*
          * YOU CANNOT DRAW INTO A GROUP YOU CANNOT SEE.
          *
@@ -2017,6 +2221,7 @@ class MainActivity : Activity(), Gestures.Listener {
          * nothing. The same slop the gesture layer uses for a tap.
          */
         if (kotlin.math.hypot(x - dragStartX, y - dragStartY) > Gestures.TAP_SLOP) dragMoved = true
+        if (stampCopies != null) { moveStamp(x, y); return }
         when (tool) {
             Tool.DRAW, Tool.SHAPE, Tool.GUIDE, Tool.FLATGUIDE, Tool.BEND ->
                 moveStroke(x, y, pressure)
@@ -2042,6 +2247,7 @@ class MainActivity : Activity(), Gestures.Listener {
     }
 
     override fun onDrawEnd() {
+        if (stampCopies != null) { endStamp(); clearDrag(); surface.requestRender(); return }
         when (tool) {
             Tool.DRAW, Tool.SHAPE, Tool.GUIDE, Tool.FLATGUIDE -> endStroke()
             Tool.BEND -> finishBend()
@@ -2060,6 +2266,7 @@ class MainActivity : Activity(), Gestures.Listener {
     }
 
     override fun onDrawCancel() {
+        if (stampCopies != null) { cancelStamp(); clearDrag(); surface.requestRender(); return }
         // put back anything the drag had already changed
         dragPositions?.let { snap -> dragTargets?.let { restorePoints(it, snap) } }
         dragStrokes?.let { setDocument(it) }
@@ -2754,7 +2961,14 @@ class MainActivity : Activity(), Gestures.Listener {
                 onUndo = { sketch.selectOnly(before); refreshScene() },
             ),
         )
-        refreshControls()
+        /*
+         * THE PANEL HAS TO BE TOLD, because the rows now say what is selected.
+         *
+         * This called refreshControls, which repaints the buttons and nothing
+         * else, so the green on the group rows only appeared the next time
+         * something else happened to the drawing.
+         */
+        refreshGroups()
     }
 
     private fun deselectAll() {

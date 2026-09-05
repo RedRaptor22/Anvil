@@ -49,10 +49,44 @@ class GuideScene {
         fire()
     }
 
-    /** Put the active guide away without saving it. */
+    /**
+     * The last guide that was closed, and can be had back.
+     *
+     * FACT: "Recall Recent Guide — Reload the most recently closed 3D guide."
+     *
+     * Closing a guide is not the same as deciding you were finished with it.
+     * You close one to see the drawing without it, or because it was in the
+     * way of the angle you wanted, and half the time the next thing you want
+     * is that guide back — which without this means drawing it again, in the
+     * same place, by eye. Saving it first would work, but it puts a filing
+     * decision in front of an action that is meant to be a shrug.
+     *
+     * Only the LAST one, deliberately. A stack of closed guides is a second
+     * undo history to keep in your head; one step back is the whole of what
+     * this is for.
+     */
+    var recent: Guide? = null
+        private set
+
+    /** Put the active guide away without saving it. Recallable afterwards. */
     fun close(): Guide? {
         val g = active ?: return null
         active = null
+        recent = g
+        fire()
+        return g
+    }
+
+    /**
+     * Bring the last closed guide back as the active one.
+     *
+     * Returns what came back, or null when there is nothing to recall — which
+     * is also how the menu knows whether to offer it.
+     */
+    fun recall(): Guide? {
+        val g = recent ?: return null
+        recent = null
+        active = g
         fire()
         return g
     }
@@ -67,6 +101,10 @@ class GuideScene {
         if (!saved.contains(g)) saved.add(g)
         g.visible = true
         if (g === active) active = null
+        /* saving is filing, not closing: it is in the Resource tab now, and
+           recalling it from there is a tap. Leaving it as "recent" as well
+           would mean the menu offered a guide that is already on screen. */
+        if (recent === g) recent = null
         fire()
         return g
     }
@@ -88,6 +126,9 @@ class GuideScene {
         val wasSaved = saved.remove(guide)
         val wasActive = active === guide
         if (wasActive) active = null
+        /* a guide that has been deleted is not one you can recall: the menu
+           would offer it and hand back the thing you just threw away */
+        if (recent === guide) recent = null
         if (!wasSaved && !wasActive) return false
         fire()
         return true
@@ -115,6 +156,8 @@ class GuideScene {
     fun clear() {
         saved.clear()
         active = null
+        /* another drawing's guide is not this drawing's recent one */
+        recent = null
         fire()
     }
 

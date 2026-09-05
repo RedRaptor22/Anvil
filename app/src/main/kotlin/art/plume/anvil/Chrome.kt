@@ -74,6 +74,7 @@ enum class Action {
     MIRROR, STAGE,
     GUIDE_BEND, GUIDE_SAVE, GUIDE_CLOSE,
     DUPLICATE, DUPLICATE_MIRROR, LIQUIFY, DELETE, SELECTION_TO_GUIDE,
+    FIND_GROUP, RECALL_GUIDE, STAMP,
     PRESSURE,
     NEW, SAVE, OPEN, CLEAR,
 }
@@ -196,6 +197,9 @@ class Chrome(private val act: Activity, val t: Tokens) {
     var onStageValue: (which: Int, value: Double) -> Unit = { _, _ -> }
     var onPrimKind: (String) -> Unit = {}
     var onStageDone: () -> Unit = {}
+
+    /** Finished stamping. */
+    var onStampDone: () -> Unit = {}
     var onStageCancel: () -> Unit = {}
 
     val root = FrameLayout(act)
@@ -574,6 +578,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
         buildColorCard()
         buildSysMenu()
         buildMirrorBar()
+        buildQuickMenu()
         buildGallery()
         place()
         built = true
@@ -712,6 +717,153 @@ class Chrome(private val act: Activity, val t: Tokens) {
             mirrorBar.addView(chip)
         }
         popover(mirrorBar)
+    }
+
+    // ---- the quick menu ---------------------------------------------------
+
+    /**
+     * What the quick menu should offer this time.
+     *
+     * The activity decides, because every one of these is a question about the
+     * drawing — is there anything to undo, is anything selected, was a guide
+     * closed — and the chrome is not allowed to know about the drawing.
+     */
+    class QuickMenu(
+        val canUndo: Boolean,
+        val canRedo: Boolean,
+        val drawing: Boolean,
+        val selecting: Boolean,
+        val hasSelection: Boolean,
+        val canRecallGuide: Boolean,
+    )
+
+    /**
+     * FEATHER'S SQUEEZE MENU, UNFOLDED WHERE YOUR HAND IS.
+     *
+     * FACT: "A magical palette that appears wherever you are… It unfolds in
+     * the area you last interacted with." And it is contextual: FACT: "A smart
+     * Squeeze Menu that automatically appears based on your current action" —
+     * Add New Group and Recall Recent Guide "available when Draw is active",
+     * Select All and Stamp "available when Select is active".
+     *
+     * The point of it is distance. Undo lives in a corner, New Group lives
+     * three taps into a panel, and both of them are things you want in the
+     * middle of a line without moving your drawing hand across the glass. So
+     * the menu comes to the hand rather than the other way round, and it holds
+     * only what makes sense for what you are doing — a menu with everything on
+     * it would be the panels again, in a worse place.
+     */
+    private fun buildQuickMenu() {
+        quickCard.orientation = LinearLayout.VERTICAL
+        quickCard.gravity = Gravity.CENTER_HORIZONTAL
+        quickCard.background = GradientDrawable().apply {
+            setColor(t.panel)
+            cornerRadius = t.dpf(16f)
+            setStroke(t.dp(1f), t.line)
+        }
+        quickCard.elevation = t.dpf(16f)
+        quickCard.setPadding(t.dp(6f), t.dp(6f), t.dp(6f), t.dp(6f))
+        quickCard.isClickable = true          // taps on the card are not taps past it
+
+        quickLayer.visibility = View.GONE
+        quickLayer.isClickable = true
+        /* anywhere off the card puts it away: a menu you have to aim at to
+           dismiss is a menu you dismiss by accident and then fight */
+        quickLayer.setOnClickListener { closeQuickMenu() }
+        quickLayer.addView(
+            quickCard,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { gravity = Gravity.TOP or Gravity.START },
+        )
+    }
+
+    private fun quickButton(icon: String, tip: Int, enabled: Boolean = true, go: () -> Unit) =
+        IcoButton(act, t, IcoButton.SIZE_SMALL).icon(icon).apply {
+            isEnabled = enabled
+            alpha = if (enabled) 1f else 0.35f
+            Tip.attach(this, tipCard, act.getString(tip))
+            setOnClickListener {
+                /* CLOSE FIRST. Every one of these changes the drawing, and a
+                   menu still sitting over the change it made is a menu you
+                   then have to dismiss to see what you did. */
+                closeQuickMenu()
+                go()
+            }
+        }
+
+    private fun quickRow() = LinearLayout(act).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        layoutParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+        ).apply { topMargin = t.dp(3f) }
+    }
+
+    fun showQuickMenu(x: Float, y: Float, m: QuickMenu) {
+        quickCard.removeAllViews()
+
+        /* the row that is always there: what the corner buttons do, without
+           the journey to the corner */
+        val always = quickRow()
+        always.addView(quickButton("undo", R.string.tip_undo, m.canUndo) { onAction(Action.UNDO) })
+        always.addView(quickButton("redo", R.string.tip_redo, m.canRedo) { onAction(Action.REDO) })
+        always.addView(quickButton("find", R.string.tip_find_group) { onAction(Action.FIND_GROUP) })
+        quickCard.addView(always)
+
+        /* and the row that depends on what you are doing */
+        val ctx = quickRow()
+        if (m.drawing) {
+            ctx.addView(quickButton("plus", R.string.tip_group_new) { onGroupNew() })
+            if (m.canRecallGuide) {
+                ctx.addView(quickButton("guide", R.string.tip_recall_guide) { onAction(Action.RECALL_GUIDE) })
+            }
+        }
+        if (m.selecting) {
+            ctx.addView(quickButton("select", R.string.tip_select_all) { onSelectAll() })
+            if (m.hasSelection) {
+                ctx.addView(quickButton("stamp", R.string.tip_stamp) { onAction(Action.STAMP) })
+            }
+        }
+        if (ctx.childCount > 0) quickCard.addView(ctx)
+
+        quickLayer.visibility = View.VISIBLE
+        placeQuickCard(x, y)
+    }
+
+    /**
+     * Centred on the hand, and never off the edge.
+     *
+     * Measured before it is placed rather than after: a card positioned on the
+     * frame it appears is a card that jumps, and this one appears under the
+     * fingers that asked for it.
+     */
+    private fun placeQuickCard(x: Float, y: Float) {
+        quickCard.measure(
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
+        )
+        val w = quickCard.measuredWidth
+        val h = quickCard.measuredHeight
+        val pad = t.dp(12f)
+        val maxX = (root.width - w - pad).coerceAtLeast(pad)
+        val maxY = (root.height - h - pad).coerceAtLeast(pad)
+        /* ABOVE the fingers, not under them: two fingers rest on the glass
+           through this and a card beneath them is a card you cannot see */
+        val left = (x - w / 2f).toInt().coerceIn(pad, maxX)
+        val top = (y - h - t.dp(24f)).toInt().coerceIn(pad, maxY)
+        quickCard.layoutParams = (quickCard.layoutParams as FrameLayout.LayoutParams).apply {
+            setMargins(left, top, 0, 0)
+        }
+        quickCard.requestLayout()
+    }
+
+    fun quickMenuOpen(): Boolean = quickLayer.visibility == View.VISIBLE
+
+    fun closeQuickMenu(): Boolean {
+        if (!quickMenuOpen()) return false
+        quickLayer.visibility = View.GONE
+        return true
     }
 
     /** The colour Feather gives each axis, and the fold is drawn to match. */
@@ -1031,6 +1183,35 @@ class Chrome(private val act: Activity, val t: Tokens) {
             },
         )
         ctxBar.addView(stageBar)
+
+        /*
+         * STAMPING IS A MODE, so it says so and offers the way out.
+         *
+         * FACT: "Tap 'Done' or select another tool to finish stamping." A mode
+         * you can be in without knowing it is the worst kind, and this one
+         * takes over the pen — so it gets a line of its own under the drawing
+         * rather than a toast that has already faded by the second copy.
+         */
+        stampBar.orientation = LinearLayout.HORIZONTAL
+        stampBar.gravity = Gravity.CENTER_VERTICAL
+        stampBar.visibility = View.GONE
+        stampBar.addView(lab(act.getString(R.string.stamp)))
+        stampBar.addView(
+            TextView(act).apply {
+                text = act.getString(R.string.stamp_hint)
+                setTextColor(t.dim)
+                textSize = 11f
+                setPadding(t.dp(8f), 0, t.dp(8f), 0)
+            },
+        )
+        stampBar.addView(
+            TextButton(act, t, small = true).apply {
+                text = act.getString(R.string.done)
+                on = true
+                setOnClickListener { onStampDone() }
+            },
+        )
+        ctxBar.addView(stampBar)
     }
 
     /** `label.lab` — the small uppercase caption the bars use. */
@@ -1782,6 +1963,8 @@ class Chrome(private val act: Activity, val t: Tokens) {
         val active: Boolean,
         val opacity: Double = 1.0,
         val isolated: Boolean = false,
+        /** How many of the group's curves are in the selection. */
+        val selected: Int = 0,
     )
 
     fun setGroups(rows: List<GroupRow>) {
@@ -1790,14 +1973,47 @@ class Chrome(private val act: Activity, val t: Tokens) {
         for (g in rows) groupList.addView(groupRow(g))
     }
 
-    /** `.grpRow` — the active one is outlined, a hidden one is dimmed. */
+    /** The same colour, thinned to [a] — a tint you can put behind text. */
+    private fun wash(argb: Int, a: Float): Int =
+        (argb and 0x00FFFFFF) or (((a * 255).toInt().coerceIn(0, 255)) shl 24)
+
+    /**
+     * `.grpRow` — the active one is outlined, a hidden one is dimmed, and one
+     * holding part of the selection says so.
+     *
+     * FACT: "Groups containing selected curves or objects are highlighted in
+     * green. If only part of the group is selected, it appears in a lighter
+     * green."
+     *
+     * Which is worth more than it sounds. The selection lives in the canvas
+     * and the groups live in a panel, so without this the only way to find out
+     * which groups a lasso had caught was to hide them one at a time. Two
+     * strengths, because "some of this group" and "all of it" are different
+     * answers to the question you are asking the panel.
+     */
     private fun groupRow(g: Chrome.GroupRow): View {
+        val whole = g.selected > 0 && g.selected >= g.count
+        val part = g.selected > 0 && !whole
         val row = LinearLayout(act).apply {
             orientation = LinearLayout.VERTICAL
             background = GradientDrawable().apply {
-                setColor(if (g.active) t.panel3 else t.panel2)
+                setColor(
+                    when {
+                        g.selected > 0 -> wash(t.green, if (whole) 0.20f else 0.10f)
+                        g.active -> t.panel3
+                        else -> t.panel2
+                    },
+                )
                 cornerRadius = t.dpf(12f)
-                setStroke(t.dp(1.5f), if (g.active) t.ink else 0x00000000)
+                setStroke(
+                    t.dp(1.5f),
+                    when {
+                        whole -> t.green
+                        part -> wash(t.green, 0.45f)
+                        g.active -> t.ink
+                        else -> 0x00000000
+                    },
+                )
             }
             setPadding(t.dp(8f), t.dp(5f), t.dp(4f), t.dp(5f))
             layoutParams = LinearLayout.LayoutParams(
@@ -2991,6 +3207,16 @@ class Chrome(private val act: Activity, val t: Tokens) {
                 height = ViewGroup.LayoutParams.MATCH_PARENT,
             ),
         )
+        /* over every panel, because it is summoned ONTO whatever is on screen
+           — but under the toast, which is what tells you what it just did */
+        root.addView(
+            quickLayer,
+            lp(
+                Gravity.CENTER,
+                width = ViewGroup.LayoutParams.MATCH_PARENT,
+                height = ViewGroup.LayoutParams.MATCH_PARENT,
+            ),
+        )
         root.addView(toastCard, lp(Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL, bottom = t.px(R.dimen.toastBottom)))
     }
 
@@ -3307,6 +3533,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
 
     /** `UI.closeTopSheet` — what Android's Back steps out of, in order. */
     fun closeTop(): Boolean {
+        if (closeQuickMenu()) return true
         if (menuOpen()) { setMenu(false); return true }
         for (p in popovers) if (p.visibility == View.VISIBLE) { closePopovers(); return true }
         if (compact) {
@@ -3404,6 +3631,10 @@ class Chrome(private val act: Activity, val t: Tokens) {
     )
 
     fun setStaging(s: Staging?) { staging = s; refresh() }
+
+    private var stamping = false
+
+    fun setStamping(on: Boolean) { stamping = on; refresh() }
 
     /** Everything the settings modal shows, from the tool and the camera. */
     fun setSettings(
@@ -3539,6 +3770,13 @@ class Chrome(private val act: Activity, val t: Tokens) {
         hsv[2] = (hsv[2] + dir * VALUE_STEP).coerceIn(VALUE_FLOOR, 1f)
         applyCardColor(Color.HSVToColor(Color.alpha(c), hsv))
     }
+
+    /** `#stampBar` — shown only while stamping, and only to get out of it. */
+    private val stampBar = LinearLayout(act)
+
+    /** The quick menu: a full-screen catcher with a small card floating in it. */
+    private val quickLayer = FrameLayout(act)
+    private val quickCard = LinearLayout(act)
 
     /** `#presets` — saved brushes, and which of them are picked for deleting. */
     private val presetStrip = LinearLayout(act)
@@ -3822,15 +4060,17 @@ class Chrome(private val act: Activity, val t: Tokens) {
             for ((k, b) in primButtons) b.on = k == st.kind
         }
 
+        stampBar.visibility = if (stamping) View.VISIBLE else View.GONE
         /* the guide bar and the staging bar are mutually exclusive: you are
            either editing a live guide or building a new one */
-        guideBar.visibility = if (guideActive && st == null) View.VISIBLE else View.GONE
+        guideBar.visibility = if (guideActive && st == null && !stamping) View.VISIBLE else View.GONE
         guideNameLabel.text = guideName
         guideOpacityBar.value = guideOpacity
         ctxHint.text = act.getString(
             if (guideActive) R.string.hint_guide_active else R.string.hint_draw_a_stroke,
         )
-        ctxHint.visibility = if (guideActive || st != null) View.GONE else View.VISIBLE
+        ctxHint.visibility =
+            if (guideActive || st != null || stamping) View.GONE else View.VISIBLE
         selBar.visibility = if (selectionCount > 0 && tool != Tool.LIQUIFY) {
             View.VISIBLE
         } else {

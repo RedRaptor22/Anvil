@@ -18,6 +18,7 @@ import kotlin.math.hypot
  *     three finger swipe (vertical).. focal length, 10-500mm
  *     tap and hold on curve/grid .... pin the orbit point
  *     tap and hold on empty space ... unpin, or reset the view
+ *     two finger tap and hold ....... the quick menu, where your hand is
  *
  * THE MAPPING SHIFTS BY ONE FINGER WHEN A FINGER IS DRAWING, because one
  * finger is then busy: two fingers orbit instead of panning, three pan instead
@@ -108,6 +109,25 @@ class Gestures(private val listener: Listener) {
          * hold to give — [holdWhileDrawing] is what says which is which.
          */
         fun onDrawHold(x: Float, y: Float)
+
+        /**
+         * Two fingers rested still: Feather's Squeeze Menu, by the only route
+         * an Android tablet has.
+         *
+         * FACT: "A magical palette that appears wherever you are. Assign the
+         * Squeeze gesture from Apple Pencil settings… It unfolds in the area
+         * you last interacted with."
+         *
+         * There is no squeeze to assign here — the gesture is an Apple Pencil
+         * Pro feature and no Android stylus offers it — but the menu is not
+         * about the barrel of a pen, it is about not having to travel to the
+         * edge of the screen for undo. Two fingers held still is the gesture
+         * with nothing else on it: a two-finger TAP is already undo, a
+         * two-finger drag pans, and a hold is neither.
+         *
+         * [x]/[y] are where the fingers are, so the menu can unfold there.
+         */
+        fun onQuickMenu(x: Float, y: Float)
     }
 
     /**
@@ -148,6 +168,27 @@ class Gestures(private val listener: Listener) {
     private var holdRunnable: Runnable? = null
     private var holdX = 0f
     private var holdY = 0f
+
+    /**
+     * The span the two fingers had when their hold clock started.
+     *
+     * A pinch that begins slowly is fingers holding still for the first
+     * fraction of a second, and without this it opened the quick menu on the
+     * way to a zoom. Distance apart catches that where distance travelled
+     * cannot: a pinch's fingers move in opposite directions, so the point
+     * between them barely stirs.
+     */
+    private var holdSpan = 0f
+
+    /**
+     * The gesture has already been spent on something, so the fingers still on
+     * the glass must not go on driving the camera.
+     *
+     * Opening the quick menu ends the camera move under it. Without this the
+     * hand that summoned the menu kept orbiting the drawing behind it while
+     * choosing from it.
+     */
+    private var gestureSpent = false
 
     /**
      * A gesture spans from the first finger landing to the last one lifting,
@@ -237,6 +278,7 @@ class Gestures(private val listener: Listener) {
                 peakFingers = 1
                 gestureMoved = false
                 gestureHeld = false
+                gestureSpent = false
                 gesturePen = isStylus(ev, i)
                 gestureStart = ev.eventTime
                 downX = ev.getX(i); downY = ev.getY(i)
@@ -253,7 +295,9 @@ class Gestures(private val listener: Listener) {
                  * pinned the pivot out from under its own stroke.
                  */
                 val willDraw = isStylus(ev, i) || fingerDraws
-                if (!willDraw || holdWhileDrawing) armHold(ev.getX(i), ev.getY(i), willDraw)
+                if (!willDraw || holdWhileDrawing) {
+                    armHold(ev.getX(i), ev.getY(i), if (willDraw) HOLD_DRAW else HOLD_PRESS)
+                }
                 if (willDraw) {
                     drawingPointer = ev.getPointerId(i)
                     listener.onDrawBegin(
@@ -308,6 +352,16 @@ class Gestures(private val listener: Listener) {
                         tapX = sx / ev.pointerCount; tapY = sy / ev.pointerCount
                     }
                     cancelHold()
+                    /*
+                     * EXACTLY TWO FINGERS, and no pen in the gesture, starts
+                     * the quick menu's clock. A third finger cancels it on the
+                     * way past — three fingers are the lens and the projection
+                     * toggle — and so does a palm, which is what the pen test
+                     * is for.
+                     */
+                    if (ev.pointerCount == 2 && !gesturePen && !gestureSpent) {
+                        armHold(tapX, tapY, HOLD_QUICK, spanOf(ev))
+                    }
                     beginGesture(ev)
                 }
             }
@@ -343,6 +397,23 @@ class Gestures(private val listener: Listener) {
                     val moved = hypot(ev.getX(hi) - downX, ev.getY(hi) - downY)
                     if (moved > TAP_SLOP) gestureMoved = true
                     if (moved > HOLD_SLOP) cancelHold()
+                }
+                /*
+                 * A PINCH IS TWO FINGERS HOLDING STILL, at first.
+                 *
+                 * The test above watches one finger against where the FIRST
+                 * finger landed, which a pinch barely fails: the fingers move
+                 * apart, so the point between them stays put and each of them
+                 * has only half the travel. The span is what tells a zoom from
+                 * a rest, and the centroid catches a pan the same way.
+                 */
+                if (holdRunnable != null && holdKind == HOLD_QUICK && ev.pointerCount >= 2) {
+                    val m = measure(ev)
+                    if (abs(m.span - holdSpan) > HOLD_SLOP ||
+                        hypot(m.cx - holdX, m.cy - holdY) > HOLD_SLOP
+                    ) {
+                        cancelHold()
+                    }
                 }
             }
 
@@ -390,6 +461,7 @@ class Gestures(private val listener: Listener) {
                 }
                 peakFingers = 0
                 gesturePen = false
+                gestureSpent = false
             }
 
             MotionEvent.ACTION_CANCEL -> {
@@ -398,6 +470,7 @@ class Gestures(private val listener: Listener) {
                 endGesture()
                 peakFingers = 0
                 gesturePen = false
+                gestureSpent = false
                 // a cancelled gesture is not a tap, and not half of one either
                 lastTapFingers = 0
             }
@@ -405,18 +478,29 @@ class Gestures(private val listener: Listener) {
         return true
     }
 
-    private fun armHold(x: Float, y: Float, whileDrawing: Boolean = false) {
+    private fun armHold(x: Float, y: Float, kind: Int = HOLD_PRESS, span: Float = 0f) {
         cancelHold()
-        holdX = x; holdY = y
+        holdX = x; holdY = y; holdSpan = span; holdKind = kind
         val r = Runnable {
             holdRunnable = null
             gestureHeld = true          // a hold is never also a tap
-            if (whileDrawing) listener.onDrawHold(holdX, holdY)
-            else listener.onPressHold(holdX, holdY)
+            when (kind) {
+                HOLD_DRAW -> listener.onDrawHold(holdX, holdY)
+                HOLD_QUICK -> {
+                    /* the hand that opened the menu stops steering the drawing
+                       behind it; it is choosing now, not navigating */
+                    gestureSpent = true
+                    endGesture()
+                    listener.onQuickMenu(holdX, holdY)
+                }
+                else -> listener.onPressHold(holdX, holdY)
+            }
         }
         holdRunnable = r
-        main.postDelayed(r, HOLD_MS)
+        main.postDelayed(r, if (kind == HOLD_QUICK) QUICK_HOLD_MS else HOLD_MS)
     }
+
+    private var holdKind = HOLD_PRESS
 
     private fun cancelHold() {
         holdRunnable?.let { main.removeCallbacks(it) }
@@ -476,7 +560,13 @@ class Gestures(private val listener: Listener) {
      * still reports it, and seeding from a finger that is leaving puts a jump
      * into the first frame after it goes.
      */
+    /** How far apart the first two navigating fingers are, right now. */
+    private fun spanOf(ev: MotionEvent): Float = measure(ev).span
+
     private fun beginGesture(ev: MotionEvent, skipIndex: Int = -1) {
+        /* a gesture that has already been spent on the quick menu does not
+           get to start driving the camera again as fingers come off */
+        if (gestureSpent) return
         val m = measure(ev, skipIndex)
         /* NOTHING TO NAVIGATE WITH IS NOT A GESTURE. A palm lifting from
            beside a pen stroke leaves only the pen, which is drawing, not
@@ -551,7 +641,21 @@ class Gestures(private val listener: Listener) {
 
     companion object {
         /** All four are the web build's, in the same units. */
+        /** Which hold clock is running: an orbit pin, a tool's press, a menu. */
+        const val HOLD_PRESS = 0
+        const val HOLD_DRAW = 1
+        const val HOLD_QUICK = 2
+
         const val HOLD_MS = 480L
+
+        /**
+         * The quick menu waits a beat longer than the other holds.
+         *
+         * Two fingers land a few milliseconds apart at the start of every
+         * pinch and every pan, and the shorter clock caught enough of them to
+         * make the menu feel like it was ambushing the drawing.
+         */
+        const val QUICK_HOLD_MS = 620L
         const val HOLD_SLOP = 12f
         const val TAP_MS = 300L
         const val TAP_SLOP = 22f
