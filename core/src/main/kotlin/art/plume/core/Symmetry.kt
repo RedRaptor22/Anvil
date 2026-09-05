@@ -54,8 +54,18 @@ object Symmetry {
      * Build the indicator for [mirror] ("x", "z" or null) and [radial] copies.
      * Null when there is no symmetry to show.
      */
-    fun fold(bounds: Bounds, mirror: String?, radial: Int): Fold? {
-        if (mirror == null && radial <= 1) return null
+    fun fold(bounds: Bounds, mirror: String?, radial: Int): Fold? =
+        fold(bounds, if (mirror == null) emptySet() else setOf(mirror), radial)
+
+    /**
+     * The indicator for any number of active planes.
+     *
+     * One plane per active axis, all three of them possible at once, because
+     * that is what the mirror itself now allows — and a symmetry you cannot
+     * see the planes of is one you find out about by drawing.
+     */
+    fun fold(bounds: Bounds, axes: Set<String>, radial: Int): Fold? {
+        if (axes.isEmpty() && radial <= 1) return null
 
         val sx = if (bounds.empty) 0.0 else bounds.maxX - bounds.minX
         val sy = if (bounds.empty) 0.0 else bounds.maxY - bounds.minY
@@ -68,25 +78,36 @@ object Symmetry {
 
         var fill = FloatArray(0)
         var edges = FloatArray(0)
-        if (mirror != null) {
+        for (axis in Mirror.AXES) {
+            if (axis !in axes) continue
             /*
-             * The plane's in-plane horizontal direction: mirroring across X
-             * leaves the Z axis lying IN the plane, and the other way round.
+             * A plane is spanned by the two axes it does NOT reflect: the X
+             * plane stands in Y and Z, the Y plane lies flat in X and Z, and
+             * the Z plane stands in X and Y.
              */
-            val acrossX = mirror == "x"
-            val (lo, hi) =
-                if (acrossX) span(mid.z, sz, pad) else span(mid.x, sx, pad)
+            val (u0, u1) = when (axis) {
+                "x" -> span(mid.z, sz, pad)
+                "y" -> span(mid.x, sx, pad)
+                else -> span(mid.x, sx, pad)
+            }
+            val (v0, v1) = when (axis) {
+                "x" -> y0 to y1
+                "y" -> span(mid.z, sz, pad)
+                else -> y0 to y1
+            }
 
-            fun corner(u: Double, v: Double): FloatArray =
-                if (acrossX) floatArrayOf(0f, v.toFloat(), u.toFloat())
-                else floatArrayOf(u.toFloat(), v.toFloat(), 0f)
+            fun corner(u: Double, v: Double): FloatArray = when (axis) {
+                "x" -> floatArrayOf(0f, v.toFloat(), u.toFloat())
+                "y" -> floatArrayOf(u.toFloat(), 0f, v.toFloat())
+                else -> floatArrayOf(u.toFloat(), v.toFloat(), 0f)
+            }
 
-            val a = corner(lo, y0)
-            val b = corner(hi, y0)
-            val c = corner(hi, y1)
-            val d = corner(lo, y1)
-            fill = a + b + c + a + c + d
-            edges = a + b + b + c + c + d + d + a
+            val a = corner(u0, v0)
+            val b = corner(u1, v0)
+            val c = corner(u1, v1)
+            val d = corner(u0, v1)
+            fill += a + b + c + a + c + d
+            edges += a + b + b + c + c + d + d + a
         }
 
         val axisLine = if (radial > 1) {
@@ -96,4 +117,122 @@ object Symmetry {
         }
         return Fold(fill, edges, axisLine)
     }
+}
+
+/**
+ * MIRRORING AS A LIVING LINK, ACROSS THE THREE GLOBAL PLANES.
+ *
+ * FACT: Feather's Mirror reveals three axes below its icon — red for X, green
+ * for Y, blue for Z — any number of which can be active at once, and it
+ * mirrors about the GLOBAL axes rather than anything local to the selection.
+ *
+ * Two things follow that this build did not do. Symmetry was ONE axis at a
+ * time and Y was not among them, so the reflection anyone wants for a chair
+ * or a face — left/right and top/bottom together — could not be asked for.
+ * And a reflection was a copy taken once at the moment of drawing, so every
+ * later change to the original left its other half behind: the curve you
+ * smoothed, moved or recoloured was symmetric right up until you touched it.
+ *
+ * A reflection therefore remembers what it reflects, and [resync] re-derives
+ * it. That single pass is what makes symmetry a MODE rather than a stamp.
+ */
+object Mirror {
+
+    /** The three planes, in the order Feather lists them. */
+    val AXES = listOf("x", "y", "z")
+
+    fun matrixFor(key: String, out: Mat4 = Mat4()): Mat4 = Mat4.scale(
+        if (key.contains('x')) -1.0 else 1.0,
+        if (key.contains('y')) -1.0 else 1.0,
+        if (key.contains('z')) -1.0 else 1.0,
+        out,
+    )
+
+    /**
+     * Every reflection a set of active planes asks for, as sorted keys.
+     *
+     * Two planes give three reflections, not two: the pair of single
+     * reflections and the one across both, which is what fills the fourth
+     * quadrant. Three give seven, which is the eight octants less the one you
+     * drew in. The identity is never in the list.
+     */
+    fun keysFor(axes: Set<String>): List<String> {
+        val on = AXES.filter { it in axes }
+        if (on.isEmpty()) return emptyList()
+        val out = ArrayList<String>()
+        for (mask in 1 until (1 shl on.size)) {
+            val sb = StringBuilder()
+            for (i in on.indices) if ((mask shr i) and 1 == 1) sb.append(on[i])
+            out.add(sb.toString())
+        }
+        return out
+    }
+
+    /** The reflections [source] owes, linked back to it. */
+    fun copiesOf(source: Stroke, axes: Set<String>): List<Stroke> =
+        keysFor(axes).map { key ->
+            Selection.transformedCopy(source, matrixFor(key)).also {
+                it.mirrorOf = source.id
+                it.mirrorKey = key
+            }
+        }
+
+    /**
+     * Bring every reflection back into step with what it reflects.
+     *
+     * Returns the ones that actually moved, because the renderer holds a mesh
+     * per curve and a curve whose points changed under it would otherwise go
+     * on being drawn where it used to be.
+     *
+     * Comparing before writing is not an optimisation here, it IS the answer:
+     * this runs on every change to the document, and rewriting every
+     * reflection each time would rebuild meshes that nothing had touched.
+     */
+    fun resync(sketch: Sketch): List<Stroke> {
+        val byId = HashMap<Int, Stroke>()
+        for (s in sketch.strokes) byId[s.id] = s
+
+        val moved = ArrayList<Stroke>()
+        val m = Mat4()
+        val p = Vec3()
+        for (copy in sketch.strokes) {
+            val srcId = copy.mirrorOf ?: continue
+            val src = byId[srcId]
+            if (src == null || src === copy) { copy.mirrorOf = null; continue }
+            matrixFor(copy.mirrorKey, m)
+
+            var changed = false
+            if (copy.pts.size != src.pts.size) {
+                changed = true
+            } else {
+                for (i in src.pts.indices) {
+                    m.transformPoint(src.pts[i].p, p)
+                    if (copy.pts[i].p.distanceToSq(p) > REDERIVE_EPS) { changed = true; break }
+                }
+            }
+            if (!changed && sameStyle(copy, src)) continue
+
+            val fresh = Selection.transformedCopy(src, m)
+            copy.pts.clear()
+            copy.pts.addAll(fresh.pts)
+            copy.brush = src.brush
+            copy.color = src.color
+            copy.baseRadius = src.baseRadius
+            copy.opacity = src.opacity
+            copy.pressureTarget = src.pressureTarget
+            copy.seedRef = fresh.seedRef
+            moved.add(copy)
+        }
+        return moved
+    }
+
+    private fun sameStyle(a: Stroke, b: Stroke): Boolean =
+        a.brush == b.brush &&
+            a.color == b.color &&
+            a.baseRadius == b.baseRadius &&
+            a.opacity == b.opacity &&
+            a.pressureTarget == b.pressureTarget
+
+    /** Closer than this and a point has not moved. A micrometre, squared. */
+    private const val REDERIVE_EPS = 1e-12
 }

@@ -156,6 +156,27 @@ class Stroke(
     /** The seed reference direction, kept so a rebuild reproduces the frame. */
     var seedRef: Vec3? = null
 
+    /**
+     * The curve this one is a REFLECTION OF, by id, and across which planes.
+     *
+     * A mirrored curve used to be a copy and nothing more: made once at the
+     * moment of drawing and on its own from then on, so moving, smoothing or
+     * recolouring the original left its other half behind — which is the whole
+     * reason anyone turns symmetry on. Keeping the link means the reflection
+     * can be REDERIVED whenever the original changes, and it costs two fields.
+     *
+     * [mirrorKey] is which planes, as a sorted subset of "xyz": "x" is one
+     * reflection, "xz" is the reflection of the reflection — the diagonal
+     * quarter — and so on.
+     *
+     * The link is dropped rather than obeyed when the original is gone. A
+     * reflection whose source has been erased is still a curve somebody drew,
+     * and deleting the other half of a drawing to tidy up a broken pointer is
+     * not a trade worth making.
+     */
+    var mirrorOf: Int? = null
+    var mirrorKey: String = ""
+
     /** A copy carrying [points] instead of this stroke's own. */
     fun withPoints(points: List<StrokePoint>): Stroke {
         val out = Stroke(brush, color, baseRadius, opacity, pressureTarget, guideId)

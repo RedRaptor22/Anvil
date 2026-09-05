@@ -12,6 +12,7 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.EditText
+import art.plume.core.Mirror
 import art.plume.core.ColorSpace
 import art.plume.core.DocumentEnv
 import art.plume.core.Rgba
@@ -131,6 +132,12 @@ class Chrome(private val act: Activity, val t: Tokens) {
 
     /** How strongly a whole group draws. Live while the slider moves. */
     var onGroupOpacity: (id: Int, value: Double) -> Unit = { _, _ -> }
+
+    /** One of the three mirror planes was tapped. */
+    var onMirrorAxis: (axis: String) -> Unit = {}
+
+    /** The Mirror icon itself: put every plane away. */
+    var onMirrorOff: () -> Unit = {}
     var onGroupNew: () -> Unit = {}
     var onGroupDuplicate: () -> Unit = {}
     var onGroupDelete: () -> Unit = {}
@@ -358,6 +365,11 @@ class Chrome(private val act: Activity, val t: Tokens) {
     /** Which brush the rail button is currently drawn as. */
     private var brushIconShown = ""
 
+    /** `#mirrorBar` — the three global planes, revealed by the Mirror icon. */
+    private val mirrorBar = LinearLayout(act)
+    private val mirrorChips = LinkedHashMap<String, TextButton>()
+    private var mirrorOn: Set<String> = emptySet()
+
     private val wheelPage = LinearLayout(act)
     private val palettePage = LinearLayout(act)
     private lateinit var wheelTab: IcoButton
@@ -545,6 +557,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
         buildSlidePop()
         buildColorCard()
         buildSysMenu()
+        buildMirrorBar()
         buildGallery()
         place()
         built = true
@@ -643,6 +656,74 @@ class Chrome(private val act: Activity, val t: Tokens) {
         toolPill.addView(divider(act, t))
         toolPill.addView(ico("mirror", Action.MIRROR))
         toolPill.addView(ico("stage", Action.STAGE))
+    }
+
+    /**
+     * `#mirrorBar` — the three planes, under the icon that reveals them.
+     *
+     * FACT: "tap the Mirror icon, which will reveal three axes below it — red
+     * for the X-axis, green for the Y-axis, and blue for the Z-axis... You can
+     * activate multiple axes at the same time."
+     *
+     * The colours are Feather's own, and they are what tells the three chips
+     * apart at a glance — X is not "the first one", it is the red one. The
+     * fold drawn in the scene is still one colour for all three planes, which
+     * is a difference from Feather worth closing once the fold pass can carry
+     * a colour per plane.
+     */
+    private fun buildMirrorBar() {
+        mirrorBar.orientation = LinearLayout.HORIZONTAL
+        mirrorBar.gravity = Gravity.CENTER_VERTICAL
+        mirrorBar.background = GradientDrawable().apply {
+            setColor(t.panel)
+            cornerRadius = t.dpf(14f)
+        }
+        mirrorBar.elevation = t.dpf(10f)
+        mirrorBar.setPadding(t.dp(5f), t.dp(4f), t.dp(5f), t.dp(4f))
+        mirrorBar.visibility = View.GONE
+
+        for (axis in Mirror.AXES) {
+            val chip = TextButton(act, t, small = true).apply {
+                text = axis.uppercase()
+                minWidth = t.dp(34f)
+                setOnClickListener { onMirrorAxis(axis) }
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { leftMargin = t.dp(2f); rightMargin = t.dp(2f) }
+            }
+            mirrorChips[axis] = chip
+            mirrorBar.addView(chip)
+        }
+        popover(mirrorBar)
+    }
+
+    /** The colour Feather gives each axis, and the fold is drawn to match. */
+    private fun axisColor(axis: String): Int = when (axis) {
+        "x" -> t.red
+        "y" -> t.green
+        else -> t.blue
+    }
+
+    /** Show the strip, and mark which planes are live. */
+    fun setMirrorAxes(axes: Set<String>) {
+        mirrorOn = axes.toSet()
+        for ((axis, chip) in mirrorChips) {
+            val on = axis in mirrorOn
+            chip.on = on
+            chip.setTextColor(if (on) t.onActive else axisColor(axis))
+            chip.background = GradientDrawable().apply {
+                setColor(if (on) axisColor(axis) else t.panel2)
+                cornerRadius = t.dpf(9f)
+            }
+        }
+        icons["mirror"]?.on = mirrorOn.isNotEmpty()
+    }
+
+    fun mirrorBarOpen(): Boolean = mirrorBar.visibility == View.VISIBLE
+
+    fun setMirrorBar(open: Boolean) {
+        mirrorBar.visibility = if (open) View.VISIBLE else View.GONE
     }
 
     /**
@@ -2653,6 +2734,14 @@ class Chrome(private val act: Activity, val t: Tokens) {
                 Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL,
                 left = t.px(R.dimen.edge), right = t.px(R.dimen.edge),
                 bottom = t.px(R.dimen.walkBottom), width = t.px(R.dimen.walkW),
+            ),
+        )
+        /* under the icon that reveals it, at the top-right corner */
+        root.addView(
+            mirrorBar,
+            lp(
+                Gravity.TOP or Gravity.END,
+                top = t.px(R.dimen.mirrorBarTop), right = t.px(R.dimen.edge),
             ),
         )
         /* the tip sits over everything, because it names everything */

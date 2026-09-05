@@ -41,6 +41,8 @@
 
     <!-- chrome placement, all measured from the viewport edge -->
     <dimen name="edge">12dp</dimen>
+    <!-- clear of the tool pill it hangs from -->
+    <dimen name="mirrorBarTop">60dp</dimen>
     <dimen name="edgeCompact">8dp</dimen>
     <dimen name="helpLeft">160dp</dimen>       <!-- #helpBtn left -->
     <dimen name="viewInfoLeft">214dp</dimen>   <!-- #viewInfo left -->

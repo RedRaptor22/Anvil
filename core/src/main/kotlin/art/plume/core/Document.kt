@@ -218,6 +218,20 @@ object Document {
            on opacity has to keep looking like that after a reload */
         o.put("pressureTarget", st.pressureTarget)
         st.group?.let { o.put("group", it) }
+        /*
+         * A REFLECTION HAS TO BE ABLE TO FIND ITS ORIGINAL AGAIN.
+         *
+         * Which means the file needs stroke ids, which it never carried: the
+         * curves were an ordered list and nothing pointed at anything. The id
+         * written here is the FILE's, valid only inside it — the same rule the
+         * group ids follow — and the reader re-points every link at the curves
+         * this document actually built.
+         */
+        o.put("id", st.id)
+        st.mirrorOf?.let {
+            o.put("mirrorOf", it)
+            o.put("mirrorKey", st.mirrorKey)
+        }
         return o
     }
 
@@ -230,6 +244,9 @@ object Document {
             pressureTarget = d.str("pressureTarget") ?: "size",
         )
         s.group = d["group"]?.asInt()
+        /* the file's ids, remapped by the caller once every curve exists */
+        s.mirrorOf = d["mirrorOf"]?.asInt()
+        s.mirrorKey = d.str("mirrorKey") ?: ""
         s.pts.addAll(unpackPoints(d))
         return s
     }
@@ -631,15 +648,23 @@ object Document {
         }
 
         val groupOf = restoreGroups(root, sketch)
+        val strokeOf = HashMap<Int, Stroke>()
+        val links = ArrayList<Pair<Stroke, Int>>()
         root.arr("strokes")?.items?.forEach { s ->
             s.asObject()?.let { d ->
                 val st = unpackStroke(d)
                 // the file's group ids are its own; re-point them at the
                 // groups this document actually built
                 st.group = st.group?.let { groupOf[it]?.id }
+                d["id"]?.asInt()?.let { strokeOf[it] = st }
+                st.mirrorOf?.let { links.add(st to it) }
+                st.mirrorOf = null
                 sketch.add(st)
             }
         }
+        /* now that every curve exists, the reflections can find their
+           originals — by the file's id, mapped to the one they have here */
+        for ((copy, fileId) in links) copy.mirrorOf = strokeOf[fileId]?.id
 
         root.obj("guides")?.let { gs ->
             gs.arr("resources")?.items?.forEach { r ->

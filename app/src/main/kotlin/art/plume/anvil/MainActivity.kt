@@ -49,6 +49,7 @@ import art.plume.core.Primitives
 import art.plume.core.Px
 import art.plume.core.Ray
 import art.plume.core.Rgba
+import art.plume.core.Mirror
 import art.plume.core.Selection
 import art.plume.core.Shapes
 import art.plume.core.Sketch
@@ -122,12 +123,18 @@ class MainActivity : Activity(), Gestures.Listener {
     private var hideUi = false
 
     /**
-     * `TOOL.mirror` — null, "x" or "z". A MODE, not a one-shot: every stroke
-     * drawn while it is on gets its reflection, which is what makes symmetry
-     * useful for drawing rather than just for copying afterwards. The tool
-     * pill's button cycles X, Z, off.
+     * WHICH GLOBAL PLANES ARE MIRRORING, any combination of the three.
+     *
+     * FACT: Feather's Mirror icon reveals three axes below it — red X, green
+     * Y, blue Z — and any number can be on at once. This was one axis at a
+     * time, X or Z, with no Y at all: the left-right AND top-bottom symmetry
+     * a chair or a face wants could not be asked for.
+     *
+     * A MODE, not a one-shot: every stroke drawn while it is on gets its
+     * reflections, and — since the reflections now remember what they
+     * reflect — every later change to the original reaches them too.
      */
-    private var mirror: String? = null
+    private val mirrorAxes = LinkedHashSet<String>()
 
     /** FACT (C.3): the pressure toggle lives in the Brush Panel. */
     private var pressureOn = true
@@ -529,6 +536,8 @@ class MainActivity : Activity(), Gestures.Listener {
         chrome.onGroupAssign = { id -> assignSelectionTo(id) }
         chrome.onGroupVisible = { id, visible -> setGroupVisible(id, visible) }
         chrome.onGroupOpacity = { id, v -> setGroupOpacity(id, v) }
+        chrome.onMirrorAxis = { axis -> toggleMirrorAxis(axis) }
+        chrome.onMirrorOff = { clearMirror(); chrome.setMirrorBar(false) }
         chrome.onGroupNew = { newGroup() }
         chrome.onGroupDuplicate = { duplicateActiveGroup() }
         chrome.onGroupDelete = { deleteActiveGroup() }
@@ -607,7 +616,7 @@ class MainActivity : Activity(), Gestures.Listener {
         chrome.onRadial = { n ->
             radial = n
             pushFold()
-            chrome.setSymmetry(mirror != null || radial > 1)
+            chrome.setSymmetry(mirrorAxes.isNotEmpty() || radial > 1)
             scheduleAutosave()
         }
         chrome.onFocal = { mm ->
@@ -793,7 +802,23 @@ class MainActivity : Activity(), Gestures.Listener {
             }
             Unit
         }
-        Action.MIRROR -> cycleMirror()
+        /*
+         * TAP REVEALS THE THREE PLANES; TAP AGAIN PUTS THEM AWAY.
+         *
+         * FACT: "tap the Mirror icon, which will reveal three axes below it...
+         * To deactivate the mirror, tap the Mirror icon in the Tool Menu
+         * again." So the icon is the way in and the way out, and the axes
+         * themselves are what you choose between.
+         */
+        Action.MIRROR -> {
+            if (chrome.mirrorBarOpen()) {
+                clearMirror()
+                chrome.setMirrorBar(false)
+            } else {
+                chrome.setMirrorBar(true)
+            }
+            Unit
+        }
         Action.STAGE -> chrome.toggleStage()
         Action.GUIDE_BEND -> { setTool(Tool.BEND); toast(getString(R.string.bend_hint)) }
         Action.GUIDE_SAVE -> saveActiveGuide()
@@ -1202,7 +1227,7 @@ class MainActivity : Activity(), Gestures.Listener {
 
     /** The fold is sized to the work, so it moves when the work does. */
     private fun pushFold() {
-        renderer.setFold(Symmetry.fold(Bounds.of(sketch), mirror, radial))
+        renderer.setFold(Symmetry.fold(Bounds.of(sketch), mirrorAxes, radial))
         surface.requestRender()
     }
 
@@ -2542,20 +2567,33 @@ class MainActivity : Activity(), Gestures.Listener {
         pushReversible("Duplicate", copies, before)
     }
 
-    /** X, then Z, then off — the cycle the web build's button walks. */
-    private fun cycleMirror() {
-        mirror = when (mirror) {
-            null -> "x"
-            "x" -> "z"
-            else -> null
-        }
-        pushFold()
-        chrome.setSymmetry(mirror != null || radial > 1)
-        toast(
-            mirror?.let { getString(R.string.mirror_on, it.uppercase()) }
-                ?: getString(R.string.mirror_off),
+    /** Turn one of the three planes on or off, independently of the others. */
+    private fun toggleMirrorAxis(axis: String) {
+        if (!mirrorAxes.remove(axis)) mirrorAxes.add(axis)
+        pushMirror()
+        announce(
+            if (mirrorAxes.isEmpty()) getString(R.string.mirror_off)
+            else getString(
+                R.string.mirror_on,
+                Mirror.AXES.filter { it in mirrorAxes }.joinToString("").uppercase(),
+            ),
         )
         scheduleAutosave()
+    }
+
+    /** Every plane off, which is what tapping the Mirror icon itself does. */
+    private fun clearMirror() {
+        if (mirrorAxes.isEmpty()) return
+        mirrorAxes.clear()
+        pushMirror()
+        announce(getString(R.string.mirror_off))
+        scheduleAutosave()
+    }
+
+    private fun pushMirror() {
+        pushFold()
+        chrome.setSymmetry(mirrorAxes.isNotEmpty() || radial > 1)
+        chrome.setMirrorAxes(mirrorAxes)
     }
 
     /**
@@ -2567,9 +2605,28 @@ class MainActivity : Activity(), Gestures.Listener {
      * actually drew.
      */
     private fun symmetryCopies(s: Stroke): List<Stroke> {
-        val mats = Selection.symmetryMatrices(mirror, radial)
-        if (mats.isEmpty()) return emptyList()
-        return mats.map { m -> Selection.transformedCopy(s, m) }
+        /*
+         * The reflections are LINKED to the stroke and the radial copies are
+         * not, which is the honest split: a reflection has one curve it is the
+         * reflection OF, and a rosette's sectors are peers with no original
+         * among them. Editing a curve therefore updates its mirror images and
+         * leaves the pinwheel alone.
+         */
+        val out = ArrayList<Stroke>()
+        out.addAll(Mirror.copiesOf(s, mirrorAxes))
+        val n = maxOf(1, radial)
+        for (i in 1 until n) {
+            val rot = Mat4.rotationY(i * Math.PI * 2 / n, Mat4())
+            out.add(Selection.transformedCopy(s, rot))
+            for (key in Mirror.keysFor(mirrorAxes)) {
+                out.add(
+                    Selection.transformedCopy(
+                        s, Mat4.multiply(rot, Mirror.matrixFor(key), Mat4()),
+                    ),
+                )
+            }
+        }
+        return out
     }
 
     private fun mirrorSelection() {
@@ -2972,7 +3029,7 @@ class MainActivity : Activity(), Gestures.Listener {
         docTool.opacity = opacity
         docTool.pressureOn = pressureOn
         docTool.pressureTarget = pressureTarget
-        docTool.mirror = mirror
+        docTool.mirror = if (mirrorAxes.isEmpty()) null else mirrorAxes.joinToString("")
         docTool.radial = radial
         docTool.stableOn = stableOn
         docTool.stable = stableAmount
@@ -3020,13 +3077,15 @@ class MainActivity : Activity(), Gestures.Listener {
         opacity = clamp(r.tool.opacity, 0.05, 1.0)
         pressureOn = r.tool.pressureOn
         pressureTarget = r.tool.pressureTarget
-        mirror = r.tool.mirror
+        mirrorAxes.clear()
+        r.tool.mirror?.forEach { ch -> if (ch.toString() in Mirror.AXES) mirrorAxes.add(ch.toString()) }
         radial = maxOf(1, r.tool.radial)
         stableOn = r.tool.stableOn
         stableAmount = clamp(r.tool.stable, 0.0, Tune.STABLE_MAX)
         stabilizer.amount = if (stableOn) stableAmount else 0.0
         autoGuide = r.tool.autoGuide
-        chrome.setSymmetry(mirror != null || radial > 1)
+        chrome.setSymmetry(mirrorAxes.isNotEmpty() || radial > 1)
+        chrome.setMirrorAxes(mirrorAxes)
         chrome.setPressure(pressureOn, pressureTarget)
         pushSettings()
         autoGuide = r.tool.autoGuide
@@ -3263,13 +3322,15 @@ class MainActivity : Activity(), Gestures.Listener {
         opacity = clamp(r.tool.opacity, 0.05, 1.0)
         pressureOn = r.tool.pressureOn
         pressureTarget = r.tool.pressureTarget
-        mirror = r.tool.mirror
+        mirrorAxes.clear()
+        r.tool.mirror?.forEach { ch -> if (ch.toString() in Mirror.AXES) mirrorAxes.add(ch.toString()) }
         radial = maxOf(1, r.tool.radial)
         stableOn = r.tool.stableOn
         stableAmount = clamp(r.tool.stable, 0.0, Tune.STABLE_MAX)
         stabilizer.amount = if (stableOn) stableAmount else 0.0
         autoGuide = r.tool.autoGuide
-        chrome.setSymmetry(mirror != null || radial > 1)
+        chrome.setSymmetry(mirrorAxes.isNotEmpty() || radial > 1)
+        chrome.setMirrorAxes(mirrorAxes)
         chrome.setPressure(pressureOn, pressureTarget)
         pushSettings()
         autoGuide = r.tool.autoGuide
@@ -3285,6 +3346,19 @@ class MainActivity : Activity(), Gestures.Listener {
     }
 
     private fun refreshScene() {
+        /*
+         * REFLECTIONS FIRST, BECAUSE EVERYTHING ELSE HERE IS DOWNSTREAM OF
+         * THEM. This is the one function every change to the document passes
+         * through, which is exactly why it is where the mirror is kept in
+         * step: hanging it off the individual tools instead would mean every
+         * new tool had to remember, and the tool that forgot would leave half
+         * a drawing behind.
+         *
+         * What moved is invalidated by name. A reflection's points change
+         * under a mesh the renderer is holding by identity, and a mesh nobody
+         * told would go on drawing the curve where it used to be.
+         */
+        for (s in Mirror.resync(sketch)) renderer.invalidate(s)
         pushFold()
         pushStrokes()
         /*
