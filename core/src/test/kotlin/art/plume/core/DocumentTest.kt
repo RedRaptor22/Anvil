@@ -430,4 +430,37 @@ class DocumentTest {
         assertEquals("0", JsonNumber(Double.POSITIVE_INFINITY).write())
         assertNotNull(Json.parse(JsonArray().add(Double.NaN).write()))
     }
+    @Test
+    fun `brush presets travel with the note, and an old file has none`() {
+        /* FACT: "Brush presets are saved per note" — so they belong in the
+           document beside the tool state they are made of, not in a setting
+           that would follow you into somebody else's drawing. */
+        val tool = DocumentTool()
+        tool.presets.add(BrushPreset("wide", Rgba(1.0, 0.0, 0.0), 22.0, 0.5))
+        tool.presets.add(BrushPreset("glow", Rgba(0.0, 0.5, 1.0), 3.0, 1.0))
+
+        val text = Document.toJsonText(
+            Sketch(), GuideScene(), Camera().apply { resize(800, 800) }, tool = tool,
+        )
+        val back = Document.restore(
+            text, Sketch(), GuideScene(), Camera().apply { resize(800, 800) },
+        )
+        assertTrue(back.ok)
+        assertEquals(2, back.tool.presets.size)
+        assertEquals("wide", back.tool.presets[0].brush)
+        assertEquals(22.0, back.tool.presets[0].sizeMM, 1e-9)
+        assertEquals(0.5, back.tool.presets[0].opacity, 1e-9)
+        assertEquals(Rgba(1.0, 0.0, 0.0), back.tool.presets[0].color)
+        assertEquals("glow", back.tool.presets[1].brush)
+
+        /* a note written before presets existed opens with none rather than
+           inheriting whatever the last note had */
+        val older = text.replace("\"presets\"", "\"wasPresets\"")
+        val old = Document.restore(
+            older, Sketch(), GuideScene(), Camera().apply { resize(800, 800) },
+        )
+        assertTrue(old.ok)
+        assertEquals(0, old.tool.presets.size)
+    }
+
 }

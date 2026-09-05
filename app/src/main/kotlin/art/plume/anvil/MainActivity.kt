@@ -21,6 +21,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import art.plume.core.Bounds
+import art.plume.core.BrushPreset
 import art.plume.core.Camera
 import art.plume.core.ColorSpace
 import art.plume.core.Curves
@@ -550,6 +551,9 @@ class MainActivity : Activity(), Gestures.Listener {
         chrome.onGroupVisible = { id, visible -> setGroupVisible(id, visible) }
         chrome.onGroupOpacity = { id, v -> setGroupOpacity(id, v) }
         chrome.onGroupIsolate = { id -> isolateGroup(id) }
+        chrome.onPresetAdd = { addPreset() }
+        chrome.onPresetLoad = { i -> loadPreset(i) }
+        chrome.onPresetDelete = { gone -> deletePresets(gone) }
         chrome.onLiquifyUndoAll = { undoAllLiquify() }
         chrome.onLiquifyCompare = { down -> peekBeforeLiquify(down) }
         chrome.onMirrorAxis = { axis -> toggleMirrorAxis(axis) }
@@ -1607,6 +1611,75 @@ class MainActivity : Activity(), Gestures.Listener {
         announce(
             if (sketch.isolatedGroup == null) getString(R.string.isolation_off)
             else getString(R.string.isolation_on, sketch.groupById(id)?.name ?: ""),
+        )
+    }
+
+    // ---- brush presets ------------------------------------------------------
+
+    /**
+     * The brushes this note was made with.
+     *
+     * FACT: "The brush preset saves the current brush type, color, size, and
+     * opacity… Brush presets are saved per note." So they live beside the tool
+     * state in the document, and a work opened tomorrow comes back with the
+     * brushes it was drawn with rather than whatever was used last.
+     */
+    private val presets = ArrayList<BrushPreset>()
+
+    private fun currentPreset() = BrushPreset(brush, color, sizeMM, opacity)
+
+    private fun addPreset() {
+        val fresh = currentPreset()
+        /* the same brush twice is not two presets */
+        if (presets.any { it.sameAs(fresh) }) return
+        if (presets.size >= BrushPreset.LIMIT) {
+            toast(getString(R.string.preset_full)); return
+        }
+        presets.add(fresh)
+        pushPresets()
+        announce(getString(R.string.preset_saved))
+        scheduleAutosave()
+    }
+
+    private fun loadPreset(i: Int) {
+        val p = presets.getOrNull(i) ?: return
+        brush = p.brush
+        color = p.color
+        sizeMM = clamp(p.sizeMM, Tune.BRUSH_MIN_MM, Tune.BRUSH_MAX_MM)
+        opacity = clamp(p.opacity, 0.0, 1.0)
+        syncBrushControls()
+        announce(
+            getString(Chrome.BRUSH_NAMES[p.brush] ?: R.string.brush_pen).substringBefore(" —"),
+        )
+        scheduleAutosave()
+    }
+
+    /**
+     * FACT: "Deleted brush presets cannot be recovered and will not return
+     * even if you undo the action." Which this build takes literally rather
+     * than improving on: an undo that brought back a preset would put it back
+     * in a strip you are looking at, halfway through deciding what to keep.
+     */
+    private fun deletePresets(indices: List<Int>) {
+        for (i in indices.sortedDescending()) if (i in presets.indices) presets.removeAt(i)
+        pushPresets()
+        scheduleAutosave()
+    }
+
+    private fun pushPresets() {
+        chrome.setPresets(
+            presets.map { p ->
+                Chrome.PresetRow(
+                    p.brush,
+                    android.graphics.Color.rgb(
+                        (p.color.r * 255).toInt().coerceIn(0, 255),
+                        (p.color.g * 255).toInt().coerceIn(0, 255),
+                        (p.color.b * 255).toInt().coerceIn(0, 255),
+                    ),
+                    p.sizeMM,
+                    p.opacity,
+                )
+            },
         )
     }
 
@@ -3216,6 +3289,8 @@ class MainActivity : Activity(), Gestures.Listener {
         docTool.pressureOn = pressureOn
         docTool.pressureTarget = pressureTarget
         docTool.mirror = if (mirrorAxes.isEmpty()) null else mirrorAxes.joinToString("")
+        docTool.presets.clear()
+        docTool.presets.addAll(presets)
         docTool.radial = radial
         docTool.stableOn = stableOn
         docTool.stable = stableAmount
@@ -3253,9 +3328,16 @@ class MainActivity : Activity(), Gestures.Listener {
      * An undo stack whose steps refer to curves from a document that is no
      * longer open would put back strokes from someone else's sketch.
      */
-    private fun loadDocument(text: String) {
-        val r = Document.restore(text, sketch, guides, camera)
-        if (!r.ok) { toast(r.reason ?: "Not a Plume sketch"); return }
+    /**
+     * WHAT THE FILE SAYS THE TOOL WAS.
+     *
+     * Opening a work and recovering the autosave are the same act as far as
+     * the tool is concerned, and they used to say so twice, in two copies of
+     * this that had already drifted apart by a line. A tool state restored in
+     * one path and not the other is a bug you only meet on the path nobody
+     * edited, so there is one copy now and both callers use it.
+     */
+    private fun adoptTool(r: Document.Restored) {
         carried = r.carried
         brush = r.tool.brush
         color = r.tool.color
@@ -3270,13 +3352,23 @@ class MainActivity : Activity(), Gestures.Listener {
         stableAmount = clamp(r.tool.stable, 0.0, Tune.STABLE_MAX)
         stabilizer.amount = if (stableOn) stableAmount else 0.0
         autoGuide = r.tool.autoGuide
+        /* FACT: "Brush presets are saved per note", so a work opened comes
+           back with its own strip and not the last one that was on screen. */
+        presets.clear()
+        presets.addAll(r.tool.presets)
+        pushPresets()
         chrome.setSymmetry(mirrorAxes.isNotEmpty() || radial > 1)
         chrome.setMirrorAxes(mirrorAxes)
         chrome.setPressure(pressureOn, pressureTarget)
         pushSettings()
-        autoGuide = r.tool.autoGuide
         applyEnvironment(r.env)
         refreshGroups()
+    }
+
+    private fun loadDocument(text: String) {
+        val r = Document.restore(text, sketch, guides, camera)
+        if (!r.ok) { toast(r.reason ?: "Not a Plume sketch"); return }
+        adoptTool(r)
         renderer.showGrid = r.env.grid
         renderer.showAxis = r.env.axis
         history.clear()
@@ -3501,27 +3593,7 @@ class MainActivity : Activity(), Gestures.Listener {
         val text = runCatching { f.readText() }.getOrNull() ?: return
         val r = Document.restore(text, sketch, guides, camera)
         if (!r.ok) return
-        carried = r.carried
-        brush = r.tool.brush
-        color = r.tool.color
-        sizeMM = clamp(r.tool.sizeMM, Tune.BRUSH_MIN_MM, Tune.BRUSH_MAX_MM)
-        opacity = clamp(r.tool.opacity, 0.05, 1.0)
-        pressureOn = r.tool.pressureOn
-        pressureTarget = r.tool.pressureTarget
-        mirrorAxes.clear()
-        r.tool.mirror?.forEach { ch -> if (ch.toString() in Mirror.AXES) mirrorAxes.add(ch.toString()) }
-        radial = maxOf(1, r.tool.radial)
-        stableOn = r.tool.stableOn
-        stableAmount = clamp(r.tool.stable, 0.0, Tune.STABLE_MAX)
-        stabilizer.amount = if (stableOn) stableAmount else 0.0
-        autoGuide = r.tool.autoGuide
-        chrome.setSymmetry(mirrorAxes.isNotEmpty() || radial > 1)
-        chrome.setMirrorAxes(mirrorAxes)
-        chrome.setPressure(pressureOn, pressureTarget)
-        pushSettings()
-        autoGuide = r.tool.autoGuide
-        applyEnvironment(r.env)
-        refreshGroups()
+        adoptTool(r)
     }
 
     // ---- keeping the screen in step -------------------------------------------

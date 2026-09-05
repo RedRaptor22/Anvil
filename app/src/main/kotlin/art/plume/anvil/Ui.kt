@@ -1464,6 +1464,62 @@ class HoverNib(ctx: Context, private val t: Tokens) : View(ctx) {
  * tap, and a step is reported per threshold crossed so a long drag walks
  * several places rather than jumping to the end.
  */
+/**
+ * A DRAG ON THE COLOUR DOT THAT MOVES TWO THINGS AT ONCE.
+ *
+ * FACT: "Tap and hold the active color icon in the brush panel, then drag up,
+ * down, left, or right to adjust the current color's saturation and
+ * brightness. Drag left or right to adjust saturation and up or down to
+ * adjust brightness. This gesture is useful for making subtle color changes
+ * while drawing."
+ *
+ * Continuous rather than stepped, which is the point of it: the adjustment
+ * anyone makes while drawing is "a bit lighter than that", and a control that
+ * moves in notches cannot say a bit. Reports deltas since the last event, so
+ * the caller can hold the colour it started from and never compound rounding
+ * across a long drag.
+ *
+ * [onDrag] gets pixels; [onTap] fires only when the finger never moved far
+ * enough to mean anything, so opening the card is still one tap.
+ */
+class ColorDrag(
+    private val view: View,
+    private val slopPx: Float,
+    private val onStart: () -> Unit,
+    private val onDrag: (dxPx: Float, dyPx: Float) -> Unit,
+    private val onTap: () -> Unit,
+) : View.OnTouchListener {
+
+    private var downX = 0f
+    private var downY = 0f
+    private var dragging = false
+
+    init { view.setOnTouchListener(this) }
+
+    override fun onTouch(v: View, e: MotionEvent): Boolean {
+        when (e.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                downX = e.x; downY = e.y
+                dragging = false
+                v.parent?.requestDisallowInterceptTouchEvent(true)
+                onStart()
+            }
+            MotionEvent.ACTION_MOVE -> {
+                val dx = e.x - downX
+                val dy = e.y - downY
+                if (!dragging && kotlin.math.hypot(dx, dy) < slopPx) return true
+                dragging = true
+                onDrag(dx, dy)
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                if (!dragging) { onTap(); v.performClick() }
+                dragging = false
+            }
+        }
+        return true
+    }
+}
+
 class StepSwipe(
     private val view: View,
     private val stepPx: Float,

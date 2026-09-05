@@ -85,6 +85,12 @@
     <string name="colour_guide">GUIDE COLOUR</string>
     <string name="isolation_on">Isolated %1$s</string>
     <string name="isolation_off">Isolation off</string>
+    <string name="tip_presets">Brush presets</string>
+    <string name="tip_preset">%1$s, %2$dmm — tap to use, hold to pick</string>
+    <string name="tip_preset_add">Save this brush</string>
+    <string name="tip_preset_delete">Delete the picked presets</string>
+    <string name="preset_saved">Brush saved</string>
+    <string name="preset_full">That is as many presets as a note holds</string>
     <string name="lq_undo_all">Undo all — back to before liquify</string>
     <string name="lq_compare">Hold to compare with the before</string>
     <string name="lq_apply">Apply</string>

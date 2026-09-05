@@ -753,6 +753,35 @@ class Chrome(private val act: Activity, val t: Tokens) {
         val p = t.px(R.dimen.padRail)
         brushRail.setPadding(p, p, p, p)
 
+        /*
+         * `#presets` — the brushes this note was made with, above the panel.
+         *
+         * FACT: "Tap the small arrow icon above the Brush Panel on the left
+         * side of the screen to open the brush preset menu. Tap the arrow
+         * again to close the preset menu. Even when closed, added brush
+         * presets remain saved."
+         *
+         * At the top of the rail rather than floating over it: the rail is
+         * already the column your thumb lives in, and a second panel that has
+         * to be positioned against it is a panel that will be in the wrong
+         * place on some screen.
+         */
+        presetToggle = IcoButton(act, t, IcoButton.SIZE_SMALL).icon("chev").apply {
+            setOnClickListener { setPresetsOpen(!presetsOpen) }
+            Tip.attach(this, tipCard, act.getString(R.string.tip_presets))
+        }
+        brushRail.addView(presetToggle)
+
+        presetStrip.orientation = LinearLayout.VERTICAL
+        presetStrip.gravity = Gravity.CENTER_HORIZONTAL
+        presetStrip.visibility = View.GONE
+        brushRail.addView(
+            presetStrip,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { bottomMargin = t.dp(4f) },
+        )
+
         val typeBtn = IcoButton(act, t).icon("brush")
         typeBtn.setOnClickListener { togglePopover(brushGrid) }
         /* swipe it to walk the eight without opening anything */
@@ -764,9 +793,29 @@ class Chrome(private val act: Activity, val t: Tokens) {
             layoutParams = LinearLayout.LayoutParams(
                 t.px(R.dimen.brushDot), t.px(R.dimen.brushDot),
             ).apply { topMargin = t.px(R.dimen.gapRail) }
-            setOnClickListener { openColorCard(ColorTarget.INK) }
+            /* the tap is ColorDrag's to report, so the listener is only here
+               to make the view clickable for accessibility */
+            setOnClickListener { }
         }
-        StepSwipe(colorDot, t.dpf(SWIPE_STEP_DP)) { dir -> stepColor(dir) }
+        /*
+         * FACT: "Tap and hold the active color icon in the brush panel, then
+         * drag up, down, left, or right… Drag left or right to adjust
+         * saturation and up or down to adjust brightness."
+         *
+         * Continuous, and measured from the colour the drag STARTED on, so a
+         * long wander does not accumulate rounding and coming back to where
+         * you began gives back the colour you began with. A group picked on
+         * the palettes page keeps its stepping: there the list is the point,
+         * and sliding off the swatches you chose is the one thing that must
+         * not happen.
+         */
+        ColorDrag(
+            colorDot,
+            slopPx = Gestures.TAP_SLOP,
+            onStart = { dragFromColor = cardColor(); dragSteps = 0 },
+            onDrag = { dx, dy -> dragColorBy(dx, dy) },
+            onTap = { openColorCard(ColorTarget.INK) },
+        )
         brushRail.addView(colorDot)
         brushRail.addView(separator(act, t))
 
@@ -2042,6 +2091,107 @@ class Chrome(private val act: Activity, val t: Tokens) {
         }
 
     /** `#brushGrid` — two columns of 42x38 tiles, anchored beside the rail. */
+    // ---- brush presets ---------------------------------------------------
+
+    fun setPresetsOpen(open: Boolean) {
+        presetsOpen = open
+        presetStrip.visibility = if (open) View.VISIBLE else View.GONE
+        presetToggle.on = open
+        if (!open) presetPicked.clear()
+        rebuildPresets()
+    }
+
+    /** The saved brushes, newest last, as they are in the document. */
+    fun setPresets(rows: List<PresetRow>) {
+        presetRows = rows
+        presetPicked.retainAll(rows.indices.toSet())
+        rebuildPresets()
+    }
+
+    /**
+     * The strip: a swatch per preset, a plus, and a bin when any are picked.
+     *
+     * FACT: "Tap a saved brush preset to load its settings… Tap and hold a
+     * brush preset to select it. To select multiple brush presets, tap other
+     * presets while one is already selected. To deselect, tap a selected brush
+     * preset again… While a brush preset is selected, tap the trash can icon
+     * to delete it."
+     *
+     * So a tap means two different things depending on whether anything is
+     * picked, which sounds like a trap and is not: once you are choosing what
+     * to throw away, a tap that silently changed your brush instead would be
+     * the trap.
+     */
+    private fun rebuildPresets() {
+        presetStrip.removeAllViews()
+        if (!presetsOpen) return
+
+        for ((i, row) in presetRows.withIndex()) {
+            val picked = i in presetPicked
+            presetStrip.addView(
+                View(act).apply {
+                    layoutParams = LinearLayout.LayoutParams(
+                        t.px(R.dimen.brushDot), t.px(R.dimen.brushDot),
+                    ).apply { bottomMargin = t.dp(4f) }
+                    background = GradientDrawable().apply {
+                        shape = GradientDrawable.OVAL
+                        setColor(row.color)
+                        /* the ring says picked; the size of the dot says
+                           nothing, because a 1mm brush and a 300mm one have to
+                           stay tappable */
+                        setStroke(t.dp(if (picked) 3f else 1f), if (picked) t.active else t.line)
+                    }
+                    alpha = (0.35 + 0.65 * row.opacity).toFloat()
+                    setOnClickListener {
+                        if (presetPicked.isEmpty()) {
+                            onPresetLoad(i)
+                        } else {
+                            if (!presetPicked.remove(i)) presetPicked.add(i)
+                            rebuildPresets()
+                        }
+                    }
+                    setOnLongClickListener {
+                        if (!presetPicked.remove(i)) presetPicked.add(i)
+                        rebuildPresets()
+                        true
+                    }
+                    Tip.attach(
+                        this, tipCard,
+                        act.getString(
+                            R.string.tip_preset,
+                            act.getString(BRUSH_NAMES[row.brush] ?: R.string.brush_pen)
+                                .substringBefore(" —"),
+                            row.sizeMM.toInt(),
+                        ),
+                    )
+                },
+            )
+        }
+
+        presetStrip.addView(
+            IcoButton(act, t, IcoButton.SIZE_SMALL)
+                .icon(if (presetPicked.isEmpty()) "plus" else "trash").apply {
+                    if (presetPicked.isNotEmpty()) danger = true
+                    setOnClickListener {
+                        if (presetPicked.isEmpty()) {
+                            onPresetAdd()
+                        } else {
+                            val gone = presetPicked.sortedDescending()
+                            presetPicked.clear()
+                            onPresetDelete(gone)
+                        }
+                    }
+                    Tip.attach(
+                        this, tipCard,
+                        act.getString(
+                            if (presetPicked.isEmpty()) R.string.tip_preset_add
+                            else R.string.tip_preset_delete,
+                        ),
+                    )
+                },
+        )
+    }
+
     private fun buildBrushGrid() {
         val grid = GridLayout(act).apply { columnCount = 2 }
         for (name in listOf("pen", "sketch", "taper", "rectangle", "cube", "flat", "wide", "glow")) {
@@ -3390,6 +3540,55 @@ class Chrome(private val act: Activity, val t: Tokens) {
         applyCardColor(Color.HSVToColor(Color.alpha(c), hsv))
     }
 
+    /** `#presets` — saved brushes, and which of them are picked for deleting. */
+    private val presetStrip = LinearLayout(act)
+    private lateinit var presetToggle: IcoButton
+    private var presetsOpen = false
+    private var presetRows: List<PresetRow> = emptyList()
+    private val presetPicked = LinkedHashSet<Int>()
+
+    /** One saved brush, as the strip needs to draw it. */
+    class PresetRow(val brush: String, val color: Int, val sizeMM: Double, val opacity: Double)
+
+    /** Keep the current brush as a preset. */
+    var onPresetAdd: () -> Unit = {}
+
+    /** Draw with the preset at this index. */
+    var onPresetLoad: (Int) -> Unit = {}
+
+    /** Throw these away — Feather says a deleted preset does not come back. */
+    var onPresetDelete: (List<Int>) -> Unit = {}
+
+    /** The colour a drag on the dot started from, and how far it has stepped. */
+    private var dragFromColor = 0
+    private var dragSteps = 0
+
+    /**
+     * One event of a drag on the colour dot.
+     *
+     * Saturation across, brightness up — and both from the colour the drag
+     * began on rather than from the last frame, which is what keeps a slow
+     * wander from drifting and lets you undo a drag by dragging back.
+     */
+    private fun dragColorBy(dxPx: Float, dyPx: Float) {
+        val group = if (!onWheelPage) activePalette() else null
+        if (group != null && group.isNotEmpty()) {
+            /* a picked group still steps: the list is the point of it */
+            val steps = (-dyPx / t.dpf(SWIPE_STEP_DP)).toInt()
+            if (steps == dragSteps) return
+            repeat(kotlin.math.abs(steps - dragSteps)) {
+                stepColor(if (steps > dragSteps) 1 else -1)
+            }
+            dragSteps = steps
+            return
+        }
+        val hsv = FloatArray(3)
+        Color.colorToHSV(dragFromColor, hsv)
+        hsv[1] = (hsv[1] + dxPx / t.dpf(SV_DRAG_FULL_DP)).coerceIn(0f, 1f)
+        hsv[2] = (hsv[2] - dyPx / t.dpf(SV_DRAG_FULL_DP)).coerceIn(VALUE_FLOOR, 1f)
+        applyCardColor(Color.HSVToColor(Color.alpha(dragFromColor), hsv))
+    }
+
     /** The group a step walks along: the one you picked, and only that one. */
     private fun activePalette(): List<Int>? {
         val name = pickedPalette ?: return null
@@ -3771,6 +3970,15 @@ class Chrome(private val act: Activity, val t: Tokens) {
 
         /** A step of brightness: twenty from black to white, so a nudge shows. */
         const val VALUE_STEP = 0.05f
+
+        /**
+         * How far a drag on the dot travels to cross the whole range.
+         *
+         * A thumb's comfortable reach, not the screen: the gesture is for
+         * "a bit lighter than that" while the other hand holds the pen, and
+         * it has to be usable without moving your arm.
+         */
+        const val SV_DRAG_FULL_DP = 150f
 
         /** Dark, but still a colour. */
         const val VALUE_FLOOR = 0.06f

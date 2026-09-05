@@ -41,6 +41,13 @@ class DocumentTool {
     var stable = Tune.STABLE_DEFAULT
     var mirror: String? = null
     var autoGuide = true
+
+    /**
+     * FACT: "Brush presets are saved per note." So they travel in the
+     * document, beside the tool state they are made of, rather than in a
+     * setting that would follow you between drawings.
+     */
+    val presets = ArrayList<BrushPreset>()
 }
 
 /**
@@ -497,6 +504,18 @@ object Document {
         toolOut.put("stableOn", tool.stableOn).put("stable", q(tool.stable))
         if (tool.mirror != null) toolOut.put("mirror", tool.mirror!!) else toolOut.putNull("mirror")
         toolOut.put("autoGuide", tool.autoGuide)
+        /* the brushes this drawing was made with, kept with the drawing */
+        val presetList = JsonArray()
+        for (p in tool.presets) {
+            presetList.add(
+                JsonObject()
+                    .put("brush", p.brush)
+                    .put("color", packColor(p.color))
+                    .put("sizeMM", q(p.sizeMM))
+                    .put("opacity", q(p.opacity)),
+            )
+        }
+        toolOut.put("presets", presetList)
         doc.put("tool", toolOut)
 
         val groupList = JsonArray()
@@ -649,6 +668,21 @@ object Document {
             tool.stable = t.num("stable", Tune.STABLE_DEFAULT)
             tool.mirror = t.str("mirror")
             tool.autoGuide = t.bool("autoGuide", true)
+            tool.presets.clear()
+            t.arr("presets")?.items?.forEach { item ->
+                item.asObject()?.let { o ->
+                    tool.presets.add(
+                        BrushPreset(
+                            brush = Brushes.resolve(o.str("brush")).name,
+                            color = unpackColor(o.str("color"), Rgba(0.1, 0.1, 0.13)),
+                            sizeMM = clamp(
+                                o.num("sizeMM", 14.0), Tune.BRUSH_MIN_MM, Tune.BRUSH_MAX_MM,
+                            ),
+                            opacity = clamp(o.num("opacity", 1.0), 0.0, 1.0),
+                        ),
+                    )
+                }
+            }
         }
 
         val groupOf = restoreGroups(root, sketch)
