@@ -82,6 +82,7 @@
     <string name="colour_ink">BRUSH COLOUR</string>
     <string name="colour_background">BACKGROUND</string>
     <string name="colour_light">LIGHT COLOUR</string>
+    <string name="colour_guide">GUIDE COLOUR</string>
 
     <!-- #stagePanel -->
     <string name="tab_curves">Curves</string>

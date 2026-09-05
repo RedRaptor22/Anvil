@@ -108,6 +108,18 @@ class Guide(
     var name: String = defaultName(kind),
 ) {
     /**
+     * This guide's own colour, or null to take the one the page decides.
+     *
+     * Guide colour has always been derived from the background — a deep blue
+     * on paper, a pale one on a dark page — which is right as a DEFAULT and
+     * wrong as the only option: two guides crossing each other are two sheets
+     * of the same blue, and telling them apart is exactly what you need when
+     * one is the ground and the other is the wall you are drawing on. Per
+     * guide rather than one setting for all of them, for the same reason.
+     */
+    var tint: Rgba? = null
+
+    /**
      * FACT (A.2/A.10): opacity is adjustable down to 0% but never fully opaque
      * — EXCEPT for an imported image, which is reference art rather than
      * scaffolding and is allowed to be solid.

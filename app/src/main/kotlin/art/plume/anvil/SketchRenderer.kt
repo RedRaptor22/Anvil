@@ -1226,6 +1226,31 @@ class SketchRenderer : GLSurfaceView.Renderer {
             val surface = g.surface ?: continue
             val b = guideUploaded[surface] ?: uploadGuide(surface) ?: continue
             GLES30.glUniform1f(gOpacity, g.opacity.toFloat())
+            /*
+             * A guide's own colour when it has one, the page's when it does
+             * not. The uniform is set per guide rather than once for the pass,
+             * which costs two calls and is what lets two guides in one scene
+             * be told apart.
+             */
+            val tint = g.tint
+            if (tint == null) {
+                GLES30.glUniform3f(gFill, fill.r.toFloat(), fill.g.toFloat(), fill.b.toFloat())
+                GLES30.glUniform3f(gLine, line.r.toFloat(), line.g.toFloat(), line.b.toFloat())
+            } else {
+                GLES30.glUniform3f(
+                    gFill, tint.r.toFloat(), tint.g.toFloat(), tint.b.toFloat(),
+                )
+                /* the section lines are the same hue carried towards the page,
+                   so a tinted guide keeps the fill/line relationship the
+                   derived colours have */
+                val k = if (Grid.luminance(background) > 0.5) 0.55 else 1.35
+                GLES30.glUniform3f(
+                    gLine,
+                    (tint.r * k).toFloat().coerceIn(0f, 1f),
+                    (tint.g * k).toFloat().coerceIn(0f, 1f),
+                    (tint.b * k).toFloat().coerceIn(0f, 1f),
+                )
+            }
             // a primitive has no arc-length grid, so its lines come from a
             // triplanar projection of world space instead
             val triplanar = g.kind == GuideKind.PRIMITIVE || g.kind == GuideKind.MODEL

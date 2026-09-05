@@ -39,10 +39,18 @@ object Grid {
     /**
      * Grid line colours for a background: a light page gets darker lines, a
      * dark one gets lighter, so the grid never disappears into the paper.
+     *
+     * THE MIX IS HALFWAY, NOT A THIRD. The ported values — 0.30 for the centre
+     * lines and 0.14 for the rest — were chosen against a browser on a desk.
+     * A phone held at arm's length, often in daylight, is a harder surface to
+     * read a faint line on: at 0.14 the field of the grid was a suggestion of
+     * a grid, and the whole use of it is judging where a stroke sits in space.
+     * Raised until the lines are legible at a glance without competing with
+     * the drawing, which is what keeps them below the ink rather than at it.
      */
     fun gridColors(bg: Rgba): Pair<Rgba, Rgba> {
         val toward = if (luminance(bg) > 0.5) Rgba(0.0, 0.0, 0.0) else Rgba(1.0, 1.0, 1.0)
-        return lerp(bg, toward, 0.30) to lerp(bg, toward, 0.14)
+        return lerp(bg, toward, 0.50) to lerp(bg, toward, 0.26)
     }
 
     /**
@@ -100,7 +108,13 @@ object Grid {
      * Environment tab, so this is built once and its visibility flipped rather
      * than being rebuilt on each toggle.
      */
-    fun axis(length: Double = Tune.AXIS_LENGTH, opacity: Double = 0.55): Lines {
+    /*
+     * And the axis is drawn at nearly full strength. It is three coloured
+     * lines through the origin that you turn ON when you want to know which
+     * way is which — a thing asked for is a thing that should answer clearly,
+     * and at 0.55 the red and blue washed into a mid-tone page.
+     */
+    fun axis(length: Double = Tune.AXIS_LENGTH, opacity: Double = 0.92): Lines {
         val pos = FloatArray(3 * 2 * 3)
         val col = FloatArray(3 * 2 * 4)
         val dirs = arrayOf(

@@ -258,6 +258,7 @@ object Document {
         o.put("kind", kindName(g.kind))
         o.put("name", g.name)
         o.put("opacity", q(g.opacity))
+        g.tint?.let { o.put("tint", packColor(it)) }
 
         g.sweep?.let { sw ->
             val local = DoubleArray(sw.local.size * 3)
@@ -386,6 +387,9 @@ object Document {
 
         d.str("name")?.let { g.name = it }
         g.opacity = d.num("opacity", Tune.GUIDE_OPACITY_INIT)
+        /* a guide with no tint of its own follows the page, which is what
+           every guide written before this field existed should do */
+        g.tint = d.str("tint")?.let { unpackColor(it, Rgba(0.5, 0.65, 0.95)) }
         return g
     }
 

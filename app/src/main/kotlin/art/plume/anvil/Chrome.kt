@@ -12,6 +12,7 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.EditText
+import art.plume.core.Grid
 import art.plume.core.Mirror
 import art.plume.core.ColorSpace
 import art.plume.core.DocumentEnv
@@ -57,7 +58,7 @@ enum class Tool(val key: String, val icon: String) {
 enum class EnvToggle { GRID, AXIS, FOG, SHADED, RENDER, SHADOW, TOON, DOF, GRAIN, PIXEL }
 
 /** Which of the three colour wells the one colour card is pointed at. */
-enum class ColorTarget { INK, BACKGROUND, LIGHT }
+enum class ColorTarget { INK, BACKGROUND, LIGHT, GUIDE }
 
 /** The settings modal's switches — input behaviour and the view. */
 enum class InputToggle {
@@ -114,6 +115,9 @@ class Chrome(private val act: Activity, val t: Tokens) {
     var onFx: () -> Unit = {}
     /** The background colour changed, so the fog, the grid and the theme move. */
     var onBackground: (Int) -> Unit = {}
+
+    /** The active guide's own colour, or null to follow the page again. */
+    var onGuideColor: (Int?) -> Unit = {}
 
     /** The key light's colour changed. */
     var onLightColour: (Int) -> Unit = {}
@@ -207,6 +211,9 @@ class Chrome(private val act: Activity, val t: Tokens) {
      * was written, which is why the background could not be changed at all.
      */
     private var colorTarget = ColorTarget.INK
+
+    /** What the guide swatch shows: the active guide's tint, or the derived one. */
+    private var guideColor = 0xFF5B9DFF.toInt()
     private var guideName = ""
     private var guideActive = false
     private var guideOpacity = 0.42
@@ -398,6 +405,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
     private lateinit var guideBar: LinearLayout
     private lateinit var guideNameLabel: TextView
     private lateinit var guideOpacityBar: HSlider
+    private lateinit var guideSwatch: View
     private lateinit var sizeVal: DragValue
     private lateinit var opacityVal: DragValue
     private lateinit var colorDot: View
@@ -868,6 +876,21 @@ class Chrome(private val act: Activity, val t: Tokens) {
             t.dp(76f), t.dp(22f),                 // style="width:76px" on #guideOpacity
         ).apply { marginStart = t.dp(6f) }
         guideBar.addView(guideOpacityBar)
+        /*
+         * THE GUIDE'S OWN COLOUR, beside its own opacity.
+         *
+         * Both are answers to "how does this piece of scaffolding sit against
+         * the drawing", so they belong on the same bar — and putting the
+         * colour here rather than in a settings page means it applies to THIS
+         * guide, which is the whole use of it when two of them cross.
+         */
+        guideSwatch = View(act).apply {
+            layoutParams = LinearLayout.LayoutParams(t.dp(18f), t.dp(18f)).apply {
+                leftMargin = t.dp(6f); rightMargin = t.dp(2f)
+            }
+            setOnClickListener { openColorCard(ColorTarget.GUIDE) }
+        }
+        guideBar.addView(guideSwatch)
         guideBar.addView(ico("eye", Action.GUIDE_SAVE, small = true))
         guideBar.addView(ico("close", Action.GUIDE_CLOSE, small = true))
         ctxBar.addView(guideBar)
@@ -2414,6 +2437,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
         ColorTarget.INK -> inkColor
         ColorTarget.BACKGROUND -> backgroundColor
         ColorTarget.LIGHT -> lightColor
+        ColorTarget.GUIDE -> guideColor
     }
 
     /**
@@ -2425,6 +2449,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
             ColorTarget.INK -> { inkColor = argb; onColor(argb) }
             ColorTarget.BACKGROUND -> { backgroundColor = argb; onBackground(argb) }
             ColorTarget.LIGHT -> { lightColor = argb; onLightColour(argb) }
+            ColorTarget.GUIDE -> { guideColor = argb; onGuideColor(argb) }
         }
         refresh()
     }
@@ -3124,11 +3149,29 @@ class Chrome(private val act: Activity, val t: Tokens) {
         dockButtons["redo"]?.isEnabled = canRedo
     }
 
-    fun setGuide(active: Boolean, name: String, opacityValue: Double) {
+    fun setGuide(active: Boolean, name: String, opacityValue: Double, tint: Int? = null) {
         guideActive = active
         guideName = name
         guideOpacity = opacityValue
+        /* no tint of its own means the swatch shows the colour the page gives
+           it, so the button is never a lie about what is on screen */
+        guideColor = tint ?: derivedGuideColor()
         refresh()
+    }
+
+    /** What a guide with no colour of its own is drawn in, for the swatch. */
+    private fun derivedGuideColor(): Int {
+        val bg = Rgba(
+            Color.red(backgroundColor) / 255.0,
+            Color.green(backgroundColor) / 255.0,
+            Color.blue(backgroundColor) / 255.0,
+        )
+        val (fill, _) = Grid.guideColors(bg)
+        return Color.rgb(
+            (fill.r * 255).toInt().coerceIn(0, 255),
+            (fill.g * 255).toInt().coerceIn(0, 255),
+            (fill.b * 255).toInt().coerceIn(0, 255),
+        )
     }
 
     fun setSelection(count: Int) { selectionCount = count; refresh() }
@@ -3629,6 +3672,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
             )
         }
 
+        if (::guideSwatch.isInitialized) swatch(guideSwatch, guideColor)
         swatch(bgSwatch, backgroundColor)
         swatch(lightSwatch, lightColor)
 
@@ -3647,6 +3691,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
                 ColorTarget.INK -> R.string.colour_ink
                 ColorTarget.BACKGROUND -> R.string.colour_background
                 ColorTarget.LIGHT -> R.string.colour_light
+                ColorTarget.GUIDE -> R.string.colour_guide
             },
         )
         /* the sampler picks ink off the sketch; there is nothing on screen to

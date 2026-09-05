@@ -685,6 +685,20 @@ class MainActivity : Activity(), Gestures.Listener {
             pushEnvironment()
             scheduleAutosave()
         }
+        chrome.onGuideColor = { argb ->
+            guides.active?.let { g ->
+                g.tint = argb?.let {
+                    Rgba(
+                        android.graphics.Color.red(it) / 255.0,
+                        android.graphics.Color.green(it) / 255.0,
+                        android.graphics.Color.blue(it) / 255.0,
+                    )
+                }
+                pushGuides()
+                surface.requestRender()
+                scheduleAutosave()
+            }
+        }
         chrome.onGuideOpacity = { v ->
             guides.active?.let { g -> g.opacity = v; pushGuides(); surface.requestRender() }
         }
@@ -1639,7 +1653,16 @@ class MainActivity : Activity(), Gestures.Listener {
     private fun refreshControls() {
         chrome.setHistory(history.canUndo(), history.canRedo())
         val g = guides.active
-        chrome.setGuide(g != null, g?.name ?: "", g?.opacity ?: 0.42)
+        chrome.setGuide(
+            g != null, g?.name ?: "", g?.opacity ?: 0.42,
+            g?.tint?.let { c ->
+                android.graphics.Color.rgb(
+                    (c.r * 255).toInt().coerceIn(0, 255),
+                    (c.g * 255).toInt().coerceIn(0, 255),
+                    (c.b * 255).toInt().coerceIn(0, 255),
+                )
+            },
+        )
         chrome.setSelection(sketch.selection.size)
         chrome.setGuideSelected(transformGuide != null)
         pushTransform()
