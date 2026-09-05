@@ -134,6 +134,46 @@ class Sketch {
     fun indexOfGroup(g: StrokeGroup): Int = groupList.indexOf(g)
 
     /**
+     * FACT: "Tap and drag a selected group to change the order of groups."
+     *
+     * The panel's order only, which is why this touches nothing else: what a
+     * curve is drawn on top of is decided by the stroke list, and shuffling
+     * the rows of a list you read must not quietly restack the drawing.
+     */
+    fun moveGroup(g: StrokeGroup, to: Int) {
+        val from = groupList.indexOf(g)
+        if (from < 0) return
+        groupList.removeAt(from)
+        groupList.add(clamp(to, 0, groupList.size), g)
+    }
+
+    /**
+     * FACT: "Tap the merge icon… while multiple groups are selected to merge
+     * the groups. When groups are merged, the original groups disappear and
+     * are combined into one new group, which is always created at the top of
+     * the group tab."
+     *
+     * Returns the new group and, for undo, every curve that moved with the
+     * group it came from — the one thing the caller cannot work out
+     * afterwards, since the originals are gone by then.
+     */
+    fun mergeGroups(gs: List<StrokeGroup>, name: String): Merged {
+        val fresh = newGroup(name, 0)
+        val moved = ArrayList<Pair<Stroke, Int?>>()
+        for (g in gs) {
+            if (g === fresh) continue
+            for (s in membersOf(g.id)) { moved.add(s to s.group); s.group = fresh.id }
+            groupList.remove(g)
+        }
+        /* a merge you cannot draw into is a merge you undo immediately */
+        if (activeGroup !in groupList.map { it.id }) setActiveGroup(fresh.id)
+        return Merged(fresh, moved)
+    }
+
+    /** What a merge did, in the shape an undo needs it. */
+    class Merged(val group: StrokeGroup, val moved: List<Pair<Stroke, Int?>>)
+
+    /**
      * A CURVE NOBODY CAN SEE IS NOT SELECTED.
      *
      * `S.applyVisibility`, which deselects anything that has just become
@@ -189,9 +229,18 @@ class Sketch {
      * draw order — which is what decides who is on top.
      */
     fun duplicateGroup(g: StrokeGroup): Pair<StrokeGroup, List<Stroke>> {
-        /* beside the original in the PANEL as well as in draw order: a copy
-           that jumps to the top of the list is a copy you have to hunt for */
-        val copy = newGroup(g.name + " copy", indexOfGroup(g).coerceAtLeast(0))
+        /*
+         * AT THE TOP OF THE PANEL, and beside the original in draw order.
+         *
+         * FACT: "The duplicated group is always created at the top of the
+         * group tab." This used to put it beside the original in the panel
+         * too, on the argument that a copy which jumps to the top is a copy
+         * you have to hunt for — which was a guess, and the documentation
+         * says otherwise. The two are not in conflict anyway: the panel's
+         * order is a list you read, and draw order is who is on top, and only
+         * the second decides what the drawing looks like.
+         */
+        val copy = newGroup(g.name + " copy", 0)
         copy.visible = g.visible
         val members = membersOf(g.id)
         val copies = members.map { m -> m.copyStroke().also { c -> c.group = copy.id } }

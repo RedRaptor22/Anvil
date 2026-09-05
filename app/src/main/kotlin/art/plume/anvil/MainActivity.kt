@@ -66,6 +66,7 @@ import art.plume.core.Step
 import art.plume.core.Stroke
 import art.plume.core.StrokeGeometry
 import art.plume.core.Symmetry
+import art.plume.core.StrokeGroup
 import art.plume.core.StrokePoint
 import art.plume.core.StyleChange
 import art.plume.core.Transform
@@ -617,8 +618,25 @@ class MainActivity : Activity(), Gestures.Listener {
         chrome.onMirrorAxis = { axis -> toggleMirrorAxis(axis) }
         chrome.onMirrorOff = { toggleMirror() }
         chrome.onGroupNew = { newGroup() }
-        chrome.onGroupDuplicate = { duplicateActiveGroup() }
-        chrome.onGroupDelete = { deleteActiveGroup() }
+        /*
+         * FACT: "While a group is selected, tap the trash can icon in the group
+         * tab to delete the group", and the same for duplicate. So the buttons
+         * act on what is PICKED; with nothing picked they fall back to the
+         * group you are working in, which is what they always did and is still
+         * the right answer for a one-group sketch.
+         */
+        chrome.onGroupDuplicate = {
+            val picked = chrome.pickedGroups()
+            if (picked.isEmpty()) duplicateActiveGroup()
+            else for (id in picked) sketch.groupById(id)?.let { duplicateGroup(it) }
+        }
+        chrome.onGroupDelete = {
+            val picked = chrome.pickedGroups()
+            if (picked.isEmpty()) deleteActiveGroup()
+            else deleteGroups(picked)
+        }
+        chrome.onGroupMerge = { picked -> mergeGroups(picked) }
+        chrome.onGroupReorder = { id, by -> reorderGroup(id, by) }
         chrome.onSelectAll = {
             val before = sketch.selection
             sketch.selectOnly(sketch.editable())
@@ -2171,7 +2189,10 @@ class MainActivity : Activity(), Gestures.Listener {
     }
 
     private fun duplicateActiveGroup() {
-        val g = sketch.groupById(sketch.activeGroup) ?: return
+        duplicateGroup(sketch.groupById(sketch.activeGroup) ?: return)
+    }
+
+    private fun duplicateGroup(g: StrokeGroup) {
         val (copy, copies) = sketch.duplicateGroup(g)
         val at = sketch.indexOfGroup(copy)
         val previous = sketch.activeGroup
@@ -2237,6 +2258,93 @@ class MainActivity : Activity(), Gestures.Listener {
             ),
         )
         toast(getString(R.string.group_deleted, members.size))
+    }
+
+    /**
+     * FACT: "While a group is selected, tap the trash can icon in the group tab
+     * to delete the group. Deleted groups can be undone if the history is
+     * still active."
+     *
+     * All of them in one step, because picking three groups and deleting them
+     * is one decision and should be one tap of undo.
+     */
+    private fun deleteGroups(ids: List<Int>) {
+        val gs = ids.mapNotNull { sketch.groupById(it) }
+        if (gs.isEmpty()) return
+        if (gs.size >= sketch.groups.size) { toast(getString(R.string.last_group)); return }
+        val at = gs.map { sketch.indexOfGroup(it) }
+        val members = gs.map { sketch.membersOf(it.id) }
+        val atStroke = members.map { list -> list.map { sketch.indexOf(it) } }
+        val previous = sketch.activeGroup
+        history.run(
+            Step(
+                "Delete groups", cost = members.sumOf { l -> l.sumOf { it.pts.size } },
+                onRedo = {
+                    for (i in gs.indices) {
+                        for (s in members[i]) sketch.remove(s)
+                        sketch.deleteGroup(gs[i])
+                    }
+                    sketch.setActiveGroup(null); refreshScene()
+                },
+                onUndo = {
+                    /* back to front, so each index is still the index it was
+                       measured at — putting them back in order would shift
+                       every later one by however many came before it */
+                    for (i in gs.indices.reversed()) {
+                        sketch.restoreGroup(gs[i], at[i])
+                        for (k in members[i].indices) sketch.addAt(atStroke[i][k], members[i][k])
+                    }
+                    sketch.setActiveGroup(previous); refreshScene()
+                },
+            ),
+        )
+        toast(getString(R.string.group_deleted, members.sumOf { it.size }))
+    }
+
+    /**
+     * FACT: "When groups are merged, the original groups disappear and are
+     * combined into one new group, which is always created at the top of the
+     * group tab."
+     */
+    private fun mergeGroups(ids: List<Int>) {
+        val gs = ids.mapNotNull { sketch.groupById(it) }
+        if (gs.size < 2) { toast(getString(R.string.group_merge_needs_two)); return }
+        val at = gs.map { sketch.indexOfGroup(it) }
+        val previous = sketch.activeGroup
+        val name = gs.first().name
+        var made: Sketch.Merged? = null
+        history.run(
+            Step(
+                "Merge groups",
+                onRedo = {
+                    made = sketch.mergeGroups(gs, name)
+                    refreshScene()
+                },
+                onUndo = {
+                    val m = made ?: return@Step
+                    sketch.deleteGroup(m.group)
+                    for (i in gs.indices.reversed()) sketch.restoreGroup(gs[i], at[i])
+                    for ((stroke, was) in m.moved) stroke.group = was
+                    sketch.setActiveGroup(previous)
+                    refreshScene()
+                },
+            ),
+        )
+        toast(getString(R.string.group_merged, gs.size))
+    }
+
+    /**
+     * FACT: "Tap and drag a selected group to change the order of groups."
+     *
+     * No history step. The panel's order is how the list READS — it is not
+     * draw order, which is decided by the stroke list and untouched here — and
+     * an undo stack full of "moved a row" is an undo stack you cannot use to
+     * undo anything about the drawing.
+     */
+    private fun reorderGroup(id: Int, by: Int) {
+        val g = sketch.groupById(id) ?: return
+        sketch.moveGroup(g, sketch.indexOfGroup(g) + by)
+        refreshGroups()
     }
 
     /** `UI.refresh` — push the model back at the chrome and let it re-derive. */

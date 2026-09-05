@@ -349,13 +349,58 @@ class GroupTest {
     }
 
     @Test
-    fun `a duplicate sits beside its original in the panel too`() {
+    fun `a duplicate goes to the top of the panel, and beside its original in draw order`() {
+        /* FACT: "The duplicated group is always created at the top of the
+           group tab." This test used to pin the opposite — beside the
+           original — which was a guess about where a copy is easiest to find,
+           made before the documentation was readable. The two positions are
+           not in conflict: the panel is a list you read, draw order is who is
+           on top, and only the second changes the picture. */
         val f = Fixture()
-        val (copy, _) = f.sketch.duplicateGroup(f.a)
-        val names = f.sketch.groups.map { it.name }
+        val (copy, copies) = f.sketch.duplicateGroup(f.a)
+        assertEquals(0, f.sketch.groups.indexOf(copy), "top of the list")
+
+        val members = f.sketch.membersOf(f.a.id)
+        val lastOriginal = f.sketch.strokes.indexOf(members.last())
         assertEquals(
-            names.indexOf("A"), names.indexOf(copy.name) + 1,
-            "the copy did not land beside its original: $names",
+            lastOriginal + 1, f.sketch.strokes.indexOf(copies.first()),
+            "and its curves are still drawn immediately after the ones they copy",
+        )
+    }
+
+    @Test
+    fun `reordering the panel does not restack the drawing`() {
+        /* FACT: "Tap and drag a selected group to change the order of
+           groups." What that changes is the list you read. A curve is drawn
+           on top of another because of when it was drawn, and a drag in a
+           side panel must not quietly rearrange the picture. */
+        val f = Fixture()
+        val before = f.sketch.strokes.toList()
+        f.sketch.moveGroup(f.a, 0)
+        assertEquals(listOf("A", "B"), f.sketch.groups.map { it.name })
+        assertEquals(before, f.sketch.strokes, "not one curve moved")
+
+        f.sketch.moveGroup(f.a, 99)
+        assertEquals(listOf("B", "A"), f.sketch.groups.map { it.name }, "clamped, not dropped")
+    }
+
+    @Test
+    fun `merging leaves one group at the top holding everything`() {
+        /* FACT: "When groups are merged, the original groups disappear and are
+           combined into one new group, which is always created at the top of
+           the group tab." */
+        val f = Fixture()
+        val inA = f.sketch.membersOf(f.a.id).size
+        val inB = f.sketch.membersOf(f.b.id).size
+        val merged = f.sketch.mergeGroups(listOf(f.a, f.b), "Both")
+
+        assertEquals(listOf("Both"), f.sketch.groups.map { it.name })
+        assertEquals(0, f.sketch.groups.indexOf(merged.group))
+        assertEquals(inA + inB, f.sketch.membersOf(merged.group.id).size)
+        assertEquals(inA + inB, merged.moved.size, "and every move is recorded for undo")
+        assertEquals(
+            merged.group.id, f.sketch.activeGroup,
+            "you can draw into it: the group you were in has just been deleted",
         )
     }
 

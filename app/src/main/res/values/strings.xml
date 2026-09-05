@@ -356,4 +356,9 @@
     <string name="tip_joy_switch">Switch between the view joystick and the axis one</string>
     <string name="joy_locked">Joystick locked</string>
     <string name="joy_unlocked">Joystick free</string>
+    <string name="tip_group_merge">Merge the groups you picked</string>
+    <string name="tip_group_curves">Select the curves in this group</string>
+    <string name="group_merged">Merged %1$d groups</string>
+    <string name="group_merge_needs_two">Pick two groups to merge</string>
+    <string name="group_pick_first">Hold a group to pick it</string>
 </resources>

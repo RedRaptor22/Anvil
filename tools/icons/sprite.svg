@@ -49,4 +49,5 @@
   <symbol id="i-axis" viewBox="0 0 24 24"><path d="M6 4v14h14"/><path d="M17 15l3 3-3 3" transform="translate(0,-3)"/></symbol>
   <symbol id="i-find" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l4.5 4.5"/></symbol>
   <symbol id="i-stamp" viewBox="0 0 24 24"><path d="M9 4h6l-1.5 6H10.5z"/><path d="M4.5 14h15v3.5h-15z"/><path d="M6 20h12"/></symbol>
+  <symbol id="i-merge" viewBox="0 0 24 24"><path d="M5 5v4a4 4 0 0 0 4 4h6"/><path d="M19 19v-4a4 4 0 0 0-4-4H9"/><path d="M12.5 9.5 15 12l-2.5 2.5"/></symbol>
 </svg>

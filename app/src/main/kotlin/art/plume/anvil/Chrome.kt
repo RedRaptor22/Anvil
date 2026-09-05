@@ -159,6 +159,10 @@ class Chrome(private val act: Activity, val t: Tokens) {
     /** The Mirror icon itself: put every plane away. */
     var onMirrorOff: () -> Unit = {}
     var onGroupNew: () -> Unit = {}
+
+    /** FACT: merge, and drag to reorder — both act on the picked groups. */
+    var onGroupMerge: (List<Int>) -> Unit = {}
+    var onGroupReorder: (id: Int, by: Int) -> Unit = { _, _ -> }
     var onGroupDuplicate: () -> Unit = {}
     var onGroupDelete: () -> Unit = {}
     var onSelectAll: () -> Unit = {}
@@ -1945,6 +1949,14 @@ class Chrome(private val act: Activity, val t: Tokens) {
                 setOnClickListener { onGroupDuplicate() }
             },
         )
+        /* FACT: "Tap the merge icon, which is right next to the duplicate
+           icon, while multiple groups are selected to merge the groups." */
+        head.addView(
+            IcoButton(act, t, IcoButton.SIZE_SMALL).icon("merge").apply {
+                setOnClickListener { onGroupMerge(groupPicked.toList()) }
+                Tip.attach(this, tipCard, act.getString(R.string.tip_group_merge))
+            },
+        )
         head.addView(
             View(act),
             LinearLayout.LayoutParams(0, 1, 1f),
@@ -2117,8 +2129,24 @@ class Chrome(private val act: Activity, val t: Tokens) {
         val selected: Int = 0,
     )
 
+    /** Which groups are picked for deleting, duplicating, merging, reordering. */
+    private val groupPicked = LinkedHashSet<Int>()
+
+    private var groupRows: List<GroupRow> = emptyList()
+
     fun setGroups(rows: List<GroupRow>) {
         if (renaming != null) return          // never yank the box out mid-rename
+        groupRows = rows
+        groupPicked.retainAll(rows.map { it.id }.toSet())
+        groupList.removeAllViews()
+        for (g in rows) groupList.addView(groupRow(g))
+    }
+
+    /** Which groups are picked, for the activity's own buttons. */
+    fun pickedGroups(): List<Int> = groupPicked.toList()
+
+    private fun onGroupRepaint() {
+        val rows = groupRows
         groupList.removeAllViews()
         for (g in rows) groupList.addView(groupRow(g))
     }
@@ -2144,11 +2172,13 @@ class Chrome(private val act: Activity, val t: Tokens) {
     private fun groupRow(g: Chrome.GroupRow): View {
         val whole = g.selected > 0 && g.selected >= g.count
         val part = g.selected > 0 && !whole
+        val picked = g.id in groupPicked
         val row = LinearLayout(act).apply {
             orientation = LinearLayout.VERTICAL
             background = GradientDrawable().apply {
                 setColor(
                     when {
+                        picked -> wash(t.ink, 0.10f)
                         g.selected > 0 -> wash(t.green, if (whole) 0.20f else 0.10f)
                         g.active -> t.panel3
                         else -> t.panel2
@@ -2156,8 +2186,12 @@ class Chrome(private val act: Activity, val t: Tokens) {
                 )
                 cornerRadius = t.dpf(12f)
                 setStroke(
-                    t.dp(1.5f),
+                    t.dp(if (picked) 2f else 1.5f),
                     when {
+                        /* the group itself picked, for deleting or merging —
+                           a different question from which of its curves are
+                           selected, so a different mark */
+                        picked -> t.ink
                         whole -> t.green
                         part -> wash(t.green, 0.45f)
                         g.active -> t.ink
@@ -2206,10 +2240,14 @@ class Chrome(private val act: Activity, val t: Tokens) {
         line.addView(
             TextView(act).apply {
                 text = if (g.count > 0) g.count.toString() else ""
-                setTextColor(t.dim2)
+                setTextColor(if (g.selected > 0) t.green else t.dim2)
                 textSize = 10f
                 alpha = if (g.visible) 1f else 0.45f
-                setPadding(t.dp(2f), 0, t.dp(2f), 0)
+                setPadding(t.dp(6f), t.dp(3f), t.dp(6f), t.dp(3f))
+                /* the number is about what is INSIDE the group, so it is the
+                   part of the row that selects it */
+                setOnClickListener { onGroupSelect(g.id) }
+                Tip.attach(this, tipCard, act.getString(R.string.tip_group_curves))
             },
         )
         line.addView(
@@ -2257,9 +2295,59 @@ class Chrome(private val act: Activity, val t: Tokens) {
             },
         )
 
-        /* tap the row to make it active, hold to select everything in it */
-        row.setOnClickListener { onGroupPick(g.id) }
-        row.setOnLongClickListener { onGroupSelect(g.id); true }
+        /*
+         * FACT: "Tap and hold a group to select it. You can select multiple
+         * groups by tapping another group while one is already selected. Tap a
+         * selected group again to deselect it."
+         *
+         * Which is the same shape the home screen's tiles take, and for the
+         * same reason: once anything is picked a plain tap means "and this
+         * one", because a multi-select that needs a long press per item is a
+         * multi-select nobody uses twice.
+         *
+         * A held tap used to select every CURVE in the group. That is a
+         * useful thing and it is not this thing — Feather's group selection is
+         * of the GROUP, for deleting, duplicating, merging and reordering it —
+         * so the curve-picking moved onto the count, which is the part of the
+         * row that is about what is inside.
+         */
+        row.setOnClickListener {
+            if (groupPicked.isEmpty()) onGroupPick(g.id)
+            else { if (!groupPicked.remove(g.id)) groupPicked.add(g.id); onGroupRepaint() }
+        }
+        row.setOnLongClickListener {
+            if (!groupPicked.remove(g.id)) groupPicked.add(g.id)
+            onGroupRepaint()
+            true
+        }
+        /* FACT: "Tap and drag a selected group to change the order of groups."
+           Measured against the row height, because the rows are all one
+           height and the list is short enough that a drag is a count of rows
+           rather than a hit test. */
+        if (picked) {
+            var fromY = 0f
+            var moved = 0
+            row.setOnTouchListener { v, e ->
+                when (e.actionMasked) {
+                    android.view.MotionEvent.ACTION_DOWN -> { fromY = e.rawY; moved = 0 }
+                    android.view.MotionEvent.ACTION_MOVE -> {
+                        val step = (v.height + t.dp(4f)).coerceAtLeast(1)
+                        val want = ((e.rawY - fromY) / step).toInt()
+                        if (want != moved) {
+                            v.translationY = (e.rawY - fromY)
+                            moved = want
+                        }
+                    }
+                    android.view.MotionEvent.ACTION_UP,
+                    android.view.MotionEvent.ACTION_CANCEL,
+                    -> {
+                        v.translationY = 0f
+                        if (moved != 0) { onGroupReorder(g.id, moved); return@setOnTouchListener true }
+                    }
+                }
+                false
+            }
+        }
         return row
     }
 
