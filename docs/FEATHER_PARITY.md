@@ -192,6 +192,37 @@ The three liquify modes were already right: Push "distorts naturally, as if
 pushing or pulling with a finger", Pinch "sharply and precisely", Comb
 "gently smooths and aligns… Ideal for straightening wavy curves".
 
+## A second deliberate divergence: the loft averages a bundle
+
+The Loft page says only "Connect curves in sequence" and "Select the curves
+you want to connect in sequence" — nothing about merging anything. This build
+now reads curves that lie within an eighth of their own length of each other
+as ONE section and lofts from their average, because a bundle of overdrawn
+strokes otherwise spends the whole surface crossing four millimetres of
+bundle. That was asked for from the device, and it is a departure from
+Feather, not an implementation of it.
+
+Both divergences so far are the same shape: a device report asked for
+something Feather does differently, and the request won. They are listed here
+so the next person does not "fix" them back.
+
+## Confirmed matching, from the draw, erase and loft pages
+
+- **The eraser works on POINTS**: "The Eraser removes points from the center
+  of the curve, not the surrounding geometry. If you've drawn with a broad
+  brush and the Eraser doesn't touch the center, it may appear as though it's
+  not erasing." That is exactly this build's behaviour, including the
+  surprise.
+- **Vacuum is the eraser's partner**: "Tap the Eraser again in the tool menu
+  to switch to the Vacuum tool… erase all curves it touches."
+- **Isolate by 3D Guide** covers erase as well as select, stated on both pages.
+- **Loft**: two or more curves preview immediately, the left slider is
+  tension — "Slide up for smoother curves and slide down for sharper bends" —
+  and Done or Cancel finishes it.
+- **Drawing on an imported image or model**: "The image acts like a flat 3D
+  Guide, and you cannot draw outside its boundaries"; "The model acts like a
+  curved 3D Guide."
+
 ## Known and not done
 
 - **The eyedropper only samples the active group.** "The curve you want to
