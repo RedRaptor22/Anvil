@@ -58,7 +58,12 @@ enum class Tool(val key: String, val icon: String) {
  * not one-shot commands: each one has an on and an off that the panel has to
  * show, and folding them into Action would mean Action carried both meanings.
  */
-enum class EnvToggle { GRID, AXIS, FOG, SHADED, RENDER, SHADOW, TOON, DOF, GRAIN, PIXEL }
+enum class EnvToggle {
+    GRID, AXIS, FOG, SHADED, RENDER, SHADOW, TOON, DOF, GRAIN, PIXEL,
+
+    /** Both halves of the rendered look at once — Feather's Render Mode. */
+    RENDER_MODE,
+}
 
 /** Which of the three colour wells the one colour card is pointed at. */
 enum class ColorTarget { INK, BACKGROUND, LIGHT, GUIDE }
@@ -161,6 +166,9 @@ class Chrome(private val act: Activity, val t: Tokens) {
     /** The Import tab: saved guides and references. */
     var onResourceActivate: (Int) -> Unit = {}
     var onResourceVisible: (id: Int, visible: Boolean) -> Unit = { _, _ -> }
+
+    /** The cube: active, then visible, then hidden, then round again. */
+    var onResourceCycle: (Int) -> Unit = {}
     var onResourceDelete: (Int) -> Unit = {}
     var onImportReference: () -> Unit = {}
 
@@ -255,6 +263,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
     private var envFog = false
     private var envShaded = true
     private var envRender = false
+    private lateinit var renderMode: IcoButton
     private var envShadow = true
     private var envToon = false
     private var envDof = false
@@ -1757,7 +1766,26 @@ class Chrome(private val act: Activity, val t: Tokens) {
         stagePanel.orientation = LinearLayout.VERTICAL
         val p = t.px(R.dimen.padCard)
         stagePanel.setPadding(p, p, p, p)
-        stagePanel.addView(head(act.getString(R.string.stage)) { toggleStage() })
+        /*
+         * RENDER MODE, AT THE TOP OF THE PANEL WHERE FEATHER PUTS IT.
+         *
+         * FACT: "2. Render Mode — Tap to toggle the render mode. In rendering
+         * mode, lights and shadows are cast, and various effects can be
+         * configured. Patterns and materials are also applied."
+         *
+         * This build had the two halves of that as separate switches in the
+         * Scene tab — Shade for the lighting, Render for the post pass — which
+         * is finer control than anybody wants for the question "show me what
+         * this actually looks like". They stay there for when you do want the
+         * halves separately; this is the one tap that turns the whole rendered
+         * look on, and it is the tap materials and patterns need, since FACT:
+         * "Materials are displayed accurately only in rendering mode."
+         */
+        renderMode = IcoButton(act, t, IcoButton.SIZE_SMALL).icon("solid").apply {
+            setOnClickListener { onEnv(EnvToggle.RENDER_MODE) }
+            Tip.attach(this, tipCard, act.getString(R.string.tip_render_mode))
+        }
+        stagePanel.addView(head(act.getString(R.string.stage), renderMode) { toggleStage() })
 
         val bodies = ArrayList<View>()
         stageTabs = Tabs(
@@ -1922,14 +1950,35 @@ class Chrome(private val act: Activity, val t: Tokens) {
             setOnClickListener { onResourceActivate(g.id) }
         }
         val fg = if (g.active) t.onActive else t.ink
+        /*
+         * ONE CONTROL, THREE STATES.
+         *
+         * FACT: "Tap the small cube to the right of the imported resource to
+         * toggle its visibility or active state. When the top of the cube is
+         * filled in black, you can draw curves on that resource… Tap the
+         * active resource's cube again to change it to an unfilled cube. The
+         * resource is visible but inactive… Tap the cube again when the
+         * resource is visible to change it to a dashed outline. The resource
+         * is neither visible nor drawable."
+         *
+         * It was two controls here — a dot that showed it and a row tap that
+         * activated it — which is the same three states reached by two
+         * different gestures, so you had to know which one you wanted before
+         * you could ask for it. One control cycling in a fixed order is a
+         * control you can use without knowing: tap until it looks right.
+         */
         row.addView(
             TextView(act).apply {
-                /* filled when it is showing as a reference, hollow when not */
-                text = if (g.visible) "\u25C9" else "\u25CB"
+                text = when {
+                    g.active -> "\u25E9"        // half filled: you can draw on it
+                    g.visible -> "\u25A1"       // hollow: there, but not drawable
+                    else -> "\u2337"            // dashed: neither
+                }
                 setTextColor(fg)
-                textSize = 12f
+                alpha = if (g.visible || g.active) 1f else 0.5f
+                textSize = 13f
                 setPadding(0, 0, t.dp(6f), 0)
-                setOnClickListener { onResourceVisible(g.id, !g.visible) }
+                setOnClickListener { onResourceCycle(g.id) }
             },
         )
         row.addView(
@@ -2291,7 +2340,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
     }.also { lightSwatch = it }
 
     /** `.mhead` — a card title with a close button on the right. */
-    private fun head(title: String, onClose: () -> Unit): View =
+    private fun head(title: String, extra: View? = null, onClose: () -> Unit): View =
         LinearLayout(act).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -2304,6 +2353,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
                     layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
                 },
             )
+            extra?.let { addView(it) }
             addView(
                 IcoButton(act, t, IcoButton.SIZE_SMALL).icon("close").apply {
                     setOnClickListener { onClose() }
@@ -4303,6 +4353,9 @@ class Chrome(private val act: Activity, val t: Tokens) {
         sceneOptions.setOn("shade", envShaded)
         sceneOptions.setOn("render", envRender)
         sceneOptions.setOn("shadow", envShadow)
+        /* filled only when the whole rendered look is on: half of it is a
+           state the Scene tab can put you in, not one this button claims */
+        renderMode.on = envShaded && envRender
         /*
          * FACT: shadows and effects show accurately only in rendering mode. A
          * switch you can throw that then does nothing is worse than one that

@@ -600,6 +600,7 @@ class MainActivity : Activity(), Gestures.Listener {
         }
         chrome.onWalkSkip = { endWalk() }
         chrome.onResourceActivate = { id -> activateResource(id) }
+        chrome.onResourceCycle = { id -> cycleResource(id) }
         chrome.onResourceVisible = { id, visible ->
             guides.byId(id)?.let { g -> guides.setResourceVisible(g, visible) }
             pushGuides(); refreshResources()
@@ -916,6 +917,27 @@ class MainActivity : Activity(), Gestures.Listener {
         /* FACT: "Tap 'Done' or select another tool to finish stamping." */
         if (tool != t) endStamping()
 
+        /*
+         * ONE GUIDE AT A TIME.
+         *
+         * FACT: "If any resource is active, you cannot draw or loft a new 3D
+         * Guide", and its other half — "If there is no active 3D Guide, you
+         * can draw or loft one."
+         *
+         * Drawing a new one used to REPLACE the active guide without saying
+         * so: the surface you were drawing on vanished at the end of the
+         * stroke that replaced it, and the only way to notice was that your
+         * curves had stopped landing where you expected. Closing first is one
+         * tap in the guide bar, and the quick menu will hand the closed one
+         * back, so the refusal costs nothing and the silent swap cost a
+         * surface.
+         */
+        if (t != tool && (t == Tool.GUIDE || t == Tool.FLATGUIDE || t == Tool.LOFT)) {
+            if (guides.active != null) {
+                toast(getString(R.string.guide_already)); return
+            }
+        }
+
         when (t) {
             Tool.BEND -> if (guides.active == null) {
                 toast(getString(R.string.bend_needs_guide)); return
@@ -1108,6 +1130,15 @@ class MainActivity : Activity(), Gestures.Listener {
             EnvToggle.FOG -> docEnv.fog = !docEnv.fog
             EnvToggle.SHADED -> docEnv.shaded = !docEnv.shaded
             EnvToggle.RENDER -> docEnv.render = !docEnv.render
+            /* FACT: one tap turns on "lights and shadows… and various
+               effects", so it moves both halves together rather than leaving
+               you in the half-state the two switches can otherwise reach */
+            EnvToggle.RENDER_MODE -> {
+                val on = !(docEnv.shaded && docEnv.render)
+                docEnv.shaded = on
+                docEnv.render = on
+                announce(getString(if (on) R.string.render_on else R.string.render_off))
+            }
             EnvToggle.SHADOW -> docEnv.groundShadow = !docEnv.groundShadow
             EnvToggle.TOON -> docEnv.light.toon = !docEnv.light.toon
             EnvToggle.DOF -> docEnv.fx.dofOn = !docEnv.fx.dofOn
@@ -1392,6 +1423,53 @@ class MainActivity : Activity(), Gestures.Listener {
                 )
             },
         )
+    }
+
+    /**
+     * The cube's three states, in Feather's order: drawable, then visible,
+     * then away, then round again.
+     *
+     * One history step each, because each is a change to what is on screen
+     * and to what the next stroke would land on — the same thing activating
+     * already pushed.
+     */
+    private fun cycleResource(id: Int) {
+        val g = guides.byId(id) ?: return
+        when {
+            guides.active === g -> {
+                val previous = guides.active
+                history.run(
+                    Step(
+                        "Reference off",
+                        onRedo = { guides.setActive(null); pushGuides(); refreshResources() },
+                        onUndo = { guides.setActive(previous); pushGuides(); refreshResources() },
+                    ),
+                )
+            }
+            g.visible -> history.run(
+                Step(
+                    "Hide reference",
+                    onRedo = { guides.setResourceVisible(g, false); pushGuides(); refreshResources() },
+                    onUndo = { guides.setResourceVisible(g, true); pushGuides(); refreshResources() },
+                ),
+            )
+            else -> {
+                val previous = guides.active
+                history.run(
+                    Step(
+                        "Draw on reference",
+                        onRedo = {
+                            guides.setResourceVisible(g, true)
+                            guides.setActive(g); pushGuides(); refreshResources()
+                        },
+                        onUndo = {
+                            guides.setActive(previous)
+                            guides.setResourceVisible(g, false); pushGuides(); refreshResources()
+                        },
+                    ),
+                )
+            }
+        }
     }
 
     private fun activateResource(id: Int) {

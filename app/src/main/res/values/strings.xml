@@ -321,4 +321,8 @@
     <string name="pat_angle">Angle</string>
     <string name="pat_contrast">Contrast</string>
     <string name="tip_materials">Material and pattern</string>
+    <string name="tip_render_mode">Render mode — lights, shadows, materials</string>
+    <string name="render_on">Rendering</string>
+    <string name="render_off">Flat</string>
+    <string name="guide_already">Close the guide you are on first</string>
 </resources>
