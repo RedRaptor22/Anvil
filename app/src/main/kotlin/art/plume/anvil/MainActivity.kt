@@ -1155,7 +1155,7 @@ class MainActivity : Activity(), Gestures.Listener {
             Transform.free(camera, joyMode, dx, dy, c, strip)
         } else {
             val a = Transform.AXES[axis]
-            val screen = Transform.axisOnScreen(camera, a, c) ?: return
+            val screen = Transform.screenAxis(camera, a, c)
             Transform.alongAxis(joyMode, a, screen, c, dx, dy, sweep)
         }
 
@@ -1228,29 +1228,17 @@ class MainActivity : Activity(), Gestures.Listener {
             else -> getString(R.string.joy_count, sel.size)
         }
         /*
-         * An axis pointing nearly at the camera has no usable screen
-         * direction, so its arc is dimmed rather than left to send the
-         * selection to the horizon on a one-pixel drag.
+         * ALL THREE, WHENEVER THERE IS SOMETHING TO MOVE.
+         *
+         * An axis end-on to the camera used to be dimmed, because it has no
+         * direction on the glass and dividing by that was how a one-pixel drag
+         * sent the selection to the horizon. But dimming it takes away
+         * whichever axis you are looking down — turn to face the front of a
+         * model and the one direction you cannot move it is towards you. The
+         * division is fixed where it belongs, in Transform.screenAxis, which
+         * falls back to the vertical drag the depth strip already uses.
          */
-        val usable = if (nothing) {
-            listOf(false, false, false)
-        } else {
-            val b = Bounds()
-            if (guide != null) {
-                guide.surface?.let { srf ->
-                    val p = srf.positions
-                    var i = 0
-                    while (i + 2 < p.size) {
-                        b.add(Vec3(p[i].toDouble(), p[i + 1].toDouble(), p[i + 2].toDouble()))
-                        i += 3
-                    }
-                }
-            } else {
-                for (s in sel) for (p in s.pts) b.add(p.p)
-            }
-            val c = if (b.empty) Vec3() else b.centre()
-            Transform.AXES.map { Transform.axisOnScreen(camera, it, c) != null }
-        }
+        val usable = listOf(!nothing, !nothing, !nothing)
         chrome.setTransform(joyMode, label, usable)
     }
 

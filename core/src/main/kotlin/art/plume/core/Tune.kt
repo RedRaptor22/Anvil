@@ -115,6 +115,24 @@ object Tune {
     const val GUIDE_PROFILE_SEG = 96
     const val GUIDE_PATH_SEG = 64
 
+    /**
+     * GUESS: how near its own start a swept path has to end to be a loop.
+     *
+     * A twentieth of the path's length. A hand drawing a circle closes to
+     * well within that; a C or a hook drawn back on itself does not, and
+     * welding one of those would pull its two ends together.
+     */
+    const val SWEEP_CLOSE_FRACTION = 0.05
+
+    /**
+     * GUESS: and how far round it has to have turned to be one.
+     *
+     * Three quarters of a revolution. A ring turns a full one; a hairpin that
+     * ends beside its start has turned half, and joining its ends would weld
+     * a fold shut.
+     */
+    const val SWEEP_CLOSE_TURN = 1.5 * Math.PI
+
     /** One grid unit is 1000 mm (FACT); the helper spans 40 of them. */
     const val GRID_EXTENT = 40.0
 

@@ -86,6 +86,39 @@ object Guides {
     }
 
     /**
+     * Does this path come back to where it started?
+     *
+     * A drawn loop never closes exactly — the pen lands near the start, not on
+     * it — so closure is a question about the SHAPE, asked in two parts.
+     *
+     * ENDING WHERE IT STARTED is not enough on its own: a hairpin drawn out
+     * and back ends beside its start too, and welding one of those would join
+     * two ends that were never meant to meet. So the path must also HAVE GONE
+     * ROUND — turn through most of a full revolution — which a ring does by
+     * definition and a there-and-back does not, whatever its ends do.
+     */
+    fun pathIsClosed(path: List<Vec3>): Boolean {
+        if (path.size < 4) return false
+        var len = 0.0
+        for (i in 1 until path.size) len += path[i - 1].distanceTo(path[i])
+        if (len < Vec3.EPS) return false
+        if (path[0].distanceTo(path[path.size - 1]) > len * Tune.SWEEP_CLOSE_FRACTION) {
+            return false
+        }
+
+        var turned = 0.0
+        val a = Vec3(); val b = Vec3()
+        for (i in 1 until path.size - 1) {
+            a.set(path[i] - path[i - 1])
+            b.set(path[i + 1] - path[i])
+            if (a.lengthSq() < Vec3.EPS || b.lengthSq() < Vec3.EPS) continue
+            a.normalize(); b.normalize()
+            turned += kotlin.math.acos(clamp(a dot b, -1.0, 1.0))
+        }
+        return turned >= Tune.SWEEP_CLOSE_TURN
+    }
+
+    /**
      * Lay the profile down along the path, row by row.
      *
      * Ported from `evalSweep`. The frames are rotation-minimising, which is the
@@ -94,8 +127,22 @@ object Guides {
      */
     fun evalSweep(sweep: Sweep): List<List<Vec3>> {
         val path = sweep.path
-        val t0 = Frames.computeTangents(path)[0]
-        val frames = Frames.transportFrames(path, sweep.seedFor(t0), false)
+        /*
+         * A BEND INTO A RING IS THE DOCUMENTED CASE, AND IT HAS TO MEET.
+         *
+         * FACT (A.6): "drawing the side of a pot, then bending it into a
+         * cylinder". That path is a loop, and transport around a loop does not
+         * come back to where it started: the frame accumulates a residual
+         * twist, so the last section lands rotated against the first even
+         * though both sit on the same point. Swept as an open path, the pot
+         * had a step down its side where the ends met.
+         *
+         * Frames already knows how to unwind that — it does it for every
+         * closed stroke — it was simply never told the path was a loop.
+         */
+        val closed = pathIsClosed(path)
+        val t0 = Frames.computeTangents(path, closed)[0]
+        val frames = Frames.transportFrames(path, sweep.seedFor(t0), closed)
 
         val rows = ArrayList<List<Vec3>>(path.size)
         val s = Vec3()
@@ -113,6 +160,16 @@ object Guides {
                 )
             }
             rows.add(row)
+        }
+        /*
+         * And the seam is WELDED rather than merely lined up. The frames now
+         * meet, but the path's own ends are a pen's width apart — that is what
+         * made it a drawn loop rather than a computed one — so the last row is
+         * put exactly onto the first. A gap you can see through is the one
+         * thing a surface of revolution must not have.
+         */
+        if (closed && rows.size >= 3) {
+            rows[rows.size - 1] = rows[0].map { it.copy() }
         }
         return rows
     }

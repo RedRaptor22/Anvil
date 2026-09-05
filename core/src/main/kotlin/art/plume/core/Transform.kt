@@ -106,6 +106,32 @@ object Transform {
     /** Below this an axis is end-on and has no usable screen direction. */
     const val MIN_AXIS_PX = 4.0
 
+    /**
+     * A screen direction for [axis] THAT ALWAYS EXISTS.
+     *
+     * An axis pointing at the camera projects to a point, so there is no
+     * direction on the glass that means "along it" — and the joystick's answer
+     * was to grey that arc out. Which greys out whichever axis you are looking
+     * down: turn to face the front of a model and the one direction you can no
+     * longer move it is towards you, at exactly the moment you are looking
+     * straight at where it should go.
+     *
+     * The arcs are not a projected gizmo, they are three labelled controls, so
+     * an axis with no direction on screen needs a CONVENTION rather than a
+     * refusal. The convention is the one the pad's own depth strip already
+     * uses: a vertical drag, up for away. Rotation never needed this — a
+     * spin about an axis pointing at you is the easiest one to read — and
+     * scale follows the same up-is-more it has everywhere else.
+     */
+    fun screenAxis(camera: Camera, axis: Vec3, centre: Vec3): ScreenAxis {
+        axisOnScreen(camera, axis, centre)?.let { return it }
+        val r = Vec3(); val u = Vec3(); val back = Vec3()
+        camera.basis(r, u, back)
+        val towardEye = (axis dot back) >= 0.0
+        val px = camera.height / camera.viewHeight()
+        return ScreenAxis(0.0, if (towardEye) 1.0 else -1.0, if (px.isFinite()) px else 1.0)
+    }
+
     // ---- a free drag on the pad -------------------------------------------
 
     /**

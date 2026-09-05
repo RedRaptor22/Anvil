@@ -104,7 +104,8 @@ class TransformTest {
     /**
      * An axis pointing nearly at the camera has no usable screen direction,
      * and dividing a drag by its vanishing pixels-per-unit would send the
-     * selection to the horizon. It has to report null so the arc can dim.
+     * selection to the horizon. The raw measurement says so honestly; what to
+     * DO about it is [Transform.screenAxis]'s business, below.
      */
     @Test
     fun `an end-on axis reports null rather than a huge step`() {
@@ -122,6 +123,54 @@ class TransformTest {
             Transform.axisOnScreen(c, Vec3(1.0, 0.0, 0.0), centre),
             "but the one across it is fine",
         )
+    }
+
+    /** The camera of the test above: +Z points at the eye. */
+    private fun endOnCam() = Camera().apply {
+        resize(800, 600); radius = 4.0
+        theta = 0.0; phi = PI / 2; apply()
+    }
+
+    @Test
+    fun `an end-on axis still gets a direction to be dragged by`() {
+        val c = endOnCam()
+        val s = Transform.screenAxis(c, Vec3(0.0, 0.0, 1.0), Vec3())
+        assertEquals(1.0, kotlin.math.hypot(s.ux, s.uy), 1e-9, "a unit direction")
+        assertTrue(s.pxPerUnit > 0 && s.pxPerUnit.isFinite(), "and a sane scale")
+        assertEquals(0.0, s.ux, 1e-12, "vertical, like the depth strip")
+    }
+
+    @Test
+    fun `dragging up on the axis you are looking down pushes it away`() {
+        val c = endOnCam()
+        val axis = Vec3(0.0, 0.0, 1.0)          // pointing at the eye
+        val m = Transform.alongAxis(
+            Transform.Mode.MOVE, axis, Transform.screenAxis(c, axis, Vec3()),
+            Vec3(), 0.0, -40.0, 0.0,
+        )
+        val p = Vec3()
+        m.transformPoint(Vec3(0.0, 0.0, 0.0), p)
+        assertTrue(p.z < -1e-6, "up moved it away from the eye, as the strip does")
+
+        /* and the same drag on an axis pointing AWAY from the eye moves it
+           away too — the convention is about the drag, not about the axis */
+        val other = Vec3(0.0, 0.0, -1.0)
+        val q = Vec3()
+        Transform.alongAxis(
+            Transform.Mode.MOVE, other, Transform.screenAxis(c, other, Vec3()),
+            Vec3(), 0.0, -40.0, 0.0,
+        ).transformPoint(Vec3(0.0, 0.0, 0.0), q)
+        assertTrue(q.z < -1e-6, "still away")
+    }
+
+    @Test
+    fun `an axis across the view is unaffected by the fallback`() {
+        val c = cam()
+        val direct = assertNotNull(Transform.axisOnScreen(c, Vec3(1.0, 0.0, 0.0), Vec3()))
+        val viaFallback = Transform.screenAxis(c, Vec3(1.0, 0.0, 0.0), Vec3())
+        assertEquals(direct.ux, viaFallback.ux, 1e-12)
+        assertEquals(direct.uy, viaFallback.uy, 1e-12)
+        assertEquals(direct.pxPerUnit, viaFallback.pxPerUnit, 1e-12)
     }
 
     @Test
