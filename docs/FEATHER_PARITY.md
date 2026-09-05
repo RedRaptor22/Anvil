@@ -223,6 +223,37 @@ so the next person does not "fix" them back.
   Guide, and you cannot draw outside its boundaries"; "The model acts like a
   curved 3D Guide."
 
+## The bend, from six screenshots
+
+Three separate faults, each reproduced in a probe before it was touched.
+
+**The section turned over when you bent towards yourself.** The transport was
+seeded by carrying the drawn right round by the SHORTEST rotation from the
+extrusion axis to the new tangent. A path leaving the anchor back towards the
+camera is close to the reverse of that axis, so the shortest rotation is close
+to a half turn — and a half turn rolls the section over. A guide whose outer
+wall stood on the left came back with the wall on the right. Measured over
+twenty-four directions: bending across the screen kept the wall left, bending
+towards the viewer put it right. The seed is now the drawn right PROJECTED
+onto the plane the new tangent defines — the frame closest to the one the
+profile was drawn in, out of all the frames perpendicular to the path — so the
+section tips as the path tips and never turns over.
+
+**A ring the hand left open was not welded.** Closure needed the ends within a
+twentieth of the path's length, and a hand lifts the pen further out than
+that; the screenshot's ring had a visible notch where the two ends passed. The
+tolerance is most of a fifth now, and the turning test is what still keeps a
+hairpin from being joined across its fold.
+
+**Turns tighter than the profile folded the surface inside out.** Where a path
+turns inside the profile's own reach, the inner edge of the section crosses
+the centre of the turn and comes out the far side — on screen, a wedge
+converging to a point that nothing in the drawing put there. A hand draws
+bends far tighter than it means to, especially where the pen slows at the ends
+of a stroke. Such turns are eased open until they clear the reach; a bend the
+profile fits round is left exactly where it was drawn, which is asserted to
+the last decimal place.
+
 ## Known and not done
 
 - **The eyedropper only samples the active group.** "The curve you want to

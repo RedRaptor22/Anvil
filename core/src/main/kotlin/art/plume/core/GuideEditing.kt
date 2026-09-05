@@ -39,6 +39,7 @@ object GuideEditing {
         val path = Polyline.resample(worldPath, Tune.GUIDE_PATH_SEG + 1).toMutableList()
         val shift = sw.anchor - path[0]
         for (p in path) { p.x += shift.x; p.y += shift.y; p.z += shift.z }
+        relaxTightTurns(path, reachOf(sw))
 
         val bent = Sweep(
             sw.local, sw.anchor, 0,          // bending starts from the orange line
@@ -47,6 +48,70 @@ object GuideEditing {
         guide.sweep = bent
         guide.bendPath = worldPath.map { it.copy() }
         return Guides.rebuildSweep(guide)
+    }
+
+    /**
+     * How far the profile reaches out from the path it is carried on.
+     *
+     * Only the two axes ACROSS the path count: the third runs along it and
+     * cannot fold the surface however far it goes.
+     */
+    private fun reachOf(sw: Sweep): Double {
+        var most = 0.0
+        for (l in sw.local) most = max(most, kotlin.math.hypot(l.x, l.y))
+        return most
+    }
+
+    /**
+     * OPEN OUT THE TURNS A PROFILE THIS WIDE CANNOT GET ROUND.
+     *
+     * A swept surface folds through itself wherever the path turns inside the
+     * profile's own reach: the inner edge of the section crosses the centre of
+     * the turn and comes out the far side, inside out. On screen that is the
+     * spike and the fan — a wedge of surface converging to a point that
+     * nothing in the drawing put there.
+     *
+     * A hand draws bends far tighter than it means to, especially at the ends
+     * of a stroke where the pen slows and the samples bunch, so this is the
+     * common case rather than an edge one. Each offending point is eased
+     * towards the line between its neighbours until the turn clears the reach,
+     * which opens the corner and leaves the rest of the path where it was
+     * drawn. Bounded, because a path that will not relax — one drawn as a
+     * hairpin, deliberately — should come out as a tight bend rather than as
+     * a straight line.
+     */
+    private fun relaxTightTurns(path: MutableList<Vec3>, reach: Double) {
+        if (reach <= Vec3.EPS || path.size < 3) return
+        val need = reach * Tune.SWEEP_TURN_MARGIN
+        val eased = Vec3()
+        repeat(Tune.SWEEP_RELAX_PASSES) {
+            var tight = 0
+            for (i in 1 until path.size - 1) {
+                if (circumradius(path[i - 1], path[i], path[i + 1]) >= need) continue
+                tight++
+                eased.set(
+                    (path[i - 1].x + path[i + 1].x) * 0.5,
+                    (path[i - 1].y + path[i + 1].y) * 0.5,
+                    (path[i - 1].z + path[i + 1].z) * 0.5,
+                )
+                path[i].set(
+                    path[i].x + (eased.x - path[i].x) * 0.5,
+                    path[i].y + (eased.y - path[i].y) * 0.5,
+                    path[i].z + (eased.z - path[i].z) * 0.5,
+                )
+            }
+            if (tight == 0) return
+        }
+    }
+
+    /** The radius of the circle through three points; huge when they are straight. */
+    fun circumradius(a: Vec3, b: Vec3, c: Vec3): Double {
+        val ab = b.distanceTo(a)
+        val bc = c.distanceTo(b)
+        val ca = a.distanceTo(c)
+        val area2 = ((b - a) cross (c - a)).length()
+        if (area2 < 1e-15) return Double.MAX_VALUE
+        return ab * bc * ca / (2.0 * area2)
     }
 
     /**

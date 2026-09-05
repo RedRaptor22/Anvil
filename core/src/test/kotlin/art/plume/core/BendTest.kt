@@ -147,4 +147,124 @@ class BendTest {
             "a welded seam should not fill the mesh with slivers (got $degenerate)",
         )
     }
+    // ---- the three faults the screenshots showed -------------------------
+
+    /** Wall on the LEFT, floor running right — an asymmetric section. */
+    private fun channel(): List<Vec3> {
+        val out = ArrayList<Vec3>()
+        for (i in 0 until 20) out.add(Vec3(-0.10, -0.05 + 0.10 * i / 19.0, 0.0))
+        for (i in 1 until 20) out.add(Vec3(-0.10 + 0.20 * i / 19.0, 0.05, 0.0))
+        return out
+    }
+
+    /** Which way the wall points across the screen, at the orange row. */
+    private fun wallSide(g: Guide): Double {
+        val rows = Guides.evalSweep(g.sweep!!)
+        val a = rows[g.sweep!!.anchorIndex]
+        return (a[0] - a[a.size - 1]) dot right
+    }
+
+    @Test
+    fun `the profile keeps the side it was drawn on, bend where you like`() {
+        val drawn = Guides.createFromStroke(channel(), view, right, 1.0)!!
+        assertTrue(wallSide(drawn) < 0.0, "the wall was drawn on the left")
+
+        /*
+         * The fault: a path leaving the anchor back TOWARDS the camera is
+         * close to the reverse of the axis the guide was extruded along, so
+         * the shortest rotation from one to the other is close to a half turn
+         * — and a half turn rolled the section over. The wall came back on
+         * the right from nothing the hand did.
+         */
+        for (deg in 0 until 360 step 15) {
+            val a = Math.toRadians(deg.toDouble())
+            for (dir in listOf(
+                Vec3(cos(a), sin(a), 0.0),      // across the screen
+                Vec3(cos(a), 0.0, sin(a)),      // and into or out of it
+            )) {
+                val path = (0 until 30).map { i ->
+                    Vec3(dir.x * 0.02 * i, dir.y * 0.02 * i, dir.z * 0.02 * i)
+                }
+                val g = Guides.createFromStroke(channel(), view, right, 1.0)!!
+                assertTrue(GuideEditing.bend(g, path))
+                assertTrue(
+                    wallSide(g) <= 1e-9,
+                    "bending $deg deg along $dir put the wall on the right",
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `a ring the hand left open still welds`() {
+        /* The screenshot's notch: a hand lifts the pen before it quite gets
+           back, and a tolerance of a twentieth of the path called that open. */
+        val short = (0 until 50).map { i ->
+            val a = (2 * Math.PI * 0.88) * i / 49.0
+            Vec3(0.25 * sin(a), 0.0, 0.25 * (1 - cos(a)))
+        }
+        assertTrue(Guides.pathIsClosed(short), "a ring 12% short is still a ring")
+
+        val g = Guides.createFromStroke(potProfile(), view, right, 1.0)!!
+        assertTrue(GuideEditing.bend(g, short))
+        val rows = Guides.evalSweep(g.sweep!!)
+        var worst = 0.0
+        for (i in rows.first().indices) {
+            worst = maxOf(worst, rows.first()[i].distanceTo(rows.last()[i]))
+        }
+        assertEquals(0.0, worst, 1e-9, "and it is welded, not left with a step")
+    }
+
+    @Test
+    fun `a turn the profile cannot get round is opened out`() {
+        val g = Guides.createFromStroke(channel(), view, right, 1.0)!!
+        val reach = 0.1     // the channel reaches 100mm across from its centre
+
+        /* a hairpin far tighter than the section is wide: swept as drawn, the
+           inner edge crosses the centre of the turn and comes out inside out,
+           which is the spike in the screenshots */
+        val hairpin = (0 until 40).map { i ->
+            val t = i / 39.0
+            val a = Math.PI * t
+            Vec3(0.02 * sin(a), 0.0, 0.02 * (1 - cos(a)) - 0.2 * t)
+        }
+        assertTrue(GuideEditing.bend(g, hairpin))
+
+        val path = g.sweep!!.path
+        var tightest = Double.MAX_VALUE
+        for (i in 1 until path.size - 1) {
+            tightest = minOf(tightest, GuideEditing.circumradius(path[i - 1], path[i], path[i + 1]))
+        }
+        assertTrue(
+            tightest > reach * 0.9,
+            "the path still turns inside the profile's reach ($tightest)",
+        )
+    }
+
+    @Test
+    fun `a bend the profile fits round is left where it was drawn`() {
+        val g = Guides.createFromStroke(channel(), view, right, 1.0)!!
+        val gentle = (0 until 40).map { i ->
+            val a = Math.PI * 0.5 * i / 39.0
+            Vec3(0.8 * sin(a), 0.0, 0.8 * (1 - cos(a)))
+        }
+        assertTrue(GuideEditing.bend(g, gentle))
+
+        /* a metre-scale curve is nowhere near the 100mm the section reaches,
+           so nothing may be smoothed: the guide has to go where the pen went */
+        val want = Polyline.resample(gentle, Tune.GUIDE_PATH_SEG + 1)
+        val path = g.sweep!!.path
+        val shift = g.sweep!!.anchor - want[0]
+        var worst = 0.0
+        for (i in path.indices) {
+            worst = maxOf(
+                worst,
+                path[i].distanceTo(
+                    Vec3(want[i].x + shift.x, want[i].y + shift.y, want[i].z + shift.z),
+                ),
+            )
+        }
+        assertEquals(0.0, worst, 1e-12, "a gentle bend must not be relaxed at all")
+    }
+
 }

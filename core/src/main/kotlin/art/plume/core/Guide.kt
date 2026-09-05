@@ -68,15 +68,30 @@ class Sweep(
     /**
      * The reference vector to start transport from.
      *
-     * It reduces to [basisR] exactly when the path still runs along [basisT] —
-     * guide creation, unchanged — is continuous everywhere the minimal
-     * rotation is, and keeps the profile facing the way it was drawn. A path
-     * doubling straight back along the extrusion axis is the one antipodal
-     * case: a half-turn about [basisR] maps [basisT] to its opposite and
-     * leaves [basisR] itself alone, which is the answer that keeps the
-     * profile where the eye expects it.
+     * THE PROFILE KEEPS THE SIDE IT WAS DRAWN ON, which is the whole of it.
+     *
+     * This used to carry [basisR] round by the shortest rotation from
+     * [basisT] to the new tangent. That is continuous and it is wrong at the
+     * far end: a path leaving the anchor back TOWARDS the camera is close to
+     * the reverse of the axis the guide was extruded along, so the shortest
+     * rotation is close to a half turn — and a half turn rolls the section
+     * over. A guide whose outer wall stood on the left came back with the
+     * wall on the right, from nothing the hand did.
+     *
+     * Projecting the drawn right onto the plane the new tangent defines picks
+     * the frame that is CLOSEST to the one the profile was drawn in, out of
+     * all the frames perpendicular to the path. The section tips as the path
+     * tips and never turns over, so left stays left.
+     *
+     * It still reduces to [basisR] exactly at guide creation, where the path
+     * runs along [basisT] and the drawn right is already perpendicular to it.
+     * The one case with nothing to project is a path leaving along the
+     * profile's own right, where every frame is equally far from the drawn
+     * one and the old rotation is as good an answer as any.
      */
     fun seedFor(t0: Vec3, out: Vec3 = Vec3()): Vec3 {
+        out.set(basisR).addScaled(t0, -(basisR dot t0))
+        if (out.lengthSq() > 1e-12) return out.normalize()
         if ((basisT dot t0) < -0.999999) return out.set(basisR)
         return Polyline.rotateBetween(basisT, t0, basisR, out)
     }

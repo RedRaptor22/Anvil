@@ -122,7 +122,22 @@ object Tune {
      * well within that; a C or a hook drawn back on itself does not, and
      * welding one of those would pull its two ends together.
      */
-    const val SWEEP_CLOSE_FRACTION = 0.05
+    const val SWEEP_CLOSE_FRACTION = 0.18
+
+    /**
+     * GUESS: how tight a bend may turn, against the profile it carries.
+     *
+     * A sweep folds through itself where the path turns inside the profile's
+     * own reach: the inner edge of the section crosses the centre of the turn
+     * and comes out the other side, which is the spike and the fan a hand-drawn
+     * bend produces. The path is relaxed until its turning radius clears the
+     * reach by this margin — enough to stop the fold, small enough that the
+     * bend still goes where it was drawn.
+     */
+    const val SWEEP_TURN_MARGIN = 1.05
+
+    /** How many passes of relaxing to spend on it before accepting the path. */
+    const val SWEEP_RELAX_PASSES = 24
 
     /**
      * GUESS: and how far round it has to have turned to be one.
