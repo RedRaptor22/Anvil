@@ -677,6 +677,27 @@ class MainActivity : Activity(), Gestures.Listener {
         chrome.onTransformDrag = { axis, dx, dy, sweep, strip ->
             stepTransform(axis, dx.toDouble(), dy.toDouble(), sweep, strip)
         }
+        chrome.onJoyLock = {
+            joyLocked = !joyLocked
+            chrome.setJoystick(joy3d, joyLocked)
+            announce(getString(if (joyLocked) R.string.joy_locked else R.string.joy_unlocked))
+        }
+        chrome.onJoyKind = { threeD ->
+            joy3d = threeD
+            chrome.setJoystick(joy3d, joyLocked)
+        }
+        chrome.onJoy2DGrab = { _ ->
+            joyTurned = 0.0
+            joyApplied = 0.0
+            val sel = sketch.selection
+            if (transformGuide == null && sel.isNotEmpty()) {
+                dragTargets = sel
+                dragPositions = Editing.snapshot(sel)
+            }
+            dragMoved = false
+            pushTransform()
+        }
+        chrome.onJoy2D = { kind, dx, dy, sweep -> stepJoy2D(kind, dx, dy, sweep) }
         chrome.onTransformEnd = {
             joyAxis = null
             commitGuideTransform()
@@ -1323,6 +1344,64 @@ class MainActivity : Activity(), Gestures.Listener {
                A guide has no point list to snapshot the way a selection does,
                so what is remembered is the transform itself — replayed to
                redo, inverted to undo. That is the web build's model too. */
+            guideAccum = Mat4.multiply(m, guideAccum ?: Mat4().identity(), Mat4())
+            pushGuides()
+        } else {
+            Selection.transform(targets!!, m)
+            refreshStrokeMeshes(targets)
+        }
+        surface.requestRender()
+    }
+
+    /**
+     * ONE SAMPLE OF A DRAG ON THE 2D JOYSTICK.
+     *
+     * The limits the Lock imposes are applied HERE rather than in the widget,
+     * because they are arithmetic and this is where the arithmetic lives: the
+     * widget reports what the finger did, and Transform decides what a locked
+     * joystick is allowed to make of it.
+     *
+     * Rotation is the one that needs memory. FACT: locked, it turns "in
+     * 15-degree increments", which means the intermediate angles are never
+     * visited at all — so the total spin is accumulated and only whole steps
+     * are ever applied.
+     */
+    private fun stepJoy2D(kind: Int, dxIn: Float, dyIn: Float, sweepIn: Double) {
+        val guide = transformGuide
+        val targets = if (guide == null) dragTargets ?: return else null
+        if (targets != null && targets.isEmpty()) return
+        dragMoved = true
+
+        var dx = dxIn.toDouble()
+        var dy = dyIn.toDouble()
+        var sweep = sweepIn
+        if (joyLocked) {
+            if (kind == Joy2D.MOVE) {
+                val d = Transform.lockedDelta(dx, dy)
+                dx = d[0]; dy = d[1]
+            }
+            if (kind == Joy2D.ROTATE) {
+                joyTurned += sweep
+                sweep = Transform.snapStep(joyTurned, joyApplied)
+                joyApplied += sweep
+                if (sweep == 0.0) return
+            }
+        }
+
+        val what = when (kind) {
+            Joy2D.ROTATE -> Transform.View2D.ROTATE
+            Joy2D.SCALE_FREE -> Transform.View2D.SCALE_FREE
+            Joy2D.SCALE_WIDTH -> Transform.View2D.SCALE_WIDTH
+            Joy2D.SCALE_HEIGHT -> Transform.View2D.SCALE_HEIGHT
+            else -> Transform.View2D.MOVE
+        }
+        /* FACT: "The scaling reference point is the center of the screen,
+           marked with a crosshair", and so is the rotation centre — which is
+           the camera's pivot, the point the view is built around. */
+        val m = Transform.view(camera, what, dx, dy, sweep, camera.pivot)
+
+        if (guide != null) {
+            GuideTransform.apply(guide, m)
             guideAccum = Mat4.multiply(m, guideAccum ?: Mat4().identity(), Mat4())
             pushGuides()
         } else {
@@ -4036,6 +4115,12 @@ class MainActivity : Activity(), Gestures.Listener {
     // ---- home: what its buttons do ------------------------------------------
 
     private var homeView = Chrome.HOME_RECENTS
+
+    /** Which joystick, whether it is locked, and how far a locked spin has gone. */
+    private var joy3d = false
+    private var joyLocked = false
+    private var joyTurned = 0.0
+    private var joyApplied = 0.0
 
     /**
      * Draw the home screen from the library.

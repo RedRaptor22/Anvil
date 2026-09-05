@@ -1283,6 +1283,220 @@ class JoyPad(
 }
 
 /**
+ * `#joy2d` — FEATHER'S DEFAULT JOYSTICK, THE ONE THAT WORKS IN THE PICTURE.
+ *
+ * FACT: "The 2D Joystick moves, rotates, and scales objects based on the view
+ * direction. It's very intuitive because it transforms as it appears", with
+ * five handles — "1. Move, 2. Rotate, 3. Free Scale, 4. Width Scale,
+ * 5. Height Scale" — and a Lock.
+ *
+ * FACT on where they sit: "Tap and drag the scale handles located above and to
+ * the left of the stick", and "tap and spin the rotate handle on the right of
+ * the stick." So the ring is not decorated arbitrarily: up is height, left is
+ * width, the corner between them is free, and right is the turn. Which is also
+ * a mnemonic — the handle that makes it taller is the one above it.
+ *
+ * FACT on the Lock: "The locked 2D Joystick has a single scale handle… tapping
+ * and dragging the stick only allows movement up, down, left, and right… [and
+ * the rotate handle turns] in 15-degree increments." The widget only draws the
+ * difference; the restriction itself is arithmetic and lives in Transform,
+ * where it can be checked.
+ */
+class Joy2D(
+    ctx: Context,
+    private val t: Tokens,
+    private val onGrab: (kind: Int) -> Unit,
+    private val onDrag: (kind: Int, dx: Float, dy: Float, sweep: Double) -> Unit,
+    private val onRelease: () -> Unit,
+) : View(ctx) {
+
+    /** Drawn differently, and reported to the caller who applies the limits. */
+    var locked = false
+        set(v) { field = v; invalidate() }
+
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private var grabbed = MOVE
+    private var lastX = 0f
+    private var lastY = 0f
+    private var lastAngle = 0.0
+
+    private var knobX = 0f
+    private var knobY = 0f
+    private var aimX = 0f
+    private var aimY = 0f
+
+    init {
+        val side = t.px(R.dimen.joyPad)
+        layoutParams = LinearLayout.LayoutParams(side, side)
+    }
+
+    /** Where each handle sits on the ring, in radians, screen-clockwise. */
+    private fun handles(): List<Pair<Int, Double>> =
+        if (locked) listOf(SCALE_FREE to -Math.PI * 3 / 4, ROTATE to 0.0)
+        else listOf(
+            SCALE_HEIGHT to -Math.PI / 2,
+            SCALE_FREE to -Math.PI * 3 / 4,
+            SCALE_WIDTH to Math.PI,
+            ROTATE to 0.0,
+        )
+
+    override fun onDraw(canvas: Canvas) {
+        val c = width / 2f
+        val r = width * (43f / 108f)
+        val inner = width * (19f / 108f)
+
+        if (stepKnob()) postInvalidateOnAnimation()
+
+        paint.style = Paint.Style.FILL
+        paint.color = t.panel2
+        canvas.drawCircle(c, c, c, paint)
+
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = t.dpf(1f)
+        paint.color = t.line
+        canvas.drawCircle(c, c, r, paint)
+
+        /* the crosshair: FACT, "the scaling reference point is the center of
+           the screen, marked with a crosshair", and the same for rotation. It
+           is drawn on the control as well as on the canvas so the handles say
+           what they turn around. */
+        paint.color = t.dim2
+        val tick = t.dpf(4f)
+        canvas.drawLine(c - tick, c, c + tick, c, paint)
+        canvas.drawLine(c, c - tick, c, c + tick, paint)
+
+        for ((kind, angle) in handles()) {
+            val hx = c + (kotlin.math.cos(angle) * r).toFloat()
+            val hy = c + (kotlin.math.sin(angle) * r).toFloat()
+            val hot = grabbed == kind
+            paint.style = Paint.Style.FILL
+            paint.color = if (hot) t.active else t.panel
+            canvas.drawCircle(hx, hy, t.dpf(if (hot) 11f else 9f), paint)
+            paint.style = Paint.Style.STROKE
+            paint.strokeWidth = t.dpf(1.4f)
+            paint.color = if (kind == ROTATE) t.blue else t.ink
+            canvas.drawCircle(hx, hy, t.dpf(if (hot) 11f else 9f), paint)
+
+            paint.style = Paint.Style.FILL
+            paint.color = if (hot) t.onActive else t.ink
+            paint.textSize = t.dpf(9f)
+            paint.textAlign = Paint.Align.CENTER
+            paint.isFakeBoldText = true
+            canvas.drawText(GLYPH[kind] ?: "", hx, hy + t.dpf(3f), paint)
+        }
+
+        /* the stick, leaning wherever it is pushed */
+        if (knobX != 0f || knobY != 0f) {
+            paint.style = Paint.Style.STROKE
+            paint.strokeWidth = t.dpf(3f)
+            paint.color = t.line
+            canvas.drawLine(c, c, c + knobX, c + knobY, paint)
+        }
+        paint.style = Paint.Style.FILL
+        paint.color = if (grabbed == MOVE && (knobX != 0f || knobY != 0f)) t.active else t.panel
+        canvas.drawCircle(c + knobX, c + knobY, inner * 0.72f, paint)
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = t.dpf(1f)
+        paint.color = t.line
+        canvas.drawCircle(c + knobX, c + knobY, inner * 0.72f, paint)
+        paint.style = Paint.Style.FILL
+    }
+
+    /** Which handle a press landed on; the middle is always the stick. */
+    private fun pick(x: Float, y: Float): Int {
+        val c = width / 2f
+        val r = width * (43f / 108f)
+        val reach = t.dpf(15f)
+        for ((kind, angle) in handles()) {
+            val hx = c + (kotlin.math.cos(angle) * r).toFloat()
+            val hy = c + (kotlin.math.sin(angle) * r).toFloat()
+            if (kotlin.math.hypot(x - hx, y - hy) < reach) return kind
+        }
+        return MOVE
+    }
+
+    override fun onTouchEvent(e: MotionEvent): Boolean {
+        when (e.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                parent?.requestDisallowInterceptTouchEvent(true)
+                val c = width / 2.0
+                grabbed = pick(e.x, e.y)
+                lastX = e.x; lastY = e.y
+                lastAngle = kotlin.math.atan2(e.y - c, e.x - c)
+                if (grabbed == MOVE) leanTo(e.x, e.y)
+                onGrab(grabbed)
+                invalidate()
+                return true
+            }
+            MotionEvent.ACTION_MOVE -> {
+                val c = width / 2.0
+                val ang = kotlin.math.atan2(e.y - c, e.x - c)
+                var sweep = ang - lastAngle
+                while (sweep > Math.PI) sweep -= Math.PI * 2
+                while (sweep < -Math.PI) sweep += Math.PI * 2
+                lastAngle = ang
+                onDrag(grabbed, e.x - lastX, e.y - lastY, sweep)
+                lastX = e.x; lastY = e.y
+                if (grabbed == MOVE) leanTo(e.x, e.y)
+                return true
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                grabbed = MOVE
+                /* FACT: "When you release, the stick returns to its original
+                   position" — it reports a push, not a place. */
+                aimX = 0f; aimY = 0f
+                postInvalidateOnAnimation()
+                onRelease()
+                performClick()
+                return true
+            }
+        }
+        return super.onTouchEvent(e)
+    }
+
+    /** FACT: "The stick can move outside the joystick layout." */
+    private fun leanTo(x: Float, y: Float) {
+        val c = width / 2f
+        var dx = x - c
+        var dy = y - c
+        val reach = width * (52f / 108f)
+        val len = kotlin.math.hypot(dx, dy)
+        if (len > reach) { dx = dx / len * reach; dy = dy / len * reach }
+        aimX = dx; aimY = dy
+        postInvalidateOnAnimation()
+    }
+
+    private fun stepKnob(): Boolean {
+        val k = 0.35f
+        val dx = aimX - knobX
+        val dy = aimY - knobY
+        if (kotlin.math.hypot(dx, dy) < 0.4f) {
+            knobX = aimX; knobY = aimY
+            return false
+        }
+        knobX += dx * k
+        knobY += dy * k
+        return true
+    }
+
+    override fun performClick(): Boolean { super.performClick(); return true }
+
+    companion object {
+        const val MOVE = 0
+        const val ROTATE = 1
+        const val SCALE_FREE = 2
+        const val SCALE_WIDTH = 3
+        const val SCALE_HEIGHT = 4
+
+        /** One character each, since there is no room for a word on a handle. */
+        val GLYPH = mapOf(
+            ROTATE to "\u21BB", SCALE_FREE to "\u2921",
+            SCALE_WIDTH to "\u2194", SCALE_HEIGHT to "\u2195",
+        )
+    }
+}
+
+/**
  * `#joyStrip` — the depth axis, towards and away from the camera.
  *
  * Separate from the pad because there is nowhere on a flat circle to put the

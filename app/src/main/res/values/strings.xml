@@ -349,4 +349,11 @@
     <string name="home_deleted">%1$d deleted</string>
     <string name="home_moved">%1$d moved</string>
     <string name="home_cannot_move">A folder cannot go inside itself</string>
+    <string name="joy_lock">Lock</string>
+    <string name="joy_2d">2D</string>
+    <string name="joy_3d">3D</string>
+    <string name="tip_joy_lock">Lock: straight moves, uniform scale, 15° turns</string>
+    <string name="tip_joy_switch">Switch between the view joystick and the axis one</string>
+    <string name="joy_locked">Joystick locked</string>
+    <string name="joy_unlocked">Joystick free</string>
 </resources>

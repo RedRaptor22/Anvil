@@ -69,16 +69,32 @@ direction. It's very intuitive because it transforms as it appears."
   object."
 - "Tap and drag the **center sphere**… for free rotation… like a trackball."
 
-Anvil's pad has three arcs that do move/rotate/scale depending on a mode
-switch, plus a depth strip. Closest to the 3D joystick, with no 2D joystick
-and no lock at all.
+**Built.** Anvil now has both. The 2D joystick is the default, as it is in
+Feather, with all five handles where the documentation puts them — height
+above the stick, width to the left, free scale between them, the turn on the
+right — and the Lock, which restricts the stick to four directions, collapses
+the three scale handles to one uniform one, and makes the rotate handle jump
+in whole fifteens rather than easing towards them.
+
+Two things are still ours rather than Feather's, and deliberately.
+
+The 3D joystick keeps a **Move / Turn / Size mode switch** where Feather has
+cones, arcs and a centre sphere all live at once. Feather's arrangement is
+better and needs a real gizmo drawn in the scene rather than a pad beside it;
+the pad's centre in Turn mode already IS the trackball ("free rotation… like a
+trackball"), so the substance is there and the shape is not.
+
+And an axis pointing at the camera keeps a usable direction here instead of
+being greyed out — recorded below under the joystick's end-on axes.
 
 ## Materials are per curve, chosen in the Colour Panel
 
-"All curves drawn with Feather are 3D curves that respond to light." Four
-materials, and this build has none of them as a per-curve property — shading
-is one environment switch over everything, so a sketch cannot mix a shaded
-form with flat line work.
+**Built.** "All curves drawn with Feather are 3D curves that respond to
+light." Four materials, and this build had none of them as a per-curve
+property — shading was one environment switch over everything, so a sketch
+could not mix a shaded form with flat line work. They are a property of the
+curve now, on a third page of the colour card, and a curve nobody has given
+one to still follows its brush.
 
 | Material | Documented behaviour |
 |---|---|
@@ -87,13 +103,35 @@ form with flat line work.
 | Glow | "Responds to the glow area… Does not respond to lighting, does not cast shadows, and patterns cannot be applied. You can adjust its intensity." |
 | Cutout | "Responds to the background, making curves appear as the background color or image." |
 
-**Patterns**, which are entirely absent here: "procedurally generated
-textures", five of them as of 1.0 — "Dot, Line, Cross, Terrazzo, and Stippled
-Dot" — applied from the Colour Panel to Shaded or Shadeless curves only, with
-sliders for "intensity, angle, and contrast".
+**Patterns**, also built: "procedurally generated textures", five of them as
+of 1.0 — "Dot, Line, Cross, Terrazzo, and Stippled Dot" — applied from the
+Colour Panel to Shaded or Shadeless curves only, with sliders for "intensity,
+angle, and contrast". The one decision that is ours is where a pattern LIVES:
+there are no UVs on a swept tube, so it is projected triplanar by the dominant
+axis of the normal and measured in world millimetres, the same anchor as the
+pencil grain. Two curves crossing therefore agree about where the dots are.
 
 Render Mode is in the **Stage Panel**: "Materials are displayed accurately
-only in rendering mode."
+only in rendering mode." It is now the button at the top of that panel, and it
+moves both halves of the rendered look — lighting and the post pass — which
+this build had as two separate switches buried in the Scene tab.
+
+## Home, built from the Home pages
+
+Sidebar (Recents, Folders, Settings, Help), breadcrumb, refresh, new folder,
+sort by modified / created / name, a grid of tiles with four-up folder covers,
+the + at the bottom right, and the selection bar: deselect, rename, duplicate,
+export, lighten, delete. Tap and hold picks; hold something already picked to
+drag it into a folder, or onto a crumb to bring it back out.
+
+Two divergences worth naming. **Feather Gallery** (item 4) is a service, not a
+feature, so there is nothing to port; the slot is Help instead. And **export**
+writes this app's own document rather than a `.feather` file, since a format
+nothing here can read back would be a button that only loses work.
+
+**Lighten** is real: Douglas-Peucker with the tolerance measured against the
+brush rather than in absolute units, so a tenth of a millimetre off the line
+survives on a hairline and is dropped under a 30mm marker.
 
 ## Confirmed as already matching
 

@@ -211,6 +211,13 @@ class Chrome(private val act: Activity, val t: Tokens) {
     /** Finished stamping. */
     var onStampDone: () -> Unit = {}
 
+    /** The 2D joystick: its lock, the switch to the 3D one, and its handles. */
+    var onJoyLock: () -> Unit = {}
+    var onJoyKind: (Boolean) -> Unit = {}
+    var onJoy2DGrab: (Int) -> Unit = {}
+    var onJoy2D: (kind: Int, dx: Float, dy: Float, sweep: Double) -> Unit =
+        { _, _, _, _ -> }
+
     /** A material was chosen: it applies to the selection, or to the brush. */
     var onMaterial: (String) -> Unit = {}
     var onPattern: (Int) -> Unit = {}
@@ -533,6 +540,12 @@ class Chrome(private val act: Activity, val t: Tokens) {
     private lateinit var pressRow: LinearLayout
     private lateinit var joyPad: JoyPad
     private lateinit var joyStrip: JoyStrip
+    private lateinit var joy2d: Joy2D
+    private lateinit var joyLockButton: TextButton
+    private lateinit var joySwitch: TextButton
+    private lateinit var joyModeRow: LinearLayout
+    private var joy3d = false
+    private var joyLocked = false
     private lateinit var joyTarget: TextView
     private lateinit var walkStep: TextView
     private lateinit var walkTitle: TextView
@@ -1590,6 +1603,53 @@ class Chrome(private val act: Activity, val t: Tokens) {
         val p = t.dp(10f)
         joyPanel.setPadding(p, p, p, p)
 
+        /*
+         * TWO JOYSTICKS, AND A SWITCH BETWEEN THEM.
+         *
+         * FACT: "6. Lock 2D Joystick… 7. Switch to 3D Joystick." The 2D one
+         * works in the picture — "it transforms as it appears" — and the 3D
+         * one works in global XYZ. They are not two skins on one control:
+         * "move it left" and "move it along X" are different requests, and
+         * which one you want depends entirely on whether you are composing or
+         * building.
+         *
+         * This build had only the second, which is the one you reach for less
+         * often.
+         */
+        val head = LinearLayout(act).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { bottomMargin = t.dp(6f) }
+        }
+        joyLockButton = TextButton(act, t, filled = true, small = true).apply {
+            text = act.getString(R.string.joy_lock)
+            maxLines = 1
+            setOnClickListener { onJoyLock() }
+            Tip.attach(this, tipCard, act.getString(R.string.tip_joy_lock))
+        }
+        head.addView(joyLockButton)
+        joySwitch = TextButton(act, t, filled = true, small = true).apply {
+            text = act.getString(R.string.joy_3d)
+            maxLines = 1
+            setOnClickListener { onJoyKind(!joy3d) }
+            Tip.attach(this, tipCard, act.getString(R.string.tip_joy_switch))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { marginStart = t.dp(4f) }
+        }
+        head.addView(joySwitch)
+        joyPanel.addView(head)
+
+        joy2d = Joy2D(
+            act, t,
+            onGrab = { kind -> onJoy2DGrab(kind) },
+            onDrag = { kind, dx, dy, sweep -> onJoy2D(kind, dx, dy, sweep) },
+            onRelease = { onTransformEnd() },
+        )
+        joyPanel.addView(joy2d)
+
         val modes = LinearLayout(act).apply { orientation = LinearLayout.HORIZONTAL }
         for ((mode, label) in listOf(
             Transform.Mode.MOVE to R.string.joy_move,
@@ -1626,6 +1686,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
          * underneath. Whichever is wider sets the panel, which is what the
          * CSS was doing too — just from the other direction.
          */
+        joyModeRow = modes
         joyPanel.addView(
             modes,
             LinearLayout.LayoutParams(
@@ -3897,6 +3958,13 @@ class Chrome(private val act: Activity, val t: Tokens) {
 
     fun setStaging(s: Staging?) { staging = s; refresh() }
 
+    /** Which joystick is showing, and whether the 2D one is locked. */
+    fun setJoystick(threeD: Boolean, locked: Boolean) {
+        joy3d = threeD
+        joyLocked = locked
+        refresh()
+    }
+
     private var stamping = false
 
     fun setStamping(on: Boolean) { stamping = on; refresh() }
@@ -4836,6 +4904,16 @@ class Chrome(private val act: Activity, val t: Tokens) {
 
         stampBar.visibility = if (stamping) View.VISIBLE else View.GONE
         refreshMaterialPage()
+        /* one joystick at a time: the panel is the width of one control, and
+           two stacked would put the lower one off the bottom of a phone */
+        joy2d.visibility = if (joy3d) View.GONE else View.VISIBLE
+        joyPad.visibility = if (joy3d) View.VISIBLE else View.GONE
+        joyStrip.visibility = if (joy3d) View.VISIBLE else View.GONE
+        joyModeRow.visibility = if (joy3d) View.VISIBLE else View.GONE
+        joyLockButton.visibility = if (joy3d) View.GONE else View.VISIBLE
+        joyLockButton.on = joyLocked
+        joy2d.locked = joyLocked
+        joySwitch.text = act.getString(if (joy3d) R.string.joy_2d else R.string.joy_3d)
         /* the guide bar and the staging bar are mutually exclusive: you are
            either editing a live guide or building a new one */
         guideBar.visibility = if (guideActive && st == null && !stamping) View.VISIBLE else View.GONE
