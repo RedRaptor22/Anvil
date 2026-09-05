@@ -20,6 +20,8 @@ import kotlin.test.assertTrue
  */
 class DocumentTest {
 
+    private fun cam() = Camera().apply { resize(800, 800) }
+
     private fun stroke(n: Int = 12, brush: String = "pen"): Stroke {
         val s = Stroke(brush = brush, color = Rgba(0.85, 0.22, 0.26), baseRadius = 9.0 * MM)
         for (i in 0 until n) {
@@ -463,4 +465,45 @@ class DocumentTest {
         assertEquals(0, old.tool.presets.size)
     }
 
+    @Test
+    fun `a material and its pattern survive a round trip`() {
+        val sketch = Sketch()
+        val plain = stroke()
+        val printed = stroke().also {
+            it.material = Material.SHADELESS
+            it.pattern = Pattern.TERRAZZO
+            it.patternIntensity = 0.8
+            it.patternAngle = 0.4
+            it.patternContrast = 0.25
+        }
+        sketch.add(plain); sketch.add(printed)
+
+        val back = Sketch()
+        assertTrue(
+            Document.restore(
+                Document.toJsonText(sketch, GuideScene(), cam()), back, GuideScene(), cam(),
+            ).ok,
+        )
+
+        /* the one that was never given a material still has none, so it goes
+           on following its brush rather than being frozen to today's answer */
+        assertNull(back.strokes[0].material)
+        assertEquals(Pattern.NONE, back.strokes[0].pattern)
+
+        assertEquals(Material.SHADELESS, back.strokes[1].material)
+        assertEquals(Pattern.TERRAZZO, back.strokes[1].pattern)
+        assertEquals(0.8, back.strokes[1].patternIntensity, 1e-6)
+        assertEquals(0.4, back.strokes[1].patternAngle, 1e-6)
+        assertEquals(0.25, back.strokes[1].patternContrast, 1e-6)
+    }
+
+    @Test
+    fun `a material this build has never heard of falls back rather than failing`() {
+        val text = Document.toJsonText(
+            Sketch().also { it.add(stroke()) }, GuideScene(), cam(),
+        ).replace("\"brush\"", "\"material\":\"iridescent\",\"brush\"")
+        val back = Sketch()
+        assertTrue(Document.restore(text, back, GuideScene(), cam()).ok, "it still opens")
+        assertEquals(Material.SHADED, back.strokes[0].material, "as something that draws")
+    }
 }

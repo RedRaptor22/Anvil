@@ -305,4 +305,20 @@
     <string name="stamp_hint">Drag to lay down a copy</string>
     <string name="stamp_on">Stamp: drag to copy. Done when you are finished.</string>
     <string name="stamp_off">Stamped %1$d</string>
+    <string name="material">Material</string>
+    <string name="mat_shaded">Shaded</string>
+    <string name="mat_shadeless">Flat</string>
+    <string name="mat_glow">Glow</string>
+    <string name="mat_cutout">Cutout</string>
+    <string name="pattern">Pattern</string>
+    <string name="pat_none">None</string>
+    <string name="pat_dot">Dot</string>
+    <string name="pat_line">Line</string>
+    <string name="pat_cross">Cross</string>
+    <string name="pat_terrazzo">Chips</string>
+    <string name="pat_stipple">Stipple</string>
+    <string name="pat_intensity">Intensity</string>
+    <string name="pat_angle">Angle</string>
+    <string name="pat_contrast">Contrast</string>
+    <string name="tip_materials">Material and pattern</string>
 </resources>

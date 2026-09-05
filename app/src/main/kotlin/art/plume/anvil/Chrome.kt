@@ -14,6 +14,8 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.EditText
 import art.plume.core.Grid
+import art.plume.core.Material
+import art.plume.core.Pattern
 import art.plume.core.Mirror
 import art.plume.core.ColorSpace
 import art.plume.core.DocumentEnv
@@ -200,6 +202,11 @@ class Chrome(private val act: Activity, val t: Tokens) {
 
     /** Finished stamping. */
     var onStampDone: () -> Unit = {}
+
+    /** A material was chosen: it applies to the selection, or to the brush. */
+    var onMaterial: (String) -> Unit = {}
+    var onPattern: (Int) -> Unit = {}
+    var onPatternValue: (which: Int, value: Double) -> Unit = { _, _ -> }
     var onStageCancel: () -> Unit = {}
 
     val root = FrameLayout(act)
@@ -393,7 +400,8 @@ class Chrome(private val act: Activity, val t: Tokens) {
     private val palettePage = LinearLayout(act)
     private lateinit var wheelTab: IcoButton
     private lateinit var paletteTab: IcoButton
-    private var onWheelPage = true
+    /** Which of the colour card's three pages is showing. */
+    private var colorPage = PAGE_WHEEL
 
 
     /** The groups you made, name to colours, in the order you made them. */
@@ -2539,15 +2547,30 @@ class Chrome(private val act: Activity, val t: Tokens) {
         }
         header.addView(cardTitle)
         wheelTab = IcoButton(act, t, IcoButton.SIZE_SMALL).icon("brush").apply {
-            setOnClickListener { showColorPage(wheel = true) }
+            setOnClickListener { showColorPage(page = PAGE_WHEEL) }
             Tip.attach(this, tipCard, act.getString(R.string.tip_wheel))
         }
         paletteTab = IcoButton(act, t, IcoButton.SIZE_SMALL).icon("stage").apply {
-            setOnClickListener { showColorPage(wheel = false) }
+            setOnClickListener { showColorPage(page = PAGE_PALETTE) }
             Tip.attach(this, tipCard, act.getString(R.string.tip_palettes))
+        }
+        /*
+         * THE THIRD PAGE: what the mark is MADE of.
+         *
+         * FACT: materials and patterns live in the Color Panel — "Tap Pattern
+         * in the Color Panel… select either the Shaded or Shadeless material,
+         * then tap 'Pattern' at the bottom." A page of its own rather than a
+         * strip under the wheel, for the same reason the palettes got one: the
+         * card is already as tall as it should be, and the wheel is what you
+         * opened it for.
+         */
+        materialTab = IcoButton(act, t, IcoButton.SIZE_SMALL).icon("solid").apply {
+            setOnClickListener { showColorPage(page = PAGE_MATERIAL) }
+            Tip.attach(this, tipCard, act.getString(R.string.tip_materials))
         }
         header.addView(wheelTab)
         header.addView(paletteTab)
+        header.addView(materialTab)
         colorCard.addView(header)
 
         wheelPage.orientation = LinearLayout.VERTICAL
@@ -2625,7 +2648,17 @@ class Chrome(private val act: Activity, val t: Tokens) {
             ),
         )
         rebuildPalettes()
-        showColorPage(wheel = true)
+
+        materialPage.orientation = LinearLayout.VERTICAL
+        colorCard.addView(
+            materialPage,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ),
+        )
+        buildMaterialPage()
+
+        showColorPage(page = PAGE_WHEEL)
 
         /*
          * THE CARD ITSELF TAKES THE SWIPE.
@@ -2643,15 +2676,162 @@ class Chrome(private val act: Activity, val t: Tokens) {
     }
 
     /**
+     * WHAT THE MARK IS MADE OF, and what is printed on it.
+     *
+     * FACT: four materials — Shadeless "does not respond to lighting or cast
+     * shadows", Shaded "responds to lighting and casts shadows", Glow "adds a
+     * glowing effect… patterns cannot be applied", Cutout "responds to the
+     * background, making curves appear as the background color or image" — and
+     * five patterns, "Dot, Line, Cross, Terrazzo and Stippled Dot", with
+     * sliders for "intensity, angle, and contrast".
+     *
+     * The pattern half greys out under Glow and Cutout rather than
+     * disappearing, because a control that vanishes leaves you wondering
+     * whether you imagined it; one that is visibly unavailable tells you the
+     * material is why.
+     */
+    private fun buildMaterialPage() {
+        materialPage.addView(lab(act.getString(R.string.material)))
+        val mats = LinearLayout(act).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { topMargin = t.dp(4f) }
+        }
+        for ((key, label) in listOf(
+            Material.SHADED to R.string.mat_shaded,
+            Material.SHADELESS to R.string.mat_shadeless,
+            Material.GLOW to R.string.mat_glow,
+            Material.CUTOUT to R.string.mat_cutout,
+        )) {
+            val b = TextButton(act, t, filled = true, small = true).apply {
+                text = act.getString(label)
+                setOnClickListener { onMaterial(key) }
+                layoutParams = LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f,
+                ).apply { marginStart = t.dp(2f) }
+            }
+            materialButtons[key] = b
+            mats.addView(b)
+        }
+        materialPage.addView(mats)
+
+        materialPage.addView(
+            lab(act.getString(R.string.pattern)).apply {
+                setPadding(t.dp(6f), t.dp(10f), 0, 0)
+            },
+        )
+        val pats = LinearLayout(act).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { topMargin = t.dp(4f) }
+        }
+        for ((key, label) in listOf(
+            Pattern.NONE to R.string.pat_none,
+            Pattern.DOT to R.string.pat_dot,
+            Pattern.LINE to R.string.pat_line,
+            Pattern.CROSS to R.string.pat_cross,
+            Pattern.TERRAZZO to R.string.pat_terrazzo,
+            Pattern.STIPPLE to R.string.pat_stipple,
+        )) {
+            val b = TextButton(act, t, filled = true, small = true).apply {
+                text = act.getString(label)
+                setOnClickListener { onPattern(key) }
+                layoutParams = LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f,
+                ).apply { marginStart = t.dp(2f) }
+            }
+            patternButtons[key] = b
+            pats.addView(b)
+        }
+        materialPage.addView(pats)
+
+        for ((which, label) in listOf(
+            PAT_INTENSITY to R.string.pat_intensity,
+            PAT_ANGLE to R.string.pat_angle,
+            PAT_CONTRAST to R.string.pat_contrast,
+        )) {
+            val row = LinearLayout(act).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { topMargin = t.dp(6f) }
+            }
+            row.addView(
+                TextView(act).apply {
+                    text = act.getString(label)
+                    setTextColor(t.dim)
+                    textSize = 10.5f
+                    width = t.dp(62f)
+                },
+            )
+            val bar = HSlider(act, t, 0.0, 1.0) { v -> onPatternValue(which, v) }.apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    0, t.dp(16f), 1f,
+                )
+            }
+            patternBars[which] = bar
+            row.addView(bar)
+            patternRows.add(row)
+            materialPage.addView(row)
+        }
+    }
+
+    /** Draw the page from the state the activity last pushed in. */
+    private fun refreshMaterialPage() {
+        for ((key, b) in materialButtons) b.on = key == material
+        val takes = Material.takesPattern(material)
+        for ((key, b) in patternButtons) {
+            b.on = takes && key == pattern
+            b.isEnabled = takes
+            b.alpha = if (takes) 1f else 0.35f
+        }
+        val live = takes && pattern != Pattern.NONE
+        patternBars[PAT_INTENSITY]?.value = patternIntensity
+        patternBars[PAT_ANGLE]?.value = patternAngle
+        patternBars[PAT_CONTRAST]?.value = patternContrast
+        for (row in patternRows) {
+            row.isEnabled = live
+            row.alpha = if (live) 1f else 0.35f
+            for (i in 0 until row.childCount) row.getChildAt(i).isEnabled = live
+        }
+    }
+
+    /**
+     * What the next stroke, or the selection, is made of.
+     *
+     * [angle] arrives as the slider's own 0..1 rather than as radians: the
+     * chrome renders controls and does not do arithmetic on what they mean.
+     */
+    fun setMaterial(
+        material: String,
+        pattern: Int,
+        intensity: Double,
+        angle: Double,
+        contrast: Double,
+    ) {
+        this.material = material
+        this.pattern = pattern
+        this.patternIntensity = intensity
+        this.patternAngle = angle
+        this.patternContrast = contrast
+        if (built) refreshMaterialPage()
+    }
+
+    /**
      * Which page the card is showing. The wheel is the default, because
      * mixing is what the card is for and a palette is a shortcut past it.
      */
-    private fun showColorPage(wheel: Boolean) {
-        onWheelPage = wheel
-        wheelPage.visibility = if (wheel) View.VISIBLE else View.GONE
-        palettePage.visibility = if (wheel) View.GONE else View.VISIBLE
-        wheelTab.on = wheel
-        paletteTab.on = !wheel
+    private fun showColorPage(page: Int) {
+        colorPage = page
+        wheelPage.visibility = if (page == PAGE_WHEEL) View.VISIBLE else View.GONE
+        palettePage.visibility = if (page == PAGE_PALETTE) View.VISIBLE else View.GONE
+        materialPage.visibility = if (page == PAGE_MATERIAL) View.VISIBLE else View.GONE
+        wheelTab.on = page == PAGE_WHEEL
+        paletteTab.on = page == PAGE_PALETTE
+        materialTab.on = page == PAGE_MATERIAL
         refresh()
     }
 
@@ -3744,7 +3924,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
      * nobody chose would undo the point of having made the list.
      */
     private fun stepColor(dir: Int) {
-        val group = if (!onWheelPage) activePalette() else null
+        val group = if (colorPage == PAGE_PALETTE) activePalette() else null
         if (group != null && group.isNotEmpty()) {
             val at = group.indexOf(cardColor())
             val next = group[(((if (at < 0) 0 else at) + dir) % group.size + group.size) % group.size]
@@ -3770,6 +3950,19 @@ class Chrome(private val act: Activity, val t: Tokens) {
         hsv[2] = (hsv[2] + dir * VALUE_STEP).coerceIn(VALUE_FLOOR, 1f)
         applyCardColor(Color.HSVToColor(Color.alpha(c), hsv))
     }
+
+    /** `#materialPage` — the colour card's third page. */
+    private val materialPage = LinearLayout(act)
+    private lateinit var materialTab: IcoButton
+    private val materialButtons = LinkedHashMap<String, TextButton>()
+    private val patternButtons = LinkedHashMap<Int, TextButton>()
+    private val patternBars = HashMap<Int, HSlider>()
+    private val patternRows = ArrayList<LinearLayout>()
+    private var material = Material.SHADED
+    private var pattern = Pattern.NONE
+    private var patternIntensity = 0.5
+    private var patternAngle = 0.0
+    private var patternContrast = 0.5
 
     /** `#stampBar` — shown only while stamping, and only to get out of it. */
     private val stampBar = LinearLayout(act)
@@ -3809,7 +4002,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
      * wander from drifting and lets you undo a drag by dragging back.
      */
     private fun dragColorBy(dxPx: Float, dyPx: Float) {
-        val group = if (!onWheelPage) activePalette() else null
+        val group = if (colorPage == PAGE_PALETTE) activePalette() else null
         if (group != null && group.isNotEmpty()) {
             /* a picked group still steps: the list is the point of it */
             val steps = (-dyPx / t.dpf(SWIPE_STEP_DP)).toInt()
@@ -4061,6 +4254,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
         }
 
         stampBar.visibility = if (stamping) View.VISIBLE else View.GONE
+        refreshMaterialPage()
         /* the guide bar and the staging bar are mutually exclusive: you are
            either editing a live guide or building a new one */
         guideBar.visibility = if (guideActive && st == null && !stamping) View.VISIBLE else View.GONE
@@ -4232,6 +4426,14 @@ class Chrome(private val act: Activity, val t: Tokens) {
          * `data-tip` for the action buttons, in the web build's own words.
          * Keyed by icon name, which is how [ico] identifies them.
          */
+        /** The colour card's pages, and which pattern slider a row is. */
+        const val PAGE_WHEEL = 0
+        const val PAGE_PALETTE = 1
+        const val PAGE_MATERIAL = 2
+        const val PAT_INTENSITY = 0
+        const val PAT_ANGLE = 1
+        const val PAT_CONTRAST = 2
+
         private val TIPS = mapOf(
             "grid" to R.string.tip_home,
             "export" to R.string.tip_export,

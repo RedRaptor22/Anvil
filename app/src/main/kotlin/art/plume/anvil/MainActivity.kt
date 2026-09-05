@@ -42,6 +42,8 @@ import art.plume.core.Guides
 import art.plume.core.History
 import art.plume.core.Import
 import art.plume.core.Mat4
+import art.plume.core.Material
+import art.plume.core.Pattern
 import art.plume.core.Liquify
 import art.plume.core.LiveStroke
 import art.plume.core.MM
@@ -207,6 +209,21 @@ class MainActivity : Activity(), Gestures.Listener {
     private var color = Rgba(0.106, 0.110, 0.129)
 
     private var opacity = 1.0
+
+    /**
+     * WHAT THE NEXT CURVE WILL BE MADE OF.
+     *
+     * FACT: the four materials and the five patterns are properties of a
+     * curve, not of a brush. So they sit beside the brush in the tool state
+     * and travel into every stroke that is drawn, and the same controls
+     * restyle a live selection — the rule the colour swatches and the opacity
+     * slider already follow.
+     */
+    private var material = Material.SHADED
+    private var pattern = Pattern.NONE
+    private var patternIntensity = 0.5
+    private var patternAngle = 0.0
+    private var patternContrast = 0.5
 
     // ---- staging: a guide being built but not yet committed ---------------
 
@@ -493,6 +510,9 @@ class MainActivity : Activity(), Gestures.Listener {
         chrome.onOpacity = { o -> applyOpacityToSelectionOrBrush(o) }
         chrome.onBrush = { b -> brush = b }
         chrome.onColor = { argb -> applyColorToSelectionOrBrush(rgbaOf(argb)) }
+        chrome.onMaterial = { name -> applyMaterial(name) }
+        chrome.onPattern = { p -> applyPattern(p) }
+        chrome.onPatternValue = { which, v -> applyPatternValue(which, v) }
         /* The hex field and the wheel serve whichever well the card is pointed
            at, so they go back through the card rather than straight at the
            brush — otherwise typing a hex while editing the background would
@@ -2040,6 +2060,29 @@ class MainActivity : Activity(), Gestures.Listener {
             },
         )
         chrome.setSelection(sketch.selection.size)
+        /*
+         * THE PANEL SHOWS WHAT IS SELECTED, when something is.
+         *
+         * Otherwise it shows the brush's material while a curve of a different
+         * one sits highlighted on screen — and the next tap on that page would
+         * change the selection to something you had not read. A mixture
+         * reports as nothing chosen, which is the honest answer.
+         */
+        val picked = sketch.selection
+        if (picked.isEmpty()) {
+            chrome.setMaterial(
+                material, pattern, patternIntensity, patternAngle / Math.PI, patternContrast,
+            )
+        } else {
+            val st = Selection.styleOf(picked)
+            chrome.setMaterial(
+                st?.material ?: material,
+                st?.pattern ?: Pattern.NONE,
+                picked[0].patternIntensity,
+                picked[0].patternAngle / Math.PI,
+                picked[0].patternContrast,
+            )
+        }
         chrome.setGuideSelected(transformGuide != null)
         pushTransform()
         /* the count is of what you can SEE. Hiding a group and watching the
@@ -2517,6 +2560,14 @@ class MainActivity : Activity(), Gestures.Listener {
          * means "none" — the geometry then ignores pressure entirely.
          */
         s.pressureTarget = if (pressureOn) pressureTarget else "none"
+        /* stamped onto the curve for the same reason as the pressure target:
+           it is what this mark is made of, and changing the setting for the
+           next one must not reach back and change this one */
+        s.material = material
+        s.pattern = pattern
+        s.patternIntensity = patternIntensity
+        s.patternAngle = patternAngle
+        s.patternContrast = patternContrast
         s.group = sketch.ensureGroup().id
         stabilizer.reset()
         stabilizer.next(x.toDouble(), y.toDouble())
@@ -3196,6 +3247,97 @@ class MainActivity : Activity(), Gestures.Listener {
         )
     }
 
+    /**
+     * The material controls follow the same rule as the colour swatches: they
+     * restyle a live selection, and set what the next curve will be either
+     * way.
+     *
+     * One history step per change, and the old values kept per curve rather
+     * than as one value, because a selection can be a mixture — restyling
+     * five curves that were four different materials has to put all five back
+     * where they were.
+     */
+    private fun applyMaterial(name: String) {
+        material = name
+        pushMaterial()
+        val sel = sketch.selection
+        if (sel.isEmpty()) return
+        val was = sel.map { it.material }
+        history.run(
+            Step(
+                "Material",
+                /* no mesh to rebuild: the material is a uniform read off the
+                   curve as it is drawn, so the same triangles answer the light
+                   differently on the very next frame */
+                onRedo = {
+                    Selection.restyle(sel, StyleChange(material = name))
+                    refreshScene()
+                },
+                onUndo = {
+                    for (i in sel.indices) sel[i].material = was[i]
+                    refreshScene()
+                },
+            ),
+        )
+    }
+
+    private fun applyPattern(p: Int) {
+        pattern = Pattern.sanitize(p)
+        pushMaterial()
+        val sel = sketch.selection
+        if (sel.isEmpty()) return
+        val was = sel.map { it.pattern }
+        history.run(
+            Step(
+                "Pattern",
+                onRedo = {
+                    Selection.restyle(sel, StyleChange(pattern = pattern))
+                    refreshScene()
+                },
+                onUndo = {
+                    for (i in sel.indices) sel[i].pattern = was[i]
+                    refreshScene()
+                },
+            ),
+        )
+    }
+
+    /**
+     * The three sliders. No history step: they are a continuous adjustment of
+     * something that is already there, the way the guide's opacity slider is,
+     * and one step per sample of a drag would bury the drawing's own steps.
+     */
+    private fun applyPatternValue(which: Int, v: Double) {
+        /* the slider runs 0..1; the angle it stands for is 0..half a turn,
+           which covers every distinct orientation a repeating print has —
+           a full turn would spend the second half of the travel repeating
+           the first. The curve stores radians, so the file means something. */
+        val angle = v * Math.PI
+        when (which) {
+            Chrome.PAT_INTENSITY -> patternIntensity = v
+            Chrome.PAT_ANGLE -> patternAngle = angle
+            else -> patternContrast = v
+        }
+        for (st in sketch.selection) {
+            when (which) {
+                Chrome.PAT_INTENSITY -> st.patternIntensity = v
+                Chrome.PAT_ANGLE -> st.patternAngle = angle
+                else -> st.patternContrast = v
+            }
+        }
+        pushMaterial()
+        surface.requestRender()
+    }
+
+    private fun pushMaterial() {
+        chrome.setMaterial(
+            material, pattern, patternIntensity, patternAngle / Math.PI, patternContrast,
+        )
+        /* the curve under the pen is made of the same stuff it will be made
+           of when the pen comes up */
+        renderer.setLiveMaterial(material)
+    }
+
     private fun clearSketch() {
         if (sketch.strokes.isEmpty()) return
         val before = ArrayList(sketch.strokes)
@@ -3503,6 +3645,11 @@ class MainActivity : Activity(), Gestures.Listener {
         docTool.pressureOn = pressureOn
         docTool.pressureTarget = pressureTarget
         docTool.mirror = if (mirrorAxes.isEmpty()) null else mirrorAxes.joinToString("")
+        docTool.material = material
+        docTool.pattern = pattern
+        docTool.patternIntensity = patternIntensity
+        docTool.patternAngle = patternAngle
+        docTool.patternContrast = patternContrast
         docTool.presets.clear()
         docTool.presets.addAll(presets)
         docTool.radial = radial
@@ -3571,6 +3718,12 @@ class MainActivity : Activity(), Gestures.Listener {
         presets.clear()
         presets.addAll(r.tool.presets)
         pushPresets()
+        material = r.tool.material
+        pattern = r.tool.pattern
+        patternIntensity = r.tool.patternIntensity
+        patternAngle = r.tool.patternAngle
+        patternContrast = r.tool.patternContrast
+        pushMaterial()
         chrome.setSymmetry(mirrorAxes.isNotEmpty() || radial > 1)
         chrome.setMirrorAxes(mirrorAxes)
         chrome.setPressure(pressureOn, pressureTarget)

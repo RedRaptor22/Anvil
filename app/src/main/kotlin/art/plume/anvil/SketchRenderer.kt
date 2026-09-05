@@ -14,6 +14,7 @@ import art.plume.core.GuideSurface
 import art.plume.core.Light
 import art.plume.core.LiveStroke
 import art.plume.core.Mat4
+import art.plume.core.Material
 import art.plume.core.MeshData
 import art.plume.core.Rgba
 import art.plume.core.ShadowFit
@@ -112,6 +113,9 @@ class SketchRenderer : GLSurfaceView.Renderer {
     private var uFogNear = 0; private var uFogFar = 0
     private var uShade = 0; private var uGlow = 0
     private var uGrit = 0; private var uSelect = 0; private var uFade = 0
+    private var uCutout = 0; private var uBackground = 0
+    private var uPattern = 0; private var uPatI = 0; private var uPatA = 0
+    private var uPatC = 0
 
     private var lineProgram = 0
     private var lPos = 0; private var lCol = 0; private var lMvp = 0
@@ -274,6 +278,12 @@ class SketchRenderer : GLSurfaceView.Renderer {
         uGrit = GLES30.glGetUniformLocation(program, "uGrit")
         uSelect = GLES30.glGetUniformLocation(program, "uSelect")
         uFade = GLES30.glGetUniformLocation(program, "uFade")
+        uCutout = GLES30.glGetUniformLocation(program, "uCutout")
+        uBackground = GLES30.glGetUniformLocation(program, "uBackground")
+        uPattern = GLES30.glGetUniformLocation(program, "uPattern")
+        uPatI = GLES30.glGetUniformLocation(program, "uPatI")
+        uPatA = GLES30.glGetUniformLocation(program, "uPatA")
+        uPatC = GLES30.glGetUniformLocation(program, "uPatC")
 
         shadowProgram = link(SHADOW_VERT, SHADOW_FRAG)
         sPos = GLES30.glGetAttribLocation(shadowProgram, "aPos")
@@ -764,6 +774,10 @@ class SketchRenderer : GLSurfaceView.Renderer {
         GLES30.glUseProgram(shadowProgram)
         GLES30.glUniformMatrix4fv(sMvp, 1, false, shadowVp, 0)
         for (st in list) {
+            /* FACT: Shaded "casts shadows"; Glow "does not cast shadows", and
+               neither does Shadeless. A curve that answers no light has no
+               business darkening the ground under it. */
+            if (!Material.castsShadow(st.materialOf)) continue
             val b = uploaded[st] ?: upload(st) ?: continue
             GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, b.vbo)
             GLES30.glEnableVertexAttribArray(sPos)
@@ -1022,6 +1036,14 @@ class SketchRenderer : GLSurfaceView.Renderer {
             uFogCol, l.background.r.toFloat(), l.background.g.toFloat(),
             l.background.b.toFloat(),
         )
+        /* FACT: Cutout "responds to the background, making curves appear as
+           the background color" — which is the same colour fog resolves to,
+           and deliberately a second uniform: fog is distance and this is not,
+           and one of the two will one day be an image. */
+        GLES30.glUniform3f(
+            uBackground, l.background.r.toFloat(), l.background.g.toFloat(),
+            l.background.b.toFloat(),
+        )
         /*
          * Fog off is expressed as a range nothing can reach rather than as a
          * branch: one float against a conditional in the hottest shader in the
@@ -1073,10 +1095,18 @@ class SketchRenderer : GLSurfaceView.Renderer {
         val background: Rgba,
     )
 
+    /**
+     * Which of the three passes a curve belongs in — decided by its MATERIAL
+     * now, not by the brush it happened to be drawn with.
+     *
+     * Cutout is deliberately opaque: it is a hole in the drawing filled with
+     * the background, so it has to write depth and hide what is behind it. A
+     * translucent hole is a smear.
+     */
     private fun pass(s: Stroke): Int {
         val c = s.cfg
         return when {
-            c.glow -> GLOWING
+            s.materialOf == Material.GLOW -> GLOWING
             c.grit || s.opacity < 1.0 || fadeOf(s) < 1f -> BLENDED
             else -> OPAQUE
         }
@@ -1111,12 +1141,38 @@ class SketchRenderer : GLSurfaceView.Renderer {
             if (c.paint) -1f else 0f,
             -(1f + min(order, DEPTH_ORDER_CAP)),
         )
-        GLES30.glUniform1f(uShade, if (shadedNow && !c.glow) 1f else 0f)
-        GLES30.glUniform1f(uGlow, if (c.glow) 1f else 0f)
+        setMaterial(s.materialOf, shadedNow)
+        setPattern(s)
         GLES30.glUniform1f(uGrit, if (c.grit) 1f else 0f)
         GLES30.glUniform1f(uSelect, if (s.selected) 1f else 0f)
         GLES30.glUniform1f(uFade, fadeOf(s))
         draw(s)
+    }
+
+    /**
+     * FACT: Shadeless "does not respond to lighting"; Shaded "responds to
+     * lighting"; Glow "does not respond to lighting"; Cutout takes the
+     * background.
+     *
+     * Shade is still gated on the scene's own render-mode switch, because
+     * FACT: "Materials are displayed accurately only in rendering mode" — a
+     * Shaded curve in flat mode is flat like everything else, and the
+     * difference between the four only shows once the lights are on.
+     */
+    private fun setMaterial(material: String, shadedNow: Boolean) {
+        GLES30.glUniform1f(
+            uShade, if (shadedNow && material == Material.SHADED) 1f else 0f,
+        )
+        GLES30.glUniform1f(uGlow, if (material == Material.GLOW) 1f else 0f)
+        GLES30.glUniform1f(uCutout, if (material == Material.CUTOUT) 1f else 0f)
+    }
+
+    private fun setPattern(s: Stroke) {
+        if (!s.patterned) { GLES30.glUniform1f(uPattern, 0f); return }
+        GLES30.glUniform1f(uPattern, s.pattern.toFloat())
+        GLES30.glUniform1f(uPatI, s.patternIntensity.toFloat())
+        GLES30.glUniform1f(uPatA, s.patternAngle.toFloat())
+        GLES30.glUniform1f(uPatC, s.patternContrast.toFloat())
     }
 
     // ---- screen-space overlay -------------------------------------------
@@ -1513,6 +1569,13 @@ class SketchRenderer : GLSurfaceView.Renderer {
 
     // ---- the stroke being drawn -----------------------------------------
 
+    /** What the curve being drawn will be made of. Null follows its brush. */
+    private var liveMaterial: String? = null
+
+    fun setLiveMaterial(material: String?) {
+        synchronized(strokes) { liveMaterial = material }
+    }
+
     /** Hand over the live buffer; null ends the preview. */
     fun setLive(buffer: LiveStroke?) {
         synchronized(strokes) { live = buffer }
@@ -1530,8 +1593,10 @@ class SketchRenderer : GLSurfaceView.Renderer {
             syncLive(b, buffer)
             buffer.clearDirty()
             val c = buffer.cfg
-            GLES30.glUniform1f(uShade, if (shadedNow && !c.glow) 1f else 0f)
-            GLES30.glUniform1f(uGlow, if (c.glow) 1f else 0f)
+            /* the curve you are drawing is made of what it will be made of
+               when you let go, or it would change appearance on the pen-up */
+            setMaterial(liveMaterial ?: Material.forBrush(c), shadedNow)
+            GLES30.glUniform1f(uPattern, 0f)
             GLES30.glUniform1f(uGrit, if (c.grit) 1f else 0f)
             GLES30.glUniform1f(uSelect, 0f)
             /* at the strength of the group it is about to join, or it would
@@ -1732,6 +1797,12 @@ class SketchRenderer : GLSurfaceView.Renderer {
             uniform float uGrit;
             uniform float uSelect;
             uniform float uFade;
+            uniform float uCutout;
+            uniform vec3 uBackground;
+            uniform float uPattern;
+            uniform float uPatI;
+            uniform float uPatA;
+            uniform float uPatC;
             uniform vec3 uEye;
             uniform vec3 uFogCol;
             uniform float uFogNear;
@@ -1748,6 +1819,64 @@ class SketchRenderer : GLSurfaceView.Renderer {
                              mix(gHash(i+vec3(0,1,0)), gHash(i+vec3(1,1,0)), f.x), f.y),
                          mix(mix(gHash(i+vec3(0,0,1)), gHash(i+vec3(1,0,1)), f.x),
                              mix(gHash(i+vec3(0,1,1)), gHash(i+vec3(1,1,1)), f.x), f.y), f.z);
+            }
+
+            /* a stable 2-D coordinate on a curve that has no UVs.
+               Triplanar by the dominant axis of the normal, in world
+               MILLIMETRES like the pencil grain: the print is a property of
+               the paper, so two curves crossing agree about where the dots
+               are, and it does not swim when the curve is bent or scaled. */
+            vec2 patUV(vec3 mm, vec3 n){
+              vec3 a = abs(n);
+              vec2 uv = (a.x >= a.y && a.x >= a.z) ? mm.zy
+                      : ((a.y >= a.z) ? mm.xz : mm.xy);
+              float c = cos(uPatA), s = sin(uPatA);
+              return mat2(c, -s, s, c) * uv;
+            }
+
+            /* how hard the edges of the print are. Contrast at 0 is a soft
+               wash, at 1 a stencil — the same knob for all five, so it means
+               one thing wherever it appears. */
+            float patEdge(float d, float w){
+              float soft = mix(w, w * 0.06, uPatC);
+              return 1.0 - smoothstep(-soft, soft, d);
+            }
+
+            float patCell(vec2 c){
+              return fract(sin(dot(c, vec2(127.1, 311.7))) * 43758.5453);
+            }
+
+            /* 0 where the pattern is absent, 1 where it is solid. */
+            float patCoverage(vec2 uv){
+              float T = 9.0;                      // millimetres between marks
+              vec2 g = uv / T;
+              if(uPattern < 1.5){                 // Dot
+                vec2 f = fract(g) - 0.5;
+                return patEdge(length(f) - 0.29, 0.10);
+              }
+              if(uPattern < 2.5){                 // Line
+                float f = abs(fract(g.y) - 0.5);
+                return patEdge(f - 0.25, 0.09);
+              }
+              if(uPattern < 3.5){                 // Cross
+                float a = patEdge(abs(fract(g.y) - 0.5) - 0.2, 0.08);
+                float b = patEdge(abs(fract(g.x) - 0.5) - 0.2, 0.08);
+                return max(a, b);
+              }
+              if(uPattern < 4.5){                 // Terrazzo
+                /* chips: one blob per cell, each its own size and place, so
+                   the field never reads as a grid */
+                vec2 i = floor(g), f = fract(g) - 0.5;
+                float h = patCell(i);
+                vec2 o = vec2(patCell(i + 3.7), patCell(i + 11.3)) - 0.5;
+                return patEdge(length(f - o * 0.55) - (0.12 + 0.26 * h), 0.09);
+              }
+              /* Stippled Dot: small dots, jittered, most cells empty */
+              vec2 i = floor(g), f = fract(g) - 0.5;
+              float keep = patCell(i + 5.1);
+              if(keep < 0.35) return 0.0;
+              vec2 o = vec2(patCell(i + 1.9), patCell(i + 7.3)) - 0.5;
+              return patEdge(length(f - o * 0.6) - 0.10, 0.07);
             }
 
             void main(){
@@ -1778,6 +1907,21 @@ class SketchRenderer : GLSurfaceView.Renderer {
                 vec3 v = normalize(uEye - vPos);
                 float rim = pow(abs(dot(n, v)), 0.5);
                 rgb = vCol.rgb * (0.55 + 1.15*rim);
+              }
+
+              /* FACT: Cutout "responds to the background, making curves
+                 appear as the background color or image" — a hole cut in the
+                 drawing. It comes before the pattern and the selection tint
+                 for the same reason: nothing is printed on a hole. */
+              if(uCutout > 0.5) rgb = uBackground;
+
+              /* FACT: "Patterns are procedurally generated textures." The
+                 print darkens the curve rather than replacing its colour, so
+                 a patterned red curve is still red — intensity is how far
+                 towards its own shadow each mark goes. */
+              if(uPattern > 0.5 && uCutout < 0.5){
+                float cov = patCoverage(patUV(vPos * 1000.0, n));
+                rgb = mix(rgb, rgb * (1.0 - 0.85 * uPatI), cov);
               }
 
               /* FACT: "Selected curves are highlighted in green", and

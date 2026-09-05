@@ -177,11 +177,45 @@ class Stroke(
     var mirrorOf: Int? = null
     var mirrorKey: String = ""
 
+    /**
+     * HOW THIS CURVE ANSWERS THE LIGHT, and what is printed on it.
+     *
+     * Null means "whatever the brush is", which is not laziness: it is what
+     * makes the glow brush glow without anybody choosing anything, keeps every
+     * document written before materials existed reading exactly as it did, and
+     * leaves a curve free to follow its brush if the brush is later changed
+     * under it. A material is only stored once somebody has actually picked
+     * one.
+     */
+    var material: String? = null
+
+    /** The material this curve actually draws with. */
+    val materialOf: String get() = material ?: Material.forBrush(cfg)
+
+    /** What is printed on it: [Pattern.NONE], or one of the five. */
+    var pattern: Int = Pattern.NONE
+
+    /** FACT: "adjust the pattern's intensity, angle, and contrast". */
+    var patternIntensity: Double = 0.5
+    var patternAngle: Double = 0.0
+    var patternContrast: Double = 0.5
+
+    /** Whether the pattern would be drawn — Glow and Cutout refuse it. */
+    val patterned: Boolean get() = pattern != Pattern.NONE && Material.takesPattern(materialOf)
+
     /** A copy carrying [points] instead of this stroke's own. */
     fun withPoints(points: List<StrokePoint>): Stroke {
         val out = Stroke(brush, color, baseRadius, opacity, pressureTarget, guideId)
         out.group = group
         out.seedRef = seedRef?.copy()
+        /* a copy is the same curve somewhere else, so it is made of the same
+           stuff: erasing a patterned stroke splits it into pieces, and pieces
+           that came back plain would be a new fault every time you erased */
+        out.material = material
+        out.pattern = pattern
+        out.patternIntensity = patternIntensity
+        out.patternAngle = patternAngle
+        out.patternContrast = patternContrast
         for (q in points) {
             val c = StrokePoint(
                 q.p.copy(),

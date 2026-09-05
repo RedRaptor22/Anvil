@@ -42,6 +42,13 @@ class DocumentTool {
     var mirror: String? = null
     var autoGuide = true
 
+    /** What the next curve is made of. FACT: materials are per curve. */
+    var material = Material.SHADED
+    var pattern = Pattern.NONE
+    var patternIntensity = 0.5
+    var patternAngle = 0.0
+    var patternContrast = 0.5
+
     /**
      * FACT: "Brush presets are saved per note." So they travel in the
      * document, beside the tool state they are made of, rather than in a
@@ -235,6 +242,22 @@ object Document {
          * this document actually built.
          */
         o.put("id", st.id)
+        /*
+         * ONLY WHAT WAS ACTUALLY CHOSEN.
+         *
+         * A material is written when somebody picked one, and a pattern's
+         * three sliders only when there is a pattern to shape — a null
+         * material means "follow the brush", and writing the resolved value
+         * would silently freeze every curve to whatever its brush happened to
+         * be on the day it was saved.
+         */
+        st.material?.let { o.put("material", it) }
+        if (st.pattern != Pattern.NONE) {
+            o.put("pattern", st.pattern)
+            o.put("patIntensity", q(st.patternIntensity))
+            o.put("patAngle", q(st.patternAngle))
+            o.put("patContrast", q(st.patternContrast))
+        }
         st.mirrorOf?.let {
             o.put("mirrorOf", it)
             o.put("mirrorKey", st.mirrorKey)
@@ -251,6 +274,11 @@ object Document {
             pressureTarget = d.str("pressureTarget") ?: "size",
         )
         s.group = d["group"]?.asInt()
+        s.material = Material.sanitize(d.str("material"))
+        s.pattern = Pattern.sanitize(d["pattern"]?.asInt() ?: Pattern.NONE)
+        s.patternIntensity = clamp(d.num("patIntensity", 0.5), 0.0, 1.0)
+        s.patternAngle = d.num("patAngle", 0.0)
+        s.patternContrast = clamp(d.num("patContrast", 0.5), 0.0, 1.0)
         /* the file's ids, remapped by the caller once every curve exists */
         s.mirrorOf = d["mirrorOf"]?.asInt()
         s.mirrorKey = d.str("mirrorKey") ?: ""
@@ -497,6 +525,10 @@ object Document {
         doc.put("env", envOut)
 
         val toolOut = carried?.tool ?: JsonObject()
+        toolOut.put("material", tool.material).put("pattern", tool.pattern)
+        toolOut.put("patIntensity", q(tool.patternIntensity))
+        toolOut.put("patAngle", q(tool.patternAngle))
+        toolOut.put("patContrast", q(tool.patternContrast))
         toolOut.put("brush", tool.brush).put("color", packColor(tool.color))
         toolOut.put("sizeMM", q(tool.sizeMM)).put("opacity", q(tool.opacity))
         toolOut.put("pressureOn", tool.pressureOn).put("pressureTarget", tool.pressureTarget)
@@ -657,6 +689,11 @@ object Document {
 
         val tool = DocumentTool()
         root.obj("tool")?.let { t ->
+            tool.material = Material.sanitize(t.str("material")) ?: Material.SHADED
+            tool.pattern = Pattern.sanitize(t["pattern"]?.asInt() ?: Pattern.NONE)
+            tool.patternIntensity = clamp(t.num("patIntensity", 0.5), 0.0, 1.0)
+            tool.patternAngle = t.num("patAngle", 0.0)
+            tool.patternContrast = clamp(t.num("patContrast", 0.5), 0.0, 1.0)
             tool.brush = Brushes.resolve(t.str("brush")).name
             tool.color = unpackColor(t.str("color"), tool.color)
             tool.sizeMM = t.num("sizeMM", tool.sizeMM)

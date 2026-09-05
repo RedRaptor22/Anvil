@@ -14,6 +14,10 @@ class Style(
     val opacity: Double?,
     /** Averaged rather than nulled: a spread of widths still has a middle. */
     val averageRadius: Double,
+    /** The material they all draw with, or null where they disagree. */
+    val material: String? = null,
+    /** The pattern they all carry, or null where they disagree. */
+    val pattern: Int? = null,
 )
 
 /** What a restyle changes. Anything left null is left alone. */
@@ -23,6 +27,11 @@ class StyleChange(
     val opacity: Double? = null,
     /** Multiplies the radius, measured from a base snapshot. */
     val scale: Double? = null,
+    val material: String? = null,
+    val pattern: Int? = null,
+    val patternIntensity: Double? = null,
+    val patternAngle: Double? = null,
+    val patternContrast: Double? = null,
 )
 
 /**
@@ -401,6 +410,11 @@ object Selection {
             changes.brush?.let { st.brush = it }
             changes.color?.let { st.color = it }
             changes.opacity?.let { st.opacity = it }
+            changes.material?.let { st.material = it }
+            changes.pattern?.let { st.pattern = Pattern.sanitize(it) }
+            changes.patternIntensity?.let { st.patternIntensity = clamp(it, 0.0, 1.0) }
+            changes.patternAngle?.let { st.patternAngle = it }
+            changes.patternContrast?.let { st.patternContrast = clamp(it, 0.0, 1.0) }
             changes.scale?.let { k ->
                 val from = base?.getOrNull(i) ?: st.baseRadius
                 st.baseRadius = clamp(from * k, minR, maxR)
@@ -417,13 +431,20 @@ object Selection {
         var brush: String? = strokes[0].brush
         var color: Rgba? = strokes[0].color
         var opacity: Double? = strokes[0].opacity
+        /* the material a curve DRAWS with, not the one stored on it: two
+           curves that have both never been given one still agree, and the
+           panel should say so rather than showing nothing */
+        var material: String? = strokes[0].materialOf
+        var pattern: Int? = strokes[0].pattern
         var sum = 0.0
         for (st in strokes) {
             if (st.brush != brush) brush = null
             if (st.color != color) color = null
             if (st.opacity != opacity) opacity = null
+            if (st.materialOf != material) material = null
+            if (st.pattern != pattern) pattern = null
             sum += st.baseRadius
         }
-        return Style(brush, color, opacity, sum / strokes.size)
+        return Style(brush, color, opacity, sum / strokes.size, material, pattern)
     }
 }
