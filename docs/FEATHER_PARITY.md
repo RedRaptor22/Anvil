@@ -174,6 +174,32 @@ multi-selected** ("You can select multiple groups by tapping another group
 while one is already selected"), and selected groups can be **rearranged and
 merged**, not only deleted and duplicated.
 
+## Ported from the liquify page
+
+FACT: "Comparing before and after changes is crucial to understanding the
+overall impact. Always compare before applying liquify." The page gives
+liquify its own bottom menu, and this build had only the Apply half of it:
+
+- **Undo All** — "revert to the state before liquify", now one undoable step
+  back to where the session started.
+- **Compare** — "Tap and hold 'Compare'… to view the curves before liquify".
+  Held, not tapped: the current shape is put aside on the way down and
+  restored on the way up, so a look costs nothing and changes nothing.
+- Apply ends the SESSION rather than committing anything, because every drag
+  is already in the history — "to undo step by step, use the history panel".
+
+The three liquify modes were already right: Push "distorts naturally, as if
+pushing or pulling with a finger", Pinch "sharply and precisely", Comb
+"gently smooths and aligns… Ideal for straightening wavy curves".
+
+## Known and not done
+
+- **The eyedropper only samples the active group.** "The curve you want to
+  sample from must be in the currently Active Group." This build samples any
+  visible curve. Left alone deliberately: it is a restriction, not a feature,
+  and nobody has asked for it — but it is a divergence and belongs on this
+  list.
+
 ## Still unread
 
 `/docs/interfaceandgestures/applepencil` and `squeezemenu`,

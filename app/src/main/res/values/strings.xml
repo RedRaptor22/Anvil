@@ -85,6 +85,10 @@
     <string name="colour_guide">GUIDE COLOUR</string>
     <string name="isolation_on">Isolated %1$s</string>
     <string name="isolation_off">Isolation off</string>
+    <string name="lq_undo_all">Undo all — back to before liquify</string>
+    <string name="lq_compare">Hold to compare with the before</string>
+    <string name="lq_apply">Apply</string>
+    <string name="lq_reverted">Back to before liquify</string>
     <string name="group_hidden_draw">That group is hidden — show it to draw in it</string>
 
     <!-- #stagePanel -->

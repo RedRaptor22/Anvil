@@ -4,6 +4,7 @@ import android.app.Activity
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
@@ -139,6 +140,10 @@ class Chrome(private val act: Activity, val t: Tokens) {
 
     /** Look at this group alone, or stop doing so. */
     var onGroupIsolate: (id: Int) -> Unit = {}
+
+    /** Liquify's other two verdicts: throw it all away, or peek at the before. */
+    var onLiquifyUndoAll: () -> Unit = {}
+    var onLiquifyCompare: (down: Boolean) -> Unit = {}
 
     /** One of the three mirror planes was tapped. */
     var onMirrorAxis: (axis: String) -> Unit = {}
@@ -1429,6 +1434,41 @@ class Chrome(private val act: Activity, val t: Tokens) {
             set = { v ->
                 lqStrengthV = v.coerceIn(1.0, 100.0)
                 onLiquifyValue("strength", lqStrengthV); refresh()
+            },
+        )
+        /*
+         * UNDO ALL, COMPARE, APPLY — the bottom context menu Feather gives
+         * liquify, and the reason it gives it one.
+         *
+         * FACT: "Comparing before and after changes is crucial to
+         * understanding the overall impact. Always compare before applying
+         * liquify." — "Undo All… to revert to the state before liquify",
+         * "Tap and HOLD 'Compare'… to view the curves before liquify", and a
+         * checkbox to apply. Distorting a drawing is the one edit where you
+         * cannot see what you have done while you are doing it, so being able
+         * to flick back to the before is the tool, not a convenience.
+         */
+        liquifyPanel.addView(divider(act, t))
+        liquifyPanel.addView(
+            IcoButton(act, t).icon("reset").apply {
+                setOnClickListener { onLiquifyUndoAll() }
+                Tip.attach(this, tipCard, act.getString(R.string.lq_undo_all))
+            },
+        )
+        liquifyPanel.addView(
+            IcoButton(act, t).icon("eye").apply {
+                Tip.attach(this, tipCard, act.getString(R.string.lq_compare))
+                /* held, not tapped: the before is a thing you look at with
+                   your thumb down and leave the moment you lift it */
+                setOnTouchListener { v, e ->
+                    when (e.actionMasked) {
+                        MotionEvent.ACTION_DOWN -> { on = true; onLiquifyCompare(true) }
+                        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                            on = false; onLiquifyCompare(false); v.performClick()
+                        }
+                    }
+                    true
+                }
             },
         )
         for ((label, value) in listOf(

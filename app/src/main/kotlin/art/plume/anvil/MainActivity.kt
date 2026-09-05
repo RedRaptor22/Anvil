@@ -145,6 +145,19 @@ class MainActivity : Activity(), Gestures.Listener {
     private var joyMode = Transform.Mode.MOVE
     private var joyAxis: Int? = null
 
+    /**
+     * THE STATE LIQUIFY STARTED FROM, and what it looked like a moment ago.
+     *
+     * FACT: liquify has its own bottom menu — "Undo All… to revert to the
+     * state before liquify", "Tap and hold 'Compare'… to view the curves
+     * before liquify", and a checkbox to apply. All three need the before to
+     * still exist, so it is taken once when the tool picks up a selection and
+     * held until the tool is put down.
+     */
+    private var liquifyBase: List<List<Vec3>>? = null
+    private var liquifyTargets: List<Stroke>? = null
+    private var liquifyPeek: List<List<Vec3>>? = null
+
     private val liquifyCfg = Liquify.Settings()
 
     /**
@@ -537,6 +550,8 @@ class MainActivity : Activity(), Gestures.Listener {
         chrome.onGroupVisible = { id, visible -> setGroupVisible(id, visible) }
         chrome.onGroupOpacity = { id, v -> setGroupOpacity(id, v) }
         chrome.onGroupIsolate = { id -> isolateGroup(id) }
+        chrome.onLiquifyUndoAll = { undoAllLiquify() }
+        chrome.onLiquifyCompare = { down -> peekBeforeLiquify(down) }
         chrome.onMirrorAxis = { axis -> toggleMirrorAxis(axis) }
         chrome.onMirrorOff = { toggleMirror() }
         chrome.onGroupNew = { newGroup() }
@@ -651,7 +666,7 @@ class MainActivity : Activity(), Gestures.Listener {
          * held back waiting to be committed, and a button that pretended
          * otherwise would suggest the work could still be cancelled.
          */
-        chrome.onLiquifyApply = { setTool(Tool.DRAW); toast(getString(R.string.liquify_done)) }
+        chrome.onLiquifyApply = { applyLiquify(); setTool(Tool.DRAW) }
         chrome.onLiquifyClose = { setTool(Tool.DRAW) }
         chrome.onStageValue = { which, v -> stageValue(which, v) }
         chrome.onPrimKind = { k -> primKind = k; previewPrimitive() }
@@ -867,6 +882,9 @@ class MainActivity : Activity(), Gestures.Listener {
     private fun setTool(t: Tool) {
         /* leaving a staging tool throws away what it was building */
         if (tool != t && (tool == Tool.LOFT || tool == Tool.PRIM)) cancelStaging()
+        /* and leaving liquify keeps what it did: the drags are already in the
+           history, so all that ends is the session you could compare against */
+        if (tool != t && tool == Tool.LIQUIFY) endLiquifySession()
 
         when (t) {
             Tool.BEND -> if (guides.active == null) {
@@ -1592,6 +1610,62 @@ class MainActivity : Activity(), Gestures.Listener {
         )
     }
 
+    // ---- liquify's own before and after -------------------------------------
+
+    /**
+     * Hold to see the curves as they were; let go to come back.
+     *
+     * The current shape is put aside on the way down and restored on the way
+     * up, so a comparison costs nothing and changes nothing — it is not an
+     * undo, and it must not turn into one if the pen slips.
+     */
+    private fun peekBeforeLiquify(down: Boolean) {
+        val targets = liquifyTargets ?: return
+        if (down) {
+            if (liquifyPeek != null) return
+            val base = liquifyBase ?: return
+            liquifyPeek = Editing.snapshot(targets)
+            restorePoints(targets, base)
+        } else {
+            val now = liquifyPeek ?: return
+            liquifyPeek = null
+            restorePoints(targets, now)
+        }
+    }
+
+    /** Back to the state liquify started from, as one undoable step. */
+    private fun undoAllLiquify() {
+        val targets = liquifyTargets ?: return
+        val base = liquifyBase ?: return
+        val now = Editing.snapshot(targets)
+        history.run(
+            Step(
+                "Undo liquify", cost = targets.sumOf { it.pts.size },
+                onRedo = { restorePoints(targets, base) },
+                onUndo = { restorePoints(targets, now) },
+            ),
+        )
+        announce(getString(R.string.lq_reverted))
+    }
+
+    /**
+     * Keep it. Every drag is already in the history — "to undo step by step,
+     * use the history panel" — so applying is about ending the SESSION: the
+     * before is released, and the next drag starts a new one to compare
+     * against.
+     */
+    private fun applyLiquify() {
+        endLiquifySession()
+        toast(getString(R.string.liquify_done))
+    }
+
+    private fun endLiquifySession() {
+        liquifyPeek?.let { now -> liquifyTargets?.let { restorePoints(it, now) } }
+        liquifyPeek = null
+        liquifyBase = null
+        liquifyTargets = null
+    }
+
     private fun assignSelectionTo(id: Int) {
         val sel = sketch.selection
         if (sel.isEmpty()) { toast(getString(R.string.nothing_selected)); return }
@@ -1827,6 +1901,11 @@ class MainActivity : Activity(), Gestures.Listener {
                     else maxOf(24.0, camera.worldToPx(sizeMM * MM * 0.5) * 4)
                 dragTargets = sel
                 dragPositions = Editing.snapshot(sel)
+                /* the first touch of a session is what fixes the "before" */
+                if (liquifyBase == null) {
+                    liquifyTargets = sel
+                    liquifyBase = Editing.snapshot(sel)
+                }
             }
 
             Tool.SELECT -> {
