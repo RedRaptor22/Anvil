@@ -110,10 +110,44 @@ only in rendering mode."
   for a circle, and "This also includes the ability to Bend 3D Guides."
 - **Stable Strokes**: a slider, with a preview you can draw in.
 
+## Confirmed from the navigation and selection pages
+
+Read after the first pass, and two of them landed as changes:
+
+- **A selection is GREEN.** "Selected curves are highlighted in green" and
+  "Selected resources are highlighted in green". Curves were tinted blue here
+  and guides green, so a curve and the guide under it answered the same
+  gesture in two different colours. Both green now.
+- **Three-finger swipe is the lens, and the guess about its direction was
+  right.** "swipe up to increase the field of view (FOV) or swipe down to
+  reduce it. The FOV can be adjusted from 10mm to 500mm." Naming the range in
+  millimetres is what settles which way "increase" runs — the number is a
+  focal length, so up is a longer lens, which is what this build does. The
+  limits already match exactly.
+- Navigation otherwise matches: one finger rotates, one-finger double tap
+  snaps to "Left, Right, Front, Back, Top and Bottom", pinch zooms, two
+  fingers pan, three-finger double tap swaps perspective and orthographic.
+- **Isolate by 3D Guide** is documented as a select AND erase behaviour:
+  "Cover the curves you don't want to select with a 3D Guide. The Select tool
+  will not select curves within the guide… It also works for erasing."
+- **Select is a toggle to Deselect**: "Tap Select in the tool menu again to
+  switch to Deselect, then drag with your pen to deselect", and "Tap Draw or
+  Erase to escape" cancels a selection outright.
+
+Two navigation details are documented and not implemented here:
+
+- **The orbit point is a thing you can see and pin.** "Tap and hold on a curve
+  or grid to pin the orbit point. Tap and hold in empty space to unpin… If the
+  orbit point is not pinned, tap and hold in empty space to reset the view",
+  with options to "Pin orbit point" and "Show orbit point". This build pins on
+  a hold and resets on empty space, but never draws the point.
+- **The orbit point is the depth-of-field focus**: "The orbit point also
+  functions as a focus point for Depth of Field (DOF)."
+
 ## Still unread
 
-`/docs/interfaceandgestures/*` (navigation, the Apple Pencil squeeze menu,
-keyboard shortcuts), `/docs/stagepanel/*`, `/docs/selection/*`,
-`/docs/liquify/*`, `/docs/extensions/*` (clipboard, AR, sequence, export,
-publish) and `/docs/home/*`. The pages are reachable; nobody has been through
-them line by line yet.
+`/docs/interfaceandgestures/applepencil` and `squeezemenu`,
+`/docs/interfaceandgestures/keyboardshortcuts`, `/docs/stagepanel/*`,
+`/docs/selection/duplicate`, `/docs/liquify/*`, `/docs/extensions/*`
+(clipboard, AR, sequence, export, publish) and `/docs/home/*`. The pages are
+reachable; nobody has been through them line by line yet.

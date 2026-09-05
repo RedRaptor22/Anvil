@@ -1741,7 +1741,12 @@ class SketchRenderer : GLSurfaceView.Renderer {
                 rgb = vCol.rgb * (0.55 + 1.15*rim);
               }
 
-              rgb = mix(rgb, vec3(0.36, 0.62, 1.0), uSelect * 0.55);
+              /* FACT: "Selected curves are highlighted in green", and
+                 selected resources are too — so a curve and the guide it sits
+                 on answer a selection in the same colour, which is the green
+                 the guide pass has always used. It was blue here, which read
+                 as a different kind of state. */
+              rgb = mix(rgb, vec3(0.36, 0.85, 0.55), uSelect * 0.55);
               float a = vCol.a * uFade;
 
               if(uGrit > 0.5){

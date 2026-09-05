@@ -3493,9 +3493,11 @@ class MainActivity : Activity(), Gestures.Listener {
         /* THREE FINGERS SET THE LENS, and nothing else: a focal change that
            also orbited would be two things at once, and it is a vertical
            gesture on purpose.
-           GUESS: up = a longer lens. The docs say "up = increase" without
-           saying increase what, and longer focal is the reading that matches
-           "increase FOV value". */
+           FACT, and the guess it replaces was right: "swipe up to increase
+           the field of view (FOV) or swipe down to reduce it. The FOV can be
+           adjusted from 10mm to 500mm." Naming the range in MILLIMETRES is
+           what settles it — the number being increased is the focal length,
+           so up is a longer lens. Tune's limits are already that 10 to 500. */
         if (navFingers >= 3) {
             lastGestureOrbited = false
             camera.focal = clamp(
