@@ -537,7 +537,7 @@ class MainActivity : Activity(), Gestures.Listener {
         chrome.onGroupVisible = { id, visible -> setGroupVisible(id, visible) }
         chrome.onGroupOpacity = { id, v -> setGroupOpacity(id, v) }
         chrome.onMirrorAxis = { axis -> toggleMirrorAxis(axis) }
-        chrome.onMirrorOff = { clearMirror(); chrome.setMirrorBar(false) }
+        chrome.onMirrorOff = { toggleMirror() }
         chrome.onGroupNew = { newGroup() }
         chrome.onGroupDuplicate = { duplicateActiveGroup() }
         chrome.onGroupDelete = { deleteActiveGroup() }
@@ -825,12 +825,14 @@ class MainActivity : Activity(), Gestures.Listener {
          * themselves are what you choose between.
          */
         Action.MIRROR -> {
-            if (chrome.mirrorBarOpen()) {
-                clearMirror()
-                chrome.setMirrorBar(false)
-            } else {
-                chrome.setMirrorBar(true)
-            }
+            /*
+             * The icon reveals the three planes and switches them off again,
+             * and the strip stays up either way: it is how you choose an axis,
+             * and hiding it the moment the mirror goes off would mean opening
+             * it again to turn one back on. The axes themselves are
+             * remembered, so the way back on really is one tap.
+             */
+            if (chrome.mirrorBarOpen()) toggleMirror() else chrome.setMirrorBar(true)
             Unit
         }
         Action.STAGE -> chrome.toggleStage()
@@ -2604,12 +2606,37 @@ class MainActivity : Activity(), Gestures.Listener {
         scheduleAutosave()
     }
 
-    /** Every plane off, which is what tapping the Mirror icon itself does. */
-    private fun clearMirror() {
-        if (mirrorAxes.isEmpty()) return
-        mirrorAxes.clear()
+    /**
+     * The planes you last used, kept while the mirror is switched off.
+     *
+     * FACT: "The previously used axes are saved, so you can quickly reactivate
+     * the mirror with a single tap, making it very convenient." Clearing them
+     * on the way out — which is what this did — turned a one-tap reactivation
+     * into picking your axes again every time, and anyone working
+     * symmetrically switches the mirror off and on constantly to check the
+     * half they are drawing.
+     */
+    private val mirrorRemembered = LinkedHashSet<String>()
+
+    /** Tapping the Mirror icon: off if any plane is live, else back on. */
+    private fun toggleMirror() {
+        if (mirrorAxes.isNotEmpty()) {
+            mirrorRemembered.clear()
+            mirrorRemembered.addAll(mirrorAxes)
+            mirrorAxes.clear()
+            announce(getString(R.string.mirror_off))
+        } else {
+            mirrorAxes.addAll(mirrorRemembered)
+            if (mirrorAxes.isNotEmpty()) {
+                announce(
+                    getString(
+                        R.string.mirror_on,
+                        Mirror.AXES.filter { it in mirrorAxes }.joinToString("").uppercase(),
+                    ),
+                )
+            }
+        }
         pushMirror()
-        announce(getString(R.string.mirror_off))
         scheduleAutosave()
     }
 

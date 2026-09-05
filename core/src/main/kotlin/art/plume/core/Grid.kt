@@ -20,6 +20,13 @@ object Grid {
         val vertexCount: Int get() = positions.size / 3
     }
 
+    /** The colour of one global axis by name, for anything that names one. */
+    fun axisColor(axis: String): Rgba = when (axis) {
+        "x" -> AXIS_COLORS[0]
+        "y" -> AXIS_COLORS[1]
+        else -> AXIS_COLORS[2]
+    }
+
     /** FACT: red / green / blue for X / Y / Z. */
     private val AXIS_COLORS = arrayOf(
         Rgba(1.0, 0.302, 0.369),        // #ff4d5e

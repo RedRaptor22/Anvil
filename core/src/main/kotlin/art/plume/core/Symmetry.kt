@@ -38,6 +38,17 @@ object Symmetry {
         val fill: FloatArray,
         val edges: FloatArray,
         val axisLine: FloatArray,
+        /**
+         * The colour of each vertex above, three floats each.
+         *
+         * FACT: when a mirror axis is switched on, Feather shows "the global
+         * axis in the respective color" — red for X, green for Y, blue for Z.
+         * With three planes possible at once, one grey for all of them says
+         * how many are on and not WHICH, which is the only thing you need to
+         * read off it.
+         */
+        val fillColors: FloatArray = FloatArray(0),
+        val edgeColors: FloatArray = FloatArray(0),
     )
 
     /**
@@ -78,6 +89,8 @@ object Symmetry {
 
         var fill = FloatArray(0)
         var edges = FloatArray(0)
+        var fillCol = FloatArray(0)
+        var edgeCol = FloatArray(0)
         for (axis in Mirror.AXES) {
             if (axis !in axes) continue
             /*
@@ -108,6 +121,11 @@ object Symmetry {
             val d = corner(u0, v1)
             fill += a + b + c + a + c + d
             edges += a + b + b + c + c + d + d + a
+
+            val k = Grid.axisColor(axis)
+            val rgb = floatArrayOf(k.r.toFloat(), k.g.toFloat(), k.b.toFloat())
+            repeat(6) { fillCol += rgb }
+            repeat(8) { edgeCol += rgb }
         }
 
         val axisLine = if (radial > 1) {
@@ -115,7 +133,7 @@ object Symmetry {
         } else {
             FloatArray(0)
         }
-        return Fold(fill, edges, axisLine)
+        return Fold(fill, edges, axisLine, fillCol, edgeCol)
     }
 }
 

@@ -1,67 +1,119 @@
-# Feather parity — what is confirmed, what is missing, what is guessed
+# Feather parity — measured against the real documentation
 
-This project's premise is a faithful port, so it is worth writing down what
-"faithful" is currently measured against, and how well.
+The premise of this project is a faithful port, so it is worth writing down
+what "faithful" is measured against.
 
-## How this was gathered, and the size of the hole in it
+Everything below is quoted from `support.feather.art/docs`, read directly.
+An earlier version of this file was assembled from search snippets because
+the docs were blocked by this environment's network policy; that policy has
+since been widened, and reading the real pages corrected two things this port
+had already shipped. Snippets are not a substitute for the page.
 
-Feather's own documentation (`support.feather.art`), the SIGGRAPH '23 paper
-(`dl.acm.org`, "Feather: 3D sketchbook light as a feather", Kim, Hong and
-Yang) and a PDF mirror of it are **all blocked by this environment's network
-egress policy**. Everything below came from web-search snippets that quote
-those pages, which is a real limitation: snippets carry a documented sentence
-but not the page around it, so the absence of a feature here is weak evidence
-that Feather lacks it.
+## The two corrections
 
-Anything sourced only from a snippet is marked FACT with its wording; anything
-reasoned from behaviour is marked INFERENCE, and the code uses the same
-convention.
+**The mirror remembers its axes.** "The previously used axes are saved, so you
+can quickly reactivate the mirror with a single tap, making it very
+convenient." Tapping the icon off used to clear them here, which turns a
+one-tap reactivation into choosing your axes again — and anyone working
+symmetrically toggles the mirror constantly to check the half they are
+drawing. Fixed.
 
-## Confirmed, and implemented
+**A live plane is drawn in its own colour.** "When the mirror is activated, a
+brief interface will appear, showing the global axis in the respective color."
+The fold was one grey for every plane, which says how many are on and not
+WHICH. Fixed: red X, green Y, blue Z, the same colours the chips use.
 
-| Feature | Feather's documented behaviour | Anvil |
-|---|---|---|
-| Draw 3D Guide | a stroke becomes a sketching surface; strokes from other views project onto it | yes |
-| Bend 3D Guide | "the 3D Guide will bend along the drawn line", "bending starts from the orange line", repeatable | yes — including the closed case ("the side of a pot, then bending it into a cylinder") |
-| Loft | connects several curves; a slider adjusts how much it bends, "up for smoother curves and down for sharper" | yes, with the tension slider |
-| Mirror | three axes below the icon, "red for the X-axis, green for the Y-axis, and blue for the Z-axis"; "you can activate multiple axes at the same time"; mirrors about the global axes | yes, and reflections stay linked to what they reflect |
-| Joystick | "a central crosshair and a translation stick in the corner surrounded by a rotation wheel and scaling handles" | yes |
-| Liquify, duplicate, delete | listed under selection/transform | yes |
-| Finger-pen | "sketch, paint, and edit using just your fingers" | yes |
-| Materials and render mode | "select the 'Shade' material… turn on 'Render Mode'" | partly — see below |
+## A deliberate divergence, and it is the one the device report asked for
 
-## Gaps worth ranking
+FACT, from the 3D Joystick page: "In perfect views like the front view, side
+view, or top view, you can only use two of the three cones on the 3D Joystick.
+The shape of the arcs also changes based on the view. **This is a natural
+occurrence due to the view direction, so do not be confused.**"
 
-Ordered by how much of the app they touch, not by how much work they are.
+So the greyed-out axis is Feather's documented behaviour, and this build now
+departs from it: an axis end-on to the camera takes the vertical drag the
+depth strip uses instead of being disabled. That was a device report — "the
+axis on the joystick panel greys out certain axes and doesn't let you make
+direct changes from that axis" — and the fix stands because it was asked for,
+not because Feather does it.
 
-1. **Material is chosen in the colour panel, per curve.** FACT, from Feather's
-   own post: "Tap the color panel and select the 'Shade' material. Then, turn
-   on 'Render Mode' in the group panel." Anvil has shading as an ENVIRONMENT
-   switch that applies to everything, so a sketch cannot mix a shaded form
-   with flat line work — which is the normal way anyone uses it. This is the
-   largest structural difference found.
-2. **Render mode lives in the group panel.** Anvil puts it in the stage panel.
-   Small on its own, but it suggests Feather scopes render state to groups
-   rather than to the document.
-3. **Bake.** Named in Feather's own copy — "Bend it, paint it, and bake it" —
-   with no snippet explaining what it does. Most likely committing a guide's
-   painted strokes into geometry. Unknown, and worth finding out before
-   guessing at it.
-4. **Draw Shape assistance.** Feather documents an assistance page for it.
-   Anvil has hold-to-shape on the pen path, which may or may not be the same
-   feature.
-5. **The fold indicator is one colour for all three mirror planes.** Feather
-   colours the axes red/green/blue and shows "the global axis in the
-   respective color" when a plane is switched on. Anvil's chips are coloured;
-   the plane drawn in the scene is not.
-6. **The selection overlay.** "an overlay interface that appears when selecting
-   curves or objects, and a bottom context menu" — Anvil has a selection bar
-   and a context bar, and whether they carry the same actions is unchecked.
+Reverting to strict parity is one line: `usable` in `pushTransform` goes back
+to asking `Transform.axisOnScreen(...) != null` per axis.
 
-## What would close the hole
+## The largest gap: there are TWO joysticks
 
-One person with the app in front of them, or an unblocked route to
-`support.feather.art`, would settle points 3, 4 and 6 in minutes. Until then
-they stay marked unknown rather than being implemented from a guess — this
-project has already spent three rounds of device reports on faults that came
-from confidently misreading the reference.
+Feather documents a **2D Joystick** and a **3D Joystick** as separate tools.
+This build has one that mixes them.
+
+**2D Joystick** — "moves, rotates, and scales objects based on the view
+direction. It's very intuitive because it transforms as it appears."
+
+- centre circle: "Tap and hold… to turn it black. Drag to move… The stick can
+  move outside the joystick layout. When you release, the stick returns to its
+  original position."
+- scale handles "above and to the left of the stick… height scaling, width
+  scaling, or free scaling. The scaling reference point is the center of the
+  screen, marked with a crosshair."
+- rotate handle "on the right of the stick".
+- **a LOCK**, which this build has nothing like: locked, the stick moves "only
+  up, down, left, and right", scaling becomes a single handle and uniform, and
+  rotation snaps "in 15-degree increments… useful for rotating to specific
+  angles like 90 or 180 degrees".
+
+**3D Joystick** — "moves or rotates objects based on the global XYZ axes".
+
+- "Tap and drag the red, green, or blue **cone**… to move along the respective
+  axis."
+- "Tap and spin the red, green, or blue **arc**… to rotate along the respective
+  axis. The rotation center point is the invisible center of the selected
+  object."
+- "Tap and drag the **center sphere**… for free rotation… like a trackball."
+
+Anvil's pad has three arcs that do move/rotate/scale depending on a mode
+switch, plus a depth strip. Closest to the 3D joystick, with no 2D joystick
+and no lock at all.
+
+## Materials are per curve, chosen in the Colour Panel
+
+"All curves drawn with Feather are 3D curves that respond to light." Four
+materials, and this build has none of them as a per-curve property — shading
+is one environment switch over everything, so a sketch cannot mix a shaded
+form with flat line work.
+
+| Material | Documented behaviour |
+|---|---|
+| Shadeless | "does not respond to lighting or cast shadows. Patterns can be applied." |
+| Shaded | "Responds to lighting and casts shadows. Patterns can be applied." |
+| Glow | "Responds to the glow area… Does not respond to lighting, does not cast shadows, and patterns cannot be applied. You can adjust its intensity." |
+| Cutout | "Responds to the background, making curves appear as the background color or image." |
+
+**Patterns**, which are entirely absent here: "procedurally generated
+textures", five of them as of 1.0 — "Dot, Line, Cross, Terrazzo, and Stippled
+Dot" — applied from the Colour Panel to Shaded or Shadeless curves only, with
+sliders for "intensity, angle, and contrast".
+
+Render Mode is in the **Stage Panel**: "Materials are displayed accurately
+only in rendering mode."
+
+## Confirmed as already matching
+
+- **Draw 3D Guide**: "generated perpendicular to your viewing angle and varies
+  based on your Field of View (FOV)"; "3D Guides can only be drawn with a pen.
+  If you don't have a stylus, enable Finger-Pen."
+- **Bend**: "Bend an existing 3D Guide to create more organic shapes,
+  **revolve**, or make a **tube**… the 3D Guide will bend along the drawn
+  line. The bending starts from the orange line… You can repeat the Bend 3D
+  Guide process multiple times." Revolve and tube are both closed paths, which
+  is why the seam weld matters.
+- **Draw Shape**: straight lines and circles corrected from the drawn curve,
+  hold to adjust length and endpoint, hold to adjust curvature, press-hold-drag
+  for a circle, and "This also includes the ability to Bend 3D Guides."
+- **Stable Strokes**: a slider, with a preview you can draw in.
+
+## Still unread
+
+`/docs/interfaceandgestures/*` (navigation, the Apple Pencil squeeze menu,
+keyboard shortcuts), `/docs/stagepanel/*`, `/docs/selection/*`,
+`/docs/liquify/*`, `/docs/extensions/*` (clipboard, AR, sequence, export,
+publish) and `/docs/home/*`. The pages are reachable; nobody has been through
+them line by line yet.

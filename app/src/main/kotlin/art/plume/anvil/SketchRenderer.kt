@@ -902,12 +902,22 @@ class SketchRenderer : GLSurfaceView.Renderer {
         val lum = Grid.luminance(bg)
         val c = if (lum > 0.5) 0f else 1f
 
+        /*
+         * EACH PLANE IN ITS OWN COLOUR. FACT: switching a mirror axis on shows
+         * "the global axis in the respective color". With three planes
+         * possible at once, one grey for all of them tells you how many are on
+         * and not which — and which is the only thing worth reading off it.
+         * The fill stays nearly transparent either way: a plane you can see
+         * THROUGH is the point of it.
+         */
         if (f.fill.isNotEmpty()) {
-            val b = foldFill ?: uploadFlat(f.fill, c, 0.035f).also { foldFill = it }
+            val b = foldFill
+                ?: uploadFlat(f.fill, c, 0.05f, f.fillColors).also { foldFill = it }
             drawFlat(m, b, GLES30.GL_TRIANGLES)
         }
         if (f.edges.isNotEmpty()) {
-            val b = foldEdge ?: uploadFlat(f.edges, c, 0.20f).also { foldEdge = it }
+            val b = foldEdge
+                ?: uploadFlat(f.edges, c, 0.30f, f.edgeColors).also { foldEdge = it }
             drawFlat(m, b, GLES30.GL_LINES)
         }
         if (f.axisLine.isNotEmpty()) {
@@ -916,11 +926,24 @@ class SketchRenderer : GLSurfaceView.Renderer {
         }
     }
 
-    private fun uploadFlat(pos: FloatArray, grey: Float, alpha: Float): LineBuffers {
+    /** [rgb] is three floats per vertex, or empty to paint the lot [grey]. */
+    private fun uploadFlat(
+        pos: FloatArray,
+        grey: Float,
+        alpha: Float,
+        rgb: FloatArray = FloatArray(0),
+    ): LineBuffers {
         val n = pos.size / 3
         val col = FloatArray(n * 4)
+        val tinted = rgb.size >= n * 3
         for (i in 0 until n) {
-            col[i * 4] = grey; col[i * 4 + 1] = grey; col[i * 4 + 2] = grey
+            if (tinted) {
+                col[i * 4] = rgb[i * 3]
+                col[i * 4 + 1] = rgb[i * 3 + 1]
+                col[i * 4 + 2] = rgb[i * 3 + 2]
+            } else {
+                col[i * 4] = grey; col[i * 4 + 1] = grey; col[i * 4 + 2] = grey
+            }
             col[i * 4 + 3] = alpha
         }
         val ids = IntArray(2)
