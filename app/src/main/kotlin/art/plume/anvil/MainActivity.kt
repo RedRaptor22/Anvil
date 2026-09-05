@@ -41,6 +41,10 @@ import art.plume.core.GuideTransform
 import art.plume.core.Guides
 import art.plume.core.History
 import art.plume.core.Import
+import art.plume.core.Json
+import art.plume.core.JsonArray
+import art.plume.core.JsonObject
+import art.plume.core.Library
 import art.plume.core.Mat4
 import art.plume.core.Material
 import art.plume.core.Pattern
@@ -55,6 +59,7 @@ import art.plume.core.Rgba
 import art.plume.core.Mirror
 import art.plume.core.Selection
 import art.plume.core.Shapes
+import art.plume.core.Simplify
 import art.plume.core.Sketch
 import art.plume.core.Stabilizer
 import art.plume.core.Step
@@ -395,6 +400,10 @@ class MainActivity : Activity(), Gestures.Listener {
          * restored a drawing has plainly been here before, whatever the flag
          * says.
          */
+        /* the folders exist whether or not the shelf is shown: a first run
+           that goes straight to the walkthrough still has a library, and the
+           Home button will want it a minute later */
+        readLibrary()
         val firstRun = !getPreferences(MODE_PRIVATE).getBoolean(PREF_WALKED, false) &&
             sketch.strokes.isEmpty()
         if (firstRun) {
@@ -413,9 +422,8 @@ class MainActivity : Activity(), Gestures.Listener {
              * shelf is skipped entirely when there is nothing to choose
              * between.
              */
-            val works = listWorks()
-            if (works.isNotEmpty()) {
-                chrome.setWorks(works, currentWorkId())
+            if (listWorks().isNotEmpty()) {
+                pushHome()
                 chrome.setGallery(true)
             }
         }
@@ -529,7 +537,36 @@ class MainActivity : Activity(), Gestures.Listener {
         }
         chrome.onPalettes = { groups -> writePalettes(groups) }
         chrome.onOpenWork = { id -> openWork(id) }
-        chrome.onDeleteWork = { id -> deleteWork(id) }
+        chrome.onHomeEnter = { id ->
+            homeFolder = id
+            /* stepping into a folder is the Folders view by definition, and
+               leaving the sidebar pointing at Recents while you are inside one
+               is the panel disagreeing with the screen */
+            homeView = Chrome.HOME_FOLDERS
+            pushHome()
+        }
+        chrome.onHomeView = { v ->
+            homeView = v
+            /* FACT: "2. Recents — shows notes sorted by most recently
+               modified. 3. Folders — displays folders and notes together."
+               Recents is a flat list of every note wherever it lives; Folders
+               is the tree. So switching to Recents leaves the folder you were
+               in, because a flat list is not inside anything. */
+            if (v == Chrome.HOME_RECENTS) homeFolder = null
+            pushHome()
+        }
+        chrome.onHomeSort = { i ->
+            homeSort = Library.Sort.entries.getOrElse(i) { Library.Sort.MODIFIED }
+            pushHome()
+        }
+        chrome.onHomeRefresh = { pushHome() }
+        chrome.onHomeNewFolder = { newFolder() }
+        chrome.onHomeRename = { ids -> renameLibrary(ids) }
+        chrome.onHomeDuplicate = { ids -> duplicateLibrary(ids) }
+        chrome.onHomeExport = { ids -> exportLibrary(ids) }
+        chrome.onHomeLighten = { ids -> lightenLibrary(ids) }
+        chrome.onHomeDelete = { ids -> deleteLibrary(ids) }
+        chrome.onHomeMove = { ids, into -> moveLibrary(ids, into) }
         chrome.onGroupPick = { id -> sketch.setActiveGroup(id); refreshGroups() }
         chrome.onGroupRename = { id, name ->
             sketch.groupById(id)?.let { g ->
@@ -3512,7 +3549,7 @@ class MainActivity : Activity(), Gestures.Listener {
     private fun openGallery() {
         writeAutosave()
         writeThumbnail(currentWorkId())
-        chrome.setWorks(listWorks(), currentWorkId())
+        pushHome()
         chrome.setGallery(true)
     }
 
@@ -3656,6 +3693,13 @@ class MainActivity : Activity(), Gestures.Listener {
                 if (text == null) toast("Nothing to export") else writeText(uri, text, "Exported glTF")
             }
             REQ_EXPORT_PNG -> exportPng(uri)
+            REQ_EXPORT_WORK -> {
+                val id = pendingExportWork
+                pendingExportWork = null
+                val text = id?.let { runCatching { workFile(it).readText() }.getOrNull() }
+                if (text == null) toast(getString(R.string.could_not_write))
+                else writeText(uri, text, "Exported")
+            }
             REQ_IMPORT -> importReference(uri)
         }
     }
@@ -3864,6 +3908,105 @@ class MainActivity : Activity(), Gestures.Listener {
         val thumb: java.io.File?,
     )
 
+    // ---- the library: folders, and which one a note is in -------------------
+
+    /**
+     * WHAT THE FILESYSTEM CANNOT SAY.
+     *
+     * FACT: Home is where "you can create notes, create folders, and manage
+     * them", and a folder is "a folder where you can store multiple notes."
+     *
+     * The notes themselves stay discovered from disk rather than indexed —
+     * that rule is worth keeping, because an index is a second copy of the
+     * truth and the one that goes stale. But a folder has no file of its own,
+     * and neither does the fact that a note is inside one, so exactly those
+     * two things are written down and nothing else. A note missing from this
+     * file is a note at the top level, which is the right answer for one that
+     * arrived from a backup.
+     */
+    private val folders = LinkedHashMap<String, Library.Item>()
+    private val noteFolder = HashMap<String, String>()
+    private val noteName = HashMap<String, String>()
+
+    /** Which folder the home screen is looking at, and how it is sorted. */
+    private var homeFolder: String? = null
+    private var homeSort = Library.Sort.MODIFIED
+
+    private fun libraryFile() = java.io.File(worksDir(), "library.json")
+
+    private fun readLibrary() {
+        folders.clear(); noteFolder.clear(); noteName.clear()
+        val text = runCatching { libraryFile().readText() }.getOrNull() ?: return
+        val root = runCatching { Json.parse(text).asObject() }.getOrNull() ?: return
+        root.arr("folders")?.items?.forEach { v ->
+            val o = v.asObject() ?: return@forEach
+            val id = o.str("id") ?: return@forEach
+            folders[id] = Library.Item(
+                id, o.str("name") ?: "Folder", Library.Kind.FOLDER,
+                o.str("parent"), o.num("created", 0.0).toLong(),
+            )
+        }
+        root.arr("notes")?.items?.forEach { v ->
+            val o = v.asObject() ?: return@forEach
+            val id = o.str("id") ?: return@forEach
+            o.str("folder")?.let { noteFolder[id] = it }
+            o.str("name")?.let { noteName[id] = it }
+        }
+    }
+
+    private fun writeLibrary() {
+        val root = JsonObject()
+        val fs = JsonArray()
+        for (f in folders.values) {
+            fs.add(
+                JsonObject().put("id", f.id).put("name", f.name)
+                    .also { o -> f.parent?.let { o.put("parent", it) } }
+                    .put("created", f.created.toDouble()),
+            )
+        }
+        root.put("folders", fs)
+        val ns = JsonArray()
+        for (id in (noteFolder.keys + noteName.keys)) {
+            val o = JsonObject().put("id", id)
+            noteFolder[id]?.let { o.put("folder", it) }
+            noteName[id]?.let { o.put("name", it) }
+            ns.add(o)
+        }
+        root.put("notes", ns)
+        val text = root.write()
+        io.execute { runCatching { libraryFile().writeText(text) } }
+    }
+
+    /** Every folder and every note, as the home screen wants them. */
+    private fun libraryItems(): List<Library.Item> {
+        val out = ArrayList<Library.Item>(folders.values)
+        /* a folder whose parent has been deleted comes back to the top rather
+           than becoming unreachable — a row nothing can show is a row nothing
+           can delete either */
+        val live = folders.keys
+        for (i in out.indices) {
+            val f = out[i]
+            if (f.parent != null && f.parent !in live) {
+                out[i] = Library.Item(f.id, f.name, Library.Kind.FOLDER, null, f.created)
+            }
+        }
+        for (w in listWorks()) {
+            val parent = noteFolder[w.id]?.takeIf { it in live }
+            out.add(
+                Library.Item(
+                    w.id, noteName[w.id] ?: w.title, Library.Kind.NOTE, parent,
+                    createdOf(w.id), w.modified, w.curves,
+                ),
+            )
+        }
+        return out
+    }
+
+    /** The moment in the id, which is what a work is named after. */
+    private fun createdOf(id: String): Long = runCatching {
+        java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).parse(id)!!.time
+    }.getOrDefault(0L)
+
     /**
      * Every work, newest first.
      *
@@ -3889,6 +4032,236 @@ class MainActivity : Activity(), Gestures.Listener {
             ?.sortedByDescending { it.modified }
             ?: emptyList()
 
+
+    // ---- home: what its buttons do ------------------------------------------
+
+    private var homeView = Chrome.HOME_RECENTS
+
+    /**
+     * Draw the home screen from the library.
+     *
+     * FACT: "2. Recents — shows notes sorted by most recently modified. 3.
+     * Folders — displays folders and notes together." Two views of the same
+     * shelf: one flat and one nested, which is the pair every file browser
+     * settles on because "where did I put it" and "what did I do last" are
+     * different questions.
+     */
+    private fun pushHome() {
+        val items = libraryItems()
+        val shown = when (homeView) {
+            Chrome.HOME_RECENTS -> items.filter { it.kind == Library.Kind.NOTE }
+            else -> Library.children(items, homeFolder)
+        }
+        val rows = Library.sorted(shown, homeSort).map { item ->
+            if (item.kind == Library.Kind.FOLDER) {
+                val inside = Library.children(items, item.id)
+                Chrome.HomeItem(
+                    item.id, item.name, folder = true, count = inside.size,
+                    subtitle = getString(R.string.home_notes, inside.size),
+                    thumbs = Library.cover(items, item.id)
+                        .mapNotNull { thumbFile(it.id).takeIf { f -> f.exists() }?.path },
+                )
+            } else {
+                Chrome.HomeItem(
+                    item.id, item.name, folder = false, count = item.curves,
+                    subtitle = getString(R.string.gallery_curves, item.curves),
+                    thumbs = listOfNotNull(thumbFile(item.id).takeIf { it.exists() }?.path),
+                )
+            }
+        }
+        chrome.setHome(
+            rows,
+            Library.path(items, homeFolder).map { it.id to it.name },
+            homeSort.ordinal,
+            currentWorkId(),
+            homeView,
+        )
+    }
+
+    /** FACT: "7. Add New Folder — adds a new folder." */
+    private fun newFolder() {
+        val id = "f" + System.currentTimeMillis().toString(36)
+        val name = Library.freeName(
+            folders.values.map { it.name }, getString(R.string.folder_new),
+        )
+        folders[id] = Library.Item(
+            id, name, Library.Kind.FOLDER, homeFolder, System.currentTimeMillis(),
+        )
+        writeLibrary()
+        /* FACT: "The Folders tab displays folders and notes together" — a
+           folder made while looking at Recents would be invisible the moment
+           it was made, so making one is also a move to where it is */
+        homeView = Chrome.HOME_FOLDERS
+        pushHome()
+        announce(name)
+    }
+
+    /**
+     * FACT: "Rename — select a note and tap the second icon with alphabet at
+     * the bottom to rename it", and the same for a folder.
+     *
+     * One at a time, because a rename is a name and two things cannot have
+     * the same one typed once.
+     */
+    private fun renameLibrary(ids: List<String>) {
+        val id = ids.firstOrNull() ?: return
+        val items = libraryItems()
+        val at = items.firstOrNull { it.id == id } ?: return
+        chrome.askText(getString(R.string.home_rename), at.name) { typed ->
+            val want = typed.trim().ifEmpty { return@askText }
+            val siblings = Library.children(items, at.parent)
+                .filter { it.id != id }.map { it.name }
+            val name = Library.freeName(siblings, want)
+            if (at.kind == Library.Kind.FOLDER) {
+                folders[id]?.let {
+                    folders[id] = Library.Item(it.id, name, it.kind, it.parent, it.created)
+                }
+            } else {
+                noteName[id] = name
+            }
+            writeLibrary()
+            pushHome()
+            announce(name)
+        }
+    }
+
+    /** FACT: "Duplicate — select a note and tap the third icon to duplicate it." */
+    private fun duplicateLibrary(ids: List<String>) {
+        val items = libraryItems()
+        var made = 0
+        for (id in ids) {
+            val at = items.firstOrNull { it.id == id } ?: continue
+            if (at.kind == Library.Kind.FOLDER) continue      // one thing at a time
+            val text = runCatching { workFile(id).readText() }.getOrNull() ?: continue
+            val fresh = newWorkId() + "-" + made
+            runCatching { workFile(fresh).writeText(text) }
+            runCatching {
+                if (thumbFile(id).exists()) thumbFile(id).copyTo(thumbFile(fresh), overwrite = true)
+            }
+            noteName[fresh] = Library.freeName(items.map { it.name }, at.name)
+            at.parent?.let { noteFolder[fresh] = it }
+            made++
+        }
+        writeLibrary()
+        pushHome()
+        toast(getString(R.string.home_duplicated, made))
+    }
+
+    /**
+     * FACT: "Export — select a note and tap the fourth icon to export it as a
+     * .feather file."
+     *
+     * The equivalent here is the sketch's own format, which is what this app's
+     * Save already writes — so exporting from home is opening the one you
+     * picked and saving it, rather than a second file format nobody can read
+     * back.
+     */
+    private fun exportLibrary(ids: List<String>) {
+        val id = ids.firstOrNull() ?: return
+        if (folders.containsKey(id)) { toast(getString(R.string.home_folder_open)); return }
+        pendingExportWork = id
+        startActivityForResult(
+            Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "application/json"
+                putExtra(Intent.EXTRA_TITLE, (noteName[id] ?: id) + ".plume.json")
+            },
+            REQ_EXPORT_WORK,
+        )
+    }
+
+    private var pendingExportWork: String? = null
+
+    /**
+     * FACT: "Lighten — a lightened note is automatically optimized and
+     * decimated to reduce file size, though it may differ slightly from the
+     * original."
+     *
+     * Done to the file rather than to the drawing on screen, because that is
+     * what the button means here — you are tidying the shelf, not editing.
+     * The note you have open is refused rather than rewritten under you.
+     */
+    private fun lightenLibrary(ids: List<String>) {
+        var saved = 0
+        for (id in ids) {
+            if (id == currentWorkId()) { toast(getString(R.string.work_is_open)); continue }
+            if (folders.containsKey(id)) continue
+            val text = runCatching { workFile(id).readText() }.getOrNull() ?: continue
+            val sk = Sketch()
+            val r = Document.restore(text, sk, GuideScene(), Camera().apply { resize(800, 800) })
+            if (!r.ok) continue
+            saved += Simplify.sketch(sk)
+            runCatching {
+                workFile(id).writeText(
+                    Document.toJsonText(sk, GuideScene(), Camera().apply { resize(800, 800) }),
+                )
+            }
+        }
+        pushHome()
+        toast(getString(R.string.home_lightened, saved))
+    }
+
+    /**
+     * FACT: "Drop it onto a folder to place the note inside."
+     *
+     * A folder refuses to go inside itself or inside anything it contains,
+     * which is the check that stops a file tree becoming a ring nothing can
+     * list and nothing can delete.
+     */
+    private fun moveLibrary(ids: List<String>, into: String?) {
+        val items = libraryItems()
+        var moved = 0
+        for (id in ids) {
+            if (folders.containsKey(id)) {
+                if (!Library.canMove(items, id, into)) continue
+                folders[id]?.let {
+                    folders[id] = Library.Item(it.id, it.name, it.kind, into, it.created)
+                    moved++
+                }
+            } else {
+                if (into == null) noteFolder.remove(id) else noteFolder[id] = into
+                moved++
+            }
+        }
+        if (moved == 0) { toast(getString(R.string.home_cannot_move)); return }
+        writeLibrary()
+        /* a move you cannot see happen is a move you do twice */
+        homeView = Chrome.HOME_FOLDERS
+        pushHome()
+        announce(getString(R.string.home_moved, moved))
+    }
+
+    /**
+     * FACT: "Delete — select a note and tap the rightmost icon to delete the
+     * note", and for a folder, "select a folder and tap the trash can icon".
+     *
+     * A folder takes what is inside it, which is what deleting a folder means
+     * everywhere — and is why the count is reported rather than the folder
+     * quietly taking twenty notes with it.
+     */
+    private fun deleteLibrary(ids: List<String>) {
+        val items = libraryItems()
+        val doomed = LinkedHashSet<String>()
+        for (id in ids) {
+            doomed.add(id)
+            if (folders.containsKey(id)) {
+                for (d in Library.descendants(items, id)) doomed.add(d.id)
+            }
+        }
+        if (currentWorkId() in doomed) {
+            toast(getString(R.string.work_is_open))
+            doomed.remove(currentWorkId())
+        }
+        for (id in doomed) {
+            if (folders.remove(id) != null) continue
+            workFile(id).delete()
+            thumbFile(id).delete()
+            noteFolder.remove(id); noteName.remove(id)
+        }
+        writeLibrary()
+        pushHome()
+        toast(getString(R.string.home_deleted, doomed.size))
+    }
     /** `20260902-134501` as something a person would say. */
     private fun readableDate(id: String): String = runCatching {
         val d = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).parse(id)
@@ -3918,6 +4291,12 @@ class MainActivity : Activity(), Gestures.Listener {
         writeThumbnail(currentWorkId())
 
         val target = id ?: newWorkId()
+        /* a new note lands in the folder you were looking at, which is what
+           "new" means on a shelf you are standing in front of */
+        if (id == null) {
+            homeFolder?.let { noteFolder[target] = it }
+            if (homeFolder != null) writeLibrary()
+        }
         getPreferences(MODE_PRIVATE).edit().putString(PREF_WORK, target).apply()
 
         sketch.clear()
@@ -3948,7 +4327,9 @@ class MainActivity : Activity(), Gestures.Listener {
         if (id == currentWorkId()) { toast(getString(R.string.work_is_open)); return }
         workFile(id).delete()
         thumbFile(id).delete()
-        chrome.setWorks(listWorks(), currentWorkId())
+        noteFolder.remove(id); noteName.remove(id)
+        writeLibrary()
+        pushHome()
         announce(getString(R.string.work_deleted))
     }
 
@@ -4297,6 +4678,7 @@ class MainActivity : Activity(), Gestures.Listener {
         const val REQ_EXPORT_MTL = 6
         const val REQ_EXPORT_PNG = 7
         const val REQ_IMPORT = 8
+        const val REQ_EXPORT_WORK = 9
 
         /** Whether the first-run walkthrough has been seen. */
         const val PREF_WALKED = "walked"

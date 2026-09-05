@@ -338,11 +338,42 @@ class Chrome(private val act: Activity, val t: Tokens) {
      * with one page in it is a sheet of paper.
      */
     private val gallery = LinearLayout(act)
-    private lateinit var galleryList: LinearLayout
+    private lateinit var homeGrid: GridLayout
+    private lateinit var homeSidebar: LinearLayout
+    private lateinit var homePath: LinearLayout
+    private lateinit var homeSortButton: TextButton
+    private lateinit var homeBottom: LinearLayout
+    private lateinit var homeCount: TextView
+    private lateinit var homeAdd: TextButton
+    private val homeViews = LinkedHashMap<Int, TextButton>()
+    private val askCard = LinearLayout(act)
+    private lateinit var askTitle: TextView
+    private lateinit var askField: EditText
+    private var askDone: ((String) -> Unit)? = null
+    private val homePicked = LinkedHashSet<String>()
+    private var homeItems: List<HomeItem> = emptyList()
+    private var homePath2: List<Pair<String, String>> = emptyList()
+    private var homeSort = 0
+    private var homeView = HOME_RECENTS
+    private var homeCurrent: String? = null
 
     /** Open a work, or start a fresh one when the id is null. */
     var onOpenWork: (String?) -> Unit = {}
-    var onDeleteWork: (String) -> Unit = {}
+
+    /** Home's own buttons. Ids are folder ids, or note ids for the actions. */
+    var onHomeEnter: (String?) -> Unit = {}
+    var onHomeView: (Int) -> Unit = {}
+    var onHomeSort: (Int) -> Unit = {}
+    var onHomeRefresh: () -> Unit = {}
+    var onHomeNewFolder: () -> Unit = {}
+    var onHomeRename: (List<String>) -> Unit = {}
+    var onHomeDuplicate: (List<String>) -> Unit = {}
+    var onHomeExport: (List<String>) -> Unit = {}
+    var onHomeLighten: (List<String>) -> Unit = {}
+    var onHomeDelete: (List<String>) -> Unit = {}
+
+    /** Dropped onto a folder, or onto a crumb to come back out. */
+    var onHomeMove: (ids: List<String>, into: String?) -> Unit = { _, _ -> }
 
     private val toastCard = ToastCard(act, t)
 
@@ -596,6 +627,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
         buildSysMenu()
         buildMirrorBar()
         buildQuickMenu()
+        buildAskCard()
         buildGallery()
         place()
         built = true
@@ -3447,6 +3479,9 @@ class Chrome(private val act: Activity, val t: Tokens) {
                 height = ViewGroup.LayoutParams.MATCH_PARENT,
             ),
         )
+        /* over the gallery, because renaming is something you do to what is
+           on it */
+        root.addView(askCard, lp(Gravity.CENTER))
         root.addView(toastCard, lp(Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL, bottom = t.px(R.dimen.toastBottom)))
     }
 
@@ -4076,164 +4111,660 @@ class Chrome(private val act: Activity, val t: Tokens) {
         return userPalettes[name] ?: BUILT_IN_PALETTES[name]?.toList()
     }
 
+    // ======================================================================
+    // home — Feather's Home screen
+    // ======================================================================
+
+    /**
+     * One tile on the home screen: a folder or a note.
+     *
+     * [thumbs] is one picture for a note and FACT: "thumbnails of the four
+     * most recently modified notes" for a folder. [count] is the curve count
+     * on a note and how many things are inside on a folder.
+     */
+    class HomeItem(
+        val id: String,
+        val name: String,
+        val folder: Boolean,
+        val count: Int,
+        val subtitle: String,
+        val thumbs: List<String> = emptyList(),
+    )
+
+    /**
+     * HOME, LAID OUT THE WAY FEATHER LAYS IT OUT.
+     *
+     * FACT, item by item: "1. Refresh… 2. Recents — shows notes sorted by most
+     * recently modified. 3. Folders — displays folders and notes together…
+     * 5. Hide Sidebar… 6. Current Path — displays the current folder path.
+     * When inside a folder, you can go back to the parent folder. 7. Add New
+     * Folder. 8. Sort Options. 9. Settings. 10. Support… 11. Folder…
+     * 12. Note… 13. Create New Note — tap the + button at the bottom right."
+     *
+     * What was here was a list of rows with a New button, which is a perfectly
+     * good file list and not this screen. The differences that matter are not
+     * decoration: a sketchbook you cannot put into folders is one long
+     * scroll after a month, tiles are how you recognise a drawing you cannot
+     * name, and the actions live on a selection rather than on every row —
+     * which is what lets one tap reach five notes at once.
+     */
     private fun buildGallery() {
-        gallery.orientation = LinearLayout.VERTICAL
+        gallery.orientation = LinearLayout.HORIZONTAL
         gallery.setBackgroundColor(t.bg)
-        gallery.setPadding(t.dp(22f), t.dp(18f), t.dp(22f), t.dp(18f))
         gallery.visibility = View.GONE
         /* it covers the sketch, so it has to swallow what lands on it */
         gallery.isClickable = true
 
-        val head = LinearLayout(act).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
-            ).apply { bottomMargin = t.dp(14f) }
-        }
-        head.addView(
-            TextView(act).apply {
-                text = act.getString(R.string.gallery_title)
-                setTextColor(t.ink)
-                textSize = 20f
-                setTypeface(typeface, android.graphics.Typeface.BOLD)
-                layoutParams = LinearLayout.LayoutParams(
-                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f,
-                )
-            },
-        )
-        head.addView(
-            TextButton(act, t, filled = true, small = true).apply {
-                text = act.getString(R.string.gallery_new)
-                on = true
-                setOnClickListener { onOpenWork(null) }
-            },
-        )
-        head.addView(
-            IcoButton(act, t).icon("close").apply {
-                setOnClickListener { setGallery(false) }
-            },
-        )
-        gallery.addView(head)
+        gallery.addView(buildHomeSidebar())
 
-        galleryList = LinearLayout(act).apply { orientation = LinearLayout.VERTICAL }
-        gallery.addView(
+        val right = LinearLayout(act).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+            setPadding(t.dp(16f), t.dp(14f), t.dp(16f), 0)
+        }
+        right.addView(buildHomeBar())
+
+        homeGrid = GridLayout(act).apply { columnCount = 1 }
+        right.addView(
             android.widget.ScrollView(act).apply {
-                addView(galleryList)
+                addView(homeGrid)
+                clipToPadding = false
+                setPadding(0, 0, 0, t.dp(84f))
                 layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f,
                 )
             },
         )
+
+        /* the + and the selection bar share the bottom: you are either making
+           something or doing something to what you picked, never both */
+        val floor = FrameLayout(act).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            )
+        }
+        homeBottom = buildHomeSelectionBar()
+        floor.addView(
+            homeBottom,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { gravity = Gravity.BOTTOM or Gravity.START; setMargins(0, 0, 0, t.dp(12f)) },
+        )
+        /* FACT: "Tap the + button at the bottom right of the screen to create
+           a new note." */
+        homeAdd = TextButton(act, t, small = false).apply {
+            text = "+"
+            textSize = 22f
+            on = true
+            minWidth = t.dp(56f)
+            setOnClickListener { onOpenWork(null) }
+            Tip.attach(this, tipCard, act.getString(R.string.home_new_note))
+        }
+        floor.addView(
+            homeAdd,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { gravity = Gravity.BOTTOM or Gravity.END; setMargins(0, 0, 0, t.dp(12f)) },
+        )
+        right.addView(floor)
+        gallery.addView(right)
+    }
+
+    /** FACT: items 2, 3, 9 and 10 — Recents, Folders, Settings, Support. */
+    private fun buildHomeSidebar(): View {
+        homeSidebar = LinearLayout(act).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(t.panel)
+            setPadding(t.dp(14f), t.dp(18f), t.dp(14f), t.dp(14f))
+            layoutParams = LinearLayout.LayoutParams(
+                t.dp(176f), ViewGroup.LayoutParams.MATCH_PARENT,
+            )
+        }
+        homeSidebar.addView(
+            TextView(act).apply {
+                text = act.getString(R.string.app_name)
+                setTextColor(t.ink)
+                textSize = 19f
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+                setPadding(t.dp(6f), 0, 0, t.dp(14f))
+            },
+        )
+        for ((view, label) in listOf(
+            HOME_RECENTS to R.string.home_recents,
+            HOME_FOLDERS to R.string.home_folders,
+        )) {
+            val b = TextButton(act, t, filled = true, small = false).apply {
+                text = act.getString(label)
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(t.dp(12f), t.dp(9f), t.dp(12f), t.dp(9f))
+                setOnClickListener { onHomeView(view) }
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { bottomMargin = t.dp(4f) }
+            }
+            homeViews[view] = b
+            homeSidebar.addView(b)
+        }
+        homeSidebar.addView(
+            View(act).apply {
+                setBackgroundColor(t.line)
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, t.dp(1f), 1f,
+                ).apply { topMargin = t.dp(10f); bottomMargin = t.dp(10f) }
+            },
+        )
+        homeSidebar.addView(
+            TextButton(act, t, small = true).apply {
+                text = act.getString(R.string.home_settings)
+                setOnClickListener { onAction(Action.MENU) }
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { bottomMargin = t.dp(4f) }
+            },
+        )
+        homeSidebar.addView(
+            TextButton(act, t, small = true).apply {
+                text = act.getString(R.string.home_support)
+                setOnClickListener { onAction(Action.HELP) }
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                )
+            },
+        )
+        return homeSidebar
+    }
+
+    /** FACT: items 1, 5, 6, 7 and 8 — refresh, hide, path, new folder, sort. */
+    private fun buildHomeBar(): View {
+        val bar = LinearLayout(act).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { bottomMargin = t.dp(12f) }
+        }
+        /* FACT: "5. Hide Sidebar — hides or expands the sidebar." */
+        bar.addView(
+            IcoButton(act, t, IcoButton.SIZE_SMALL).icon("menu").apply {
+                setOnClickListener {
+                    homeSidebar.visibility =
+                        if (homeSidebar.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+                }
+            },
+        )
+        homePath = LinearLayout(act).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f,
+            ).apply { marginStart = t.dp(6f) }
+        }
+        bar.addView(homePath)
+
+        bar.addView(
+            IcoButton(act, t, IcoButton.SIZE_SMALL).icon("reset").apply {
+                setOnClickListener { onHomeRefresh() }
+                Tip.attach(this, tipCard, act.getString(R.string.home_refresh))
+            },
+        )
+        bar.addView(
+            IcoButton(act, t, IcoButton.SIZE_SMALL).icon("plus").apply {
+                setOnClickListener { onHomeNewFolder() }
+                Tip.attach(this, tipCard, act.getString(R.string.home_new_folder))
+            },
+        )
+        homeSortButton = TextButton(act, t, small = true).apply {
+            text = act.getString(R.string.sort_modified)
+            /* FACT: "The currently supported options are last modified, last
+               created, and Name." Three of them, so the button cycles rather
+               than opening a menu with three lines in it. */
+            setOnClickListener { onHomeSort((homeSort + 1) % 3) }
+            Tip.attach(this, tipCard, act.getString(R.string.home_sort))
+        }
+        bar.addView(homeSortButton)
+        bar.addView(
+            IcoButton(act, t, IcoButton.SIZE_SMALL).icon("close").apply {
+                setOnClickListener { setGallery(false) }
+            },
+        )
+        return bar
+    }
+
+    /**
+     * FACT: "Tap and hold a note to select it. To select multiple notes, tap
+     * additional notes after selecting the first one. To deselect, tap the X
+     * icon at the bottom left of the screen. Rename… Duplicate… Export…
+     * Lighten… Delete."
+     */
+    private fun buildHomeSelectionBar(): LinearLayout {
+        val bar = LinearLayout(act).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = GradientDrawable().apply {
+                setColor(t.panel)
+                cornerRadius = t.dpf(16f)
+                setStroke(t.dp(1f), t.line)
+            }
+            elevation = t.dpf(8f)
+            setPadding(t.dp(6f), t.dp(5f), t.dp(6f), t.dp(5f))
+            visibility = View.GONE
+        }
+        bar.addView(
+            IcoButton(act, t, IcoButton.SIZE_SMALL).icon("close").apply {
+                setOnClickListener { homePicked.clear(); rebuildHome() }
+            },
+        )
+        homeCount = TextView(act).apply {
+            setTextColor(t.dim)
+            textSize = 11.5f
+            setPadding(t.dp(4f), 0, t.dp(8f), 0)
+        }
+        bar.addView(homeCount)
+        for ((icon, tip, go) in listOf(
+            Triple("enter", R.string.home_rename, { onHomeRename(homePicked.toList()) }),
+            Triple("dup", R.string.home_duplicate, { onHomeDuplicate(homePicked.toList()) }),
+            Triple("export", R.string.home_export, { onHomeExport(homePicked.toList()) }),
+            Triple("smooth", R.string.home_lighten, { onHomeLighten(homePicked.toList()) }),
+        )) {
+            bar.addView(
+                IcoButton(act, t, IcoButton.SIZE_SMALL).icon(icon).apply {
+                    setOnClickListener { go() }
+                    Tip.attach(this, tipCard, act.getString(tip))
+                },
+            )
+        }
+        bar.addView(
+            IcoButton(act, t, IcoButton.SIZE_SMALL).icon("trash").apply {
+                danger = true
+                setOnClickListener { onHomeDelete(homePicked.toList()) }
+                Tip.attach(this, tipCard, act.getString(R.string.home_delete))
+            },
+        )
+        return bar
     }
 
     fun setGallery(open: Boolean) {
         gallery.visibility = if (open) View.VISIBLE else View.GONE
-        if (open) closeTop()
+        if (open) closeTop() else homePicked.clear()
     }
 
     fun galleryOpen(): Boolean = gallery.visibility == View.VISIBLE
 
     /**
-     * Fill the gallery.
+     * Fill the home screen.
      *
-     * Rows rather than a tile grid: two sketches are not told apart by a
-     * thumbnail at this size, and the date and the curve count do tell them
-     * apart. The one you are in says so rather than merely being first,
-     * because "which of these am I looking at" is the question the page
-     * exists to answer.
+     * [path] is the folder trail, outermost first, as id-to-name pairs; an
+     * empty one is the top level. [sort] is which of the three orders is on.
      */
-    fun setWorks(works: List<MainActivity.Work>, currentId: String? = null) {
-        if (!::galleryList.isInitialized) return
-        galleryList.removeAllViews()
-        if (works.isEmpty()) {
-            galleryList.addView(
+    fun setHome(
+        items: List<HomeItem>,
+        path: List<Pair<String, String>>,
+        sort: Int,
+        currentId: String?,
+        view: Int,
+    ) {
+        if (!::homeGrid.isInitialized) return
+        homeItems = items
+        homePath2 = path
+        homeSort = sort
+        homeCurrent = currentId
+        homeView = view
+        homePicked.retainAll(items.map { it.id }.toSet())
+        rebuildHome()
+    }
+
+    private fun rebuildHome() {
+        if (!::homeGrid.isInitialized) return
+        for ((k, b) in homeViews) b.on = k == homeView
+        homeSortButton.text = act.getString(
+            when (homeSort) {
+                1 -> R.string.sort_created
+                2 -> R.string.sort_name
+                else -> R.string.sort_modified
+            },
+        )
+        rebuildHomePath()
+
+        homeBottom.visibility = if (homePicked.isEmpty()) View.GONE else View.VISIBLE
+        homeAdd.visibility = if (homePicked.isEmpty()) View.VISIBLE else View.GONE
+        homeCount.text = act.getString(R.string.home_picked, homePicked.size)
+
+        val wide = act.resources.displayMetrics.widthPixels -
+            (if (homeSidebar.visibility == View.VISIBLE) t.dp(176f) else 0) - t.dp(32f)
+        val cols = ((wide / t.dp(TILE_DP)).coerceAtLeast(1)).coerceAtMost(6)
+        homeGrid.removeAllViews()
+        homeGrid.columnCount = cols
+
+        if (homeItems.isEmpty()) {
+            homeGrid.addView(
                 TextView(act).apply {
                     text = act.getString(R.string.gallery_empty)
                     setTextColor(t.dim)
                     textSize = 13f
-                    setPadding(0, t.dp(18f), 0, 0)
+                    setPadding(t.dp(4f), t.dp(18f), 0, 0)
                 },
             )
             return
         }
-        for (w in works) galleryList.addView(workRow(w, w.id == currentId))
+        for (item in homeItems) homeGrid.addView(homeTile(item, cols))
     }
 
-    private fun workRow(w: MainActivity.Work, current: Boolean): View {
-        val row = LinearLayout(act).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            background = GradientDrawable().apply {
-                setColor(if (current) t.panel3 else t.panel)
-                cornerRadius = t.rCard
-                if (current) setStroke(t.dp(1.5f), t.ink)
+    /** FACT: "6. Current Path… When inside a folder, you can go back." */
+    private fun rebuildHomePath() {
+        homePath.removeAllViews()
+        fun crumb(name: String, id: String?, last: Boolean) {
+            homePath.addView(
+                TextView(act).apply {
+                    text = name
+                    setTextColor(if (last) t.ink else t.dim)
+                    textSize = 13.5f
+                    if (last) setTypeface(typeface, android.graphics.Typeface.BOLD)
+                    setPadding(t.dp(4f), t.dp(4f), t.dp(4f), t.dp(4f))
+                    if (!last) setOnClickListener { onHomeEnter(id) }
+                    /* and it takes a drop, which is the only way back OUT of a
+                       folder: there is no tile for the place you already are */
+                    setOnDragListener { v, ev ->
+                        when (ev.action) {
+                            android.view.DragEvent.ACTION_DRAG_ENTERED -> { v.alpha = 0.5f; true }
+                            android.view.DragEvent.ACTION_DRAG_EXITED,
+                            android.view.DragEvent.ACTION_DRAG_ENDED,
+                            -> { v.alpha = 1f; true }
+                            android.view.DragEvent.ACTION_DROP -> {
+                                v.alpha = 1f
+                                val moving = homePicked.toList()
+                                homePicked.clear()
+                                onHomeMove(moving, id)
+                                true
+                            }
+                            else -> true
+                        }
+                    }
+                },
+            )
+            if (!last) {
+                homePath.addView(
+                    TextView(act).apply {
+                        text = "›"
+                        setTextColor(t.dim2)
+                        textSize = 13.5f
+                    },
+                )
             }
-            setPadding(t.dp(10f), t.dp(10f), t.dp(10f), t.dp(10f))
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
-            ).apply { bottomMargin = t.dp(8f) }
-            setOnClickListener { if (current) setGallery(false) else onOpenWork(w.id) }
+        }
+        crumb(act.getString(R.string.home_all), null, homePath2.isEmpty())
+        for ((i, p) in homePath2.withIndex()) {
+            crumb(p.second, p.first, i == homePath2.lastIndex)
+        }
+    }
+
+    /**
+     * One tile.
+     *
+     * Tap opens it; tap and hold picks it; once anything is picked a tap picks
+     * too, which is FACT — "to select multiple notes, tap additional notes
+     * after selecting the first one" — and is also the only way a multi-select
+     * is usable with one hand.
+     *
+     * FACT: "Selected resources are highlighted in green", which is the colour
+     * this app answers every selection in.
+     */
+    private fun homeTile(item: HomeItem, cols: Int): View {
+        val picked = item.id in homePicked
+        val current = item.id == homeCurrent
+        val tile = LinearLayout(act).apply {
+            orientation = LinearLayout.VERTICAL
+            background = GradientDrawable().apply {
+                setColor(if (picked) wash(t.green, 0.16f) else t.panel)
+                cornerRadius = t.rCard
+                setStroke(
+                    t.dp(1.5f),
+                    when {
+                        picked -> t.green
+                        current -> t.ink
+                        else -> t.line
+                    },
+                )
+            }
+            setPadding(t.dp(8f), t.dp(8f), t.dp(8f), t.dp(8f))
+            layoutParams = GridLayout.LayoutParams().apply {
+                width = t.dp(TILE_DP) - t.dp(10f)
+                setMargins(t.dp(5f), t.dp(5f), t.dp(5f), t.dp(5f))
+            }
+            setOnClickListener {
+                if (homePicked.isEmpty()) {
+                    if (item.folder) onHomeEnter(item.id) else onOpenWork(item.id)
+                } else {
+                    if (!homePicked.remove(item.id)) homePicked.add(item.id)
+                    rebuildHome()
+                }
+            }
+            /*
+             * FACT: "Tap and hold a note to select it… Tap and hold a selected
+             * note again to float it, then drag it to move. Drop it onto a
+             * folder to place the note inside."
+             *
+             * So the same gesture means two things depending on whether this
+             * tile is already picked, which sounds ambiguous and is not: the
+             * first hold picks, the second lifts, and lifting something you
+             * have not picked up is not a thing hands do either.
+             */
+            setOnLongClickListener {
+                if (item.id in homePicked) {
+                    startDragAndDrop(
+                        null, View.DragShadowBuilder(this), null,
+                        View.DRAG_FLAG_OPAQUE,
+                    )
+                } else {
+                    homePicked.add(item.id)
+                    rebuildHome()
+                }
+                true
+            }
+            /* a folder is a place to drop things; a note is not */
+            if (item.folder) {
+                setOnDragListener { v, ev ->
+                    when (ev.action) {
+                        android.view.DragEvent.ACTION_DRAG_ENTERED -> {
+                            v.alpha = 0.6f; true
+                        }
+                        android.view.DragEvent.ACTION_DRAG_EXITED,
+                        android.view.DragEvent.ACTION_DRAG_ENDED,
+                        -> { v.alpha = 1f; true }
+                        android.view.DragEvent.ACTION_DROP -> {
+                            v.alpha = 1f
+                            val moving = homePicked.toList()
+                            homePicked.clear()
+                            onHomeMove(moving, item.id)
+                            true
+                        }
+                        else -> true
+                    }
+                }
+            }
         }
 
-        row.addView(
-            ImageView(act).apply {
-                layoutParams = LinearLayout.LayoutParams(t.dp(76f), t.dp(52f))
-                    .apply { marginEnd = t.dp(12f) }
-                scaleType = ImageView.ScaleType.CENTER_CROP
-                background = GradientDrawable().apply {
-                    setColor(t.panel2); cornerRadius = t.dpf(9f)
-                }
-                /* a thumbnail is a convenience: a work whose picture failed to
-                   decode still lists, with the empty panel behind it */
-                val thumb = w.thumb
-                if (thumb != null) {
-                    val bmp: android.graphics.Bitmap? =
-                        try {
-                            android.graphics.BitmapFactory.decodeFile(thumb.path)
-                        } catch (e: Throwable) {
-                            null
-                        }
-                    if (bmp != null) setImageBitmap(bmp)
-                }
-            },
-        )
-
-        val text = LinearLayout(act).apply {
-            orientation = LinearLayout.VERTICAL
+        val art = FrameLayout(act).apply {
+            background = GradientDrawable().apply {
+                setColor(t.panel2); cornerRadius = t.dpf(10f)
+            }
             layoutParams = LinearLayout.LayoutParams(
-                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f,
+                ViewGroup.LayoutParams.MATCH_PARENT, t.dp(84f),
             )
         }
-        text.addView(
+        if (item.folder) {
+            /* FACT: "Thumbnails of the four most recently modified notes are
+               displayed" — which is what makes a folder recognisable at all,
+               since its name is the only other thing on it. */
+            val quad = GridLayout(act).apply {
+                columnCount = 2
+                setPadding(t.dp(5f), t.dp(5f), t.dp(5f), t.dp(5f))
+            }
+            for (k in 0 until 4) {
+                quad.addView(
+                    ImageView(act).apply {
+                        layoutParams = GridLayout.LayoutParams().apply {
+                            width = t.dp(TILE_DP / 2) - t.dp(20f)
+                            height = t.dp(33f)
+                            setMargins(t.dp(1f), t.dp(1f), t.dp(1f), t.dp(1f))
+                        }
+                        scaleType = ImageView.ScaleType.CENTER_CROP
+                        background = GradientDrawable().apply {
+                            setColor(t.panel3); cornerRadius = t.dpf(5f)
+                        }
+                        item.thumbs.getOrNull(k)?.let { path ->
+                            decodeThumb(path)?.let { setImageBitmap(it) }
+                        }
+                    },
+                )
+            }
+            art.addView(quad)
+        } else {
+            art.addView(
+                ImageView(act).apply {
+                    layoutParams = FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT,
+                    )
+                    scaleType = ImageView.ScaleType.CENTER_CROP
+                    item.thumbs.firstOrNull()?.let { path ->
+                        decodeThumb(path)?.let { setImageBitmap(it) }
+                    }
+                },
+            )
+        }
+        tile.addView(art)
+
+        tile.addView(
             TextView(act).apply {
-                this.text = w.title
+                text = item.name
                 setTextColor(t.ink)
-                textSize = 14f
+                textSize = 13f
                 isSingleLine = true
                 ellipsize = android.text.TextUtils.TruncateAt.END
                 setTypeface(typeface, android.graphics.Typeface.BOLD)
+                setPadding(t.dp(2f), t.dp(6f), t.dp(2f), 0)
             },
         )
-        text.addView(
+        tile.addView(
             TextView(act).apply {
-                this.text = act.getString(R.string.gallery_curves, w.curves) +
-                    if (current) "  ·  " + act.getString(R.string.gallery_open_now) else ""
+                text = item.subtitle + if (current) "  ·  " + act.getString(R.string.gallery_open_now) else ""
                 setTextColor(t.dim)
-                textSize = 11.5f
+                textSize = 10.5f
+                isSingleLine = true
+                setPadding(t.dp(2f), t.dp(1f), t.dp(2f), 0)
             },
         )
-        row.addView(text)
-
-        row.addView(
-            IcoButton(act, t, IcoButton.SIZE_SMALL).icon("trash").apply {
-                danger = true
-                setOnClickListener { onDeleteWork(w.id) }
-            },
-        )
-        return row
+        return tile
     }
 
+    /** A thumbnail is a convenience: one that will not decode simply is not shown. */
+    private fun decodeThumb(path: String): android.graphics.Bitmap? = try {
+        android.graphics.BitmapFactory.decodeFile(path)
+    } catch (e: Throwable) {
+        null
+    }
+
+
+    // ---- asking for one line of text ---------------------------------------
+
+    /**
+     * A NAME, TYPED, WITHOUT LEAVING THE SCREEN.
+     *
+     * Renaming a note is the one place the app has to take free text, and a
+     * system dialog would be the only piece of another app's furniture in the
+     * whole interface. This is the same card everything else is made of, with
+     * a field in it.
+     */
+    private fun buildAskCard() {
+        askCard.orientation = LinearLayout.VERTICAL
+        askCard.background = GradientDrawable().apply {
+            setColor(t.panel)
+            cornerRadius = t.rSheet
+            setStroke(t.dp(1f), t.line)
+        }
+        askCard.elevation = t.dpf(18f)
+        askCard.setPadding(t.dp(16f), t.dp(14f), t.dp(16f), t.dp(12f))
+        askCard.visibility = View.GONE
+        askCard.isClickable = true
+
+        askTitle = TextView(act).apply {
+            setTextColor(t.dim2)
+            textSize = 10.5f
+            letterSpacing = 0.08f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+        }
+        askCard.addView(askTitle)
+
+        askField = EditText(act).apply {
+            setTextColor(t.ink)
+            textSize = 15f
+            isSingleLine = true
+            background = GradientDrawable().apply {
+                setColor(t.panel2); cornerRadius = t.dpf(10f)
+            }
+            setPadding(t.dp(10f), t.dp(8f), t.dp(10f), t.dp(8f))
+            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_DONE
+            setOnEditorActionListener { _, _, _ -> commitAsk(); true }
+            layoutParams = LinearLayout.LayoutParams(
+                t.dp(240f), ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { topMargin = t.dp(8f) }
+        }
+        askCard.addView(askField)
+
+        val row = LinearLayout(act).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.END
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { topMargin = t.dp(10f) }
+        }
+        row.addView(
+            TextButton(act, t, filled = true, small = true).apply {
+                text = act.getString(R.string.cancel)
+                setOnClickListener { closeAsk() }
+            },
+        )
+        row.addView(
+            TextButton(act, t, small = true).apply {
+                text = act.getString(R.string.done)
+                on = true
+                setOnClickListener { commitAsk() }
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { marginStart = t.dp(6f) }
+            },
+        )
+        askCard.addView(row)
+        popover(askCard)
+    }
+
+    private fun commitAsk() {
+        val go = askDone
+        val text = askField.text.toString()
+        closeAsk()
+        go?.invoke(text)
+    }
+
+    private fun closeAsk() {
+        askDone = null
+        askCard.visibility = View.GONE
+        askField.clearFocus()
+        (act.getSystemService(android.content.Context.INPUT_METHOD_SERVICE)
+            as? android.view.inputmethod.InputMethodManager)
+            ?.hideSoftInputFromWindow(askField.windowToken, 0)
+    }
+
+    /** Ask for one line, with [initial] already in the box and selected. */
+    fun askText(title: String, initial: String, onDone: (String) -> Unit) {
+        askDone = onDone
+        askTitle.text = title
+        askField.setText(initial)
+        askField.setSelection(0, initial.length)
+        askCard.visibility = View.VISIBLE
+        askField.requestFocus()
+        (act.getSystemService(android.content.Context.INPUT_METHOD_SERVICE)
+            as? android.view.inputmethod.InputMethodManager)
+            ?.showSoftInput(askField, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
+    }
 
     fun toast(msg: String) = toastCard.show(msg)
 
@@ -4486,6 +5017,13 @@ class Chrome(private val act: Activity, val t: Tokens) {
         const val PAT_INTENSITY = 0
         const val PAT_ANGLE = 1
         const val PAT_CONTRAST = 2
+
+        /** Which of the two sidebar views is showing. */
+        const val HOME_RECENTS = 0
+        const val HOME_FOLDERS = 1
+
+        /** How wide one tile is, including its margins. */
+        const val TILE_DP = 168f
 
         private val TIPS = mapOf(
             "grid" to R.string.tip_home,
