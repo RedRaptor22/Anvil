@@ -67,13 +67,26 @@ class Sketch {
     // ---- groups ---------------------------------------------------------
 
     /**
-     * A NEW GROUP GOES ON TOP.
+     * Where a new group goes, when the caller does not say.
      *
-     * `S.groups.unshift(g)` — the newest layer is the one you are working in,
-     * so it belongs at the head of the list where the eye starts, and
-     * [ensureGroup]'s fallback picks index 0 for the same reason. This build
-     * appended instead, which put every new group at the bottom of a panel you
-     * then had to scroll.
+     * FACT: "The new group will be created directly above the current active
+     * group." Not at the top of the list — which is what this did, and which
+     * puts the group you just made a long way from the one you were working
+     * in as soon as there are more than two or three.
+     */
+    fun indexAboveActive(): Int {
+        val at = groupList.indexOfFirst { it.id == activeGroup }
+        return if (at < 0) 0 else at
+    }
+
+    /**
+     * Make a group and put it at [at], the head of the list by default.
+     *
+     * The default is for the callers with nowhere in mind — the first group of
+     * an empty sketch, a restore that places each one itself. Making a group
+     * from the panel passes [indexAboveActive], which is where Feather puts
+     * it; the two used to be the same thing and the documentation says they
+     * are not.
      */
     fun newGroup(name: String, at: Int = 0): StrokeGroup =
         StrokeGroup(StrokeGroup.freshId(), name).also {
@@ -187,8 +200,26 @@ class Sketch {
         return copy to copies
     }
 
-    /** A curve is visible unless the group holding it is hidden. */
-    fun visible(s: Stroke): Boolean = groupById(s.group)?.visible ?: true
+    /**
+     * The group being looked at alone, or null when all of them are.
+     *
+     * FACT: "Tap and hold the eyeball icon on the far right to isolate the
+     * group. When a group is isolated, only the curves within that group are
+     * visible. Tap another group to isolate and view only its curves. Tap and
+     * hold the eyeball icon again to exit isolation."
+     *
+     * Separate from each group's own [StrokeGroup.visible] flag, and it has to
+     * be: isolation is a way of LOOKING at the drawing that you back out of,
+     * and doing it by hiding every other group would turn one held tap into a
+     * dozen hidden groups you then have to unhide by hand.
+     */
+    var isolatedGroup: Int? = null
+
+    /** A curve is visible unless its group is hidden, or another is isolated. */
+    fun visible(s: Stroke): Boolean {
+        isolatedGroup?.let { return s.group == it }
+        return groupById(s.group)?.visible ?: true
+    }
 
     /** Everything a tool is allowed to touch: visible curves, in draw order. */
     fun editable(): List<Stroke> = list.filter { visible(it) }

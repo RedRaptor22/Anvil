@@ -137,6 +137,9 @@ class Chrome(private val act: Activity, val t: Tokens) {
     /** How strongly a whole group draws. Live while the slider moves. */
     var onGroupOpacity: (id: Int, value: Double) -> Unit = { _, _ -> }
 
+    /** Look at this group alone, or stop doing so. */
+    var onGroupIsolate: (id: Int) -> Unit = {}
+
     /** One of the three mirror planes was tapped. */
     var onMirrorAxis: (axis: String) -> Unit = {}
 
@@ -1689,6 +1692,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
         val visible: Boolean,
         val active: Boolean,
         val opacity: Double = 1.0,
+        val isolated: Boolean = false,
     )
 
     fun setGroups(rows: List<GroupRow>) {
@@ -1765,6 +1769,13 @@ class Chrome(private val act: Activity, val t: Tokens) {
                         imageTintList = android.content.res.ColorStateList.valueOf(t.dim2)
                     }
                     setOnClickListener { onGroupVisible(g.id, !g.visible) }
+                    /* FACT: "Tap and hold the eyeball icon on the far right to
+                       isolate the group… Tap and hold the eyeball icon again
+                       to exit isolation." */
+                    setOnLongClickListener { onGroupIsolate(g.id); true }
+                    if (g.isolated) {
+                        imageTintList = android.content.res.ColorStateList.valueOf(t.active)
+                    }
                 },
         )
         row.addView(line)

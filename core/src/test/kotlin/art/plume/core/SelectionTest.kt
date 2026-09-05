@@ -156,8 +156,17 @@ class SelectionTest {
 
     // ---- moving and copying ------------------------------------------------
 
+    /**
+     * FACT: "The duplicated curves are in the same position as the original,
+     * so be careful not to confuse them."
+     *
+     * This used to nudge the copy 24px across the glass so it read as a copy,
+     * which is kinder on the eye and wrong: a duplicate you place yourself has
+     * a known starting point, and one that arrived somewhere of its own
+     * choosing has to be put back before it can be placed.
+     */
     @Test
-    fun `duplicating offsets the copy and leaves the copy selected`() {
+    fun `duplicating lands on the original and leaves the copy selected`() {
         val cam = camera()
         val sketch = Sketch()
         val a = line(cam, 500.0)
@@ -170,13 +179,58 @@ class SelectionTest {
         assertEquals(2, sketch.strokes.size)
         assertEquals(copies, sketch.selection, "the copy should be what is selected now")
         assertFalse(sketch.isSelected(a))
+        assertEquals(0.0, where.distanceTo(copies[0].pts[0].p), 1e-12, "same position")
+    }
 
-        // moved by 24px across the screen, measured on the glass
+    @Test
+    fun `symmetrically by view reflects across the plane you look through`() {
+        val cam = camera()
+        val sketch = Sketch()
+        val a = line(cam, 500.0)
+        sketch.add(a)
+        sketch.setSelected(a, true)
+        val where = a.pts[0].p.copy()
+
+        val copies = Selection.viewMirroredDuplicate(sketch, cam)
+        assertEquals(1, copies.size)
+
+        /* FACT: "If the sketch is skewed to the right, it will be duplicated
+           to the left, and vice versa" — so it crosses the middle of the
+           screen, and stays at the same height and depth on it. */
         val s0 = Vec3(); val s1 = Vec3()
         cam.worldToScreen(where, s0)
         cam.worldToScreen(copies[0].pts[0].p, s1)
-        assertEquals(24.0, s1.x - s0.x, 1e-6)
-        assertEquals(0.0, s1.y - s0.y, 1e-6)
+        val mid = cam.width / 2.0
+        assertEquals(mid - (s0.x - mid), s1.x, 1e-6, "mirrored about the screen's middle")
+        assertEquals(s0.y, s1.y, 1e-6, "and not moved up or down")
+    }
+
+    @Test
+    fun `symmetrically by mirror makes one copy per active plane`() {
+        val sketch = Sketch()
+        val a = Stroke(brush = "pen").also { it.pts.add(StrokePoint(Vec3(1.0, 2.0, 3.0))) }
+        sketch.add(a)
+        sketch.setSelected(a, true)
+
+        /* FACT: "If multiple axes are active, multiple curves will be
+           duplicated at once" — two planes is three copies, the pair and the
+           corner, which is the same count the live mirror makes. */
+        val copies = Selection.mirrorAxesDuplicate(sketch, setOf("x", "z"))
+        assertEquals(3, copies.size)
+        val corners = copies.map { it.pts[0].p }
+        assertTrue(corners.any { it.x == -1.0 && it.z == 3.0 })
+        assertTrue(corners.any { it.x == 1.0 && it.z == -3.0 })
+        assertTrue(corners.any { it.x == -1.0 && it.z == -3.0 })
+    }
+
+    @Test
+    fun `symmetrically by mirror does nothing with no plane on`() {
+        val sketch = Sketch()
+        val a = Stroke(brush = "pen").also { it.pts.add(StrokePoint(Vec3(1.0, 0.0, 0.0))) }
+        sketch.add(a)
+        sketch.setSelected(a, true)
+        assertEquals(emptyList(), Selection.mirrorAxesDuplicate(sketch, emptySet()))
+        assertEquals(1, sketch.strokes.size)
     }
 
     @Test

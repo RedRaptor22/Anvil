@@ -272,10 +272,17 @@ object Selection {
         st.copyStroke().also { transform(listOf(it), m) }
 
     /**
-     * Duplicate the selection, offset by [offsetPx] across the screen so the
-     * copy is visibly a copy rather than sitting exactly on the original.
+     * Duplicate the selection, IN PLACE.
+     *
+     * FACT: "The duplicated curves are in the same position as the original,
+     * so be careful not to confuse them." This used to nudge the copy a
+     * couple of dozen pixels across the screen so it read as a copy — kinder
+     * on the eye and wrong: a duplicate you then move yourself has a known
+     * starting point, and one that arrived somewhere of its own choosing has
+     * to be put back before it can be placed. The count is reported instead,
+     * which is what Feather does with it.
      */
-    fun duplicate(sketch: Sketch, camera: Camera, offsetPx: Double = 24.0): List<Stroke> {
+    fun duplicate(sketch: Sketch, camera: Camera, offsetPx: Double = 0.0): List<Stroke> {
         val sel = sketch.selection
         if (sel.isEmpty()) return emptyList()
         val right = Vec3(); val up = Vec3(); val back = Vec3()
@@ -297,14 +304,53 @@ object Selection {
      * rather than offset, because a mirrored copy has somewhere it belongs and
      * nudging it 24px sideways would be wrong.
      */
-    fun mirroredDuplicate(sketch: Sketch, axis: String): List<Stroke> {
+    fun mirroredDuplicate(sketch: Sketch, axis: String): List<Stroke> =
+        mirroredDuplicate(sketch, listOf(mirrorMatrix(axis)))
+
+    /**
+     * SYMMETRICALLY BY VIEW: reflect across the plane you are looking through.
+     *
+     * FACT: "duplicate symmetrically based on the view direction. If the
+     * sketch is skewed to the right, it will be duplicated to the left, and
+     * vice versa." The plane is the one containing the camera's up and
+     * forward axes, through the origin — so "left" and "right" mean what they
+     * mean on the glass, whichever way the model is turned underneath.
+     */
+    fun viewMirroredDuplicate(sketch: Sketch, camera: Camera): List<Stroke> {
+        val right = Vec3(); val up = Vec3(); val back = Vec3()
+        camera.basis(right, up, back)
+        return mirroredDuplicate(sketch, listOf(reflectionAcross(right)))
+    }
+
+    /**
+     * SYMMETRICALLY BY MIRROR: every plane the mirror currently has on.
+     *
+     * FACT: "can only be used when the mirror is on. It duplicates
+     * symmetrically based on the currently active mirror axis. If multiple
+     * axes are active, multiple curves will be duplicated at once."
+     */
+    fun mirrorAxesDuplicate(sketch: Sketch, axes: Set<String>): List<Stroke> =
+        mirroredDuplicate(sketch, Mirror.keysFor(axes).map { Mirror.matrixFor(it) })
+
+    private fun mirroredDuplicate(sketch: Sketch, mats: List<Mat4>): List<Stroke> {
         val sel = sketch.selection
-        if (sel.isEmpty()) return emptyList()
-        val m = mirrorMatrix(axis)
-        val copies = sel.map { transformedCopy(it, m) }
+        if (sel.isEmpty() || mats.isEmpty()) return emptyList()
+        val copies = ArrayList<Stroke>(sel.size * mats.size)
+        for (m in mats) for (st in sel) copies.add(transformedCopy(st, m))
         sketch.clearSelection()
         for (c in copies) { sketch.add(c); sketch.setSelected(c, true) }
         return copies
+    }
+
+    /** The reflection across the plane through the origin with this normal. */
+    fun reflectionAcross(normal: Vec3, out: Mat4 = Mat4()): Mat4 {
+        val n = normal.copy().normalize()
+        out.identity()
+        val m = out.m
+        m[0] = 1 - 2 * n.x * n.x; m[4] = -2 * n.x * n.y; m[8] = -2 * n.x * n.z
+        m[1] = -2 * n.y * n.x; m[5] = 1 - 2 * n.y * n.y; m[9] = -2 * n.y * n.z
+        m[2] = -2 * n.z * n.x; m[6] = -2 * n.z * n.y; m[10] = 1 - 2 * n.z * n.z
+        return out
     }
 
     /** FACT (C.10): live symmetry on X, and from v1.5 on Z. */

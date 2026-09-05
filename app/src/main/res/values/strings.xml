@@ -83,6 +83,9 @@
     <string name="colour_background">BACKGROUND</string>
     <string name="colour_light">LIGHT COLOUR</string>
     <string name="colour_guide">GUIDE COLOUR</string>
+    <string name="isolation_on">Isolated %1$s</string>
+    <string name="isolation_off">Isolation off</string>
+    <string name="group_hidden_draw">That group is hidden — show it to draw in it</string>
 
     <!-- #stagePanel -->
     <string name="tab_curves">Curves</string>

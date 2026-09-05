@@ -536,6 +536,7 @@ class MainActivity : Activity(), Gestures.Listener {
         chrome.onGroupAssign = { id -> assignSelectionTo(id) }
         chrome.onGroupVisible = { id, visible -> setGroupVisible(id, visible) }
         chrome.onGroupOpacity = { id, v -> setGroupOpacity(id, v) }
+        chrome.onGroupIsolate = { id -> isolateGroup(id) }
         chrome.onMirrorAxis = { axis -> toggleMirrorAxis(axis) }
         chrome.onMirrorOff = { toggleMirror() }
         chrome.onGroupNew = { newGroup() }
@@ -1496,6 +1497,7 @@ class MainActivity : Activity(), Gestures.Listener {
                 Chrome.GroupRow(
                     g.id, g.name, sketch.membersOf(g.id).size, g.visible,
                     g.id == sketch.activeGroup, g.opacity,
+                    g.id == sketch.isolatedGroup,
                 )
             },
         )
@@ -1503,7 +1505,13 @@ class MainActivity : Activity(), Gestures.Listener {
     }
 
     private fun newGroup() {
-        val g = sketch.newGroup(getString(R.string.group_new, sketch.groups.size + 1))
+        /* FACT: "The new group will be created directly above the current
+           active group" — beside the one you are working in, not at the top
+           of a list you then have to hunt down. */
+        val g = sketch.newGroup(
+            getString(R.string.group_new, sketch.groups.size + 1),
+            sketch.indexAboveActive(),
+        )
         val at = sketch.indexOfGroup(g)
         val previous = sketch.activeGroup
         /*
@@ -1562,6 +1570,26 @@ class MainActivity : Activity(), Gestures.Listener {
         pushStrokes()
         surface.requestRender()
         scheduleAutosave()
+    }
+
+    /**
+     * Look at one group alone, or stop.
+     *
+     * FACT: "When a group is isolated, only the curves within that group are
+     * visible. Tap another group to isolate and view only its curves. Tap and
+     * hold the eyeball icon again to exit isolation."
+     *
+     * No history step. Isolation is a way of LOOKING at the drawing — nothing
+     * about the document changes — and an undo stack full of "looked at group
+     * 3" is an undo stack you cannot use to undo anything.
+     */
+    private fun isolateGroup(id: Int) {
+        sketch.isolatedGroup = if (sketch.isolatedGroup == id) null else id
+        refreshScene()
+        announce(
+            if (sketch.isolatedGroup == null) getString(R.string.isolation_off)
+            else getString(R.string.isolation_on, sketch.groupById(id)?.name ?: ""),
+        )
     }
 
     private fun assignSelectionTo(id: Int) {
@@ -1744,8 +1772,20 @@ class MainActivity : Activity(), Gestures.Listener {
         }
 
         when (tool) {
-            Tool.DRAW, Tool.SHAPE, Tool.GUIDE, Tool.FLATGUIDE ->
-                beginStroke(x, y, pressure)
+            /*
+             * FACT: "When a group is hidden, you cannot add new curves to it
+             * even if it is the active group." Refused at the START of the
+             * stroke rather than at the end: a curve you were allowed to draw
+             * and then told about is a curve you have to draw twice, and one
+             * that vanishes on the pen-up looks like a crash.
+             */
+            Tool.DRAW, Tool.SHAPE, Tool.GUIDE, Tool.FLATGUIDE -> {
+                if (sketch.groupById(sketch.activeGroup)?.visible == false) {
+                    toast(getString(R.string.group_hidden_draw))
+                } else {
+                    beginStroke(x, y, pressure)
+                }
+            }
 
             /*
              * The plane a bend stroke is drawn on: camera-facing, through the
@@ -2679,10 +2719,27 @@ class MainActivity : Activity(), Gestures.Listener {
         return out
     }
 
+    /**
+     * FACT: there are TWO symmetric duplicates, and this had neither exactly.
+     *
+     * "Symmetrically by View" reflects "based on the view direction. If the
+     * sketch is skewed to the right, it will be duplicated to the left".
+     * "Symmetrically by Mirror can only be used when the mirror is on. It
+     * duplicates symmetrically based on the currently active mirror axis. If
+     * multiple axes are active, multiple curves will be duplicated at once."
+     *
+     * So the mirror decides when it is on, and the view when it is not —
+     * which also means the button never refuses: reflecting across the glass
+     * is always a sensible reading of "the other side".
+     */
     private fun mirrorSelection() {
         val before = sketch.selection
-        if (before.isEmpty()) { toast("Nothing selected"); return }
-        val copies = Selection.mirroredDuplicate(sketch, "x")
+        if (before.isEmpty()) { toast(getString(R.string.nothing_selected)); return }
+        val copies = if (mirrorAxes.isNotEmpty()) {
+            Selection.mirrorAxesDuplicate(sketch, mirrorAxes)
+        } else {
+            Selection.viewMirroredDuplicate(sketch, camera)
+        }
         pushReversible("Mirrored duplicate", copies, before)
     }
 

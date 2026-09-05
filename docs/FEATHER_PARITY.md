@@ -144,6 +144,36 @@ Two navigation details are documented and not implemented here:
 - **The orbit point is the depth-of-field focus**: "The orbit point also
   functions as a focus point for Depth of Field (DOF)."
 
+## Ported from the group and duplicate pages
+
+Read and implemented in the same pass:
+
+- **A duplicate lands on the original.** "The duplicated curves are in the same
+  position as the original, so be careful not to confuse them." This nudged the
+  copy 24px across the glass so it read as a copy — kinder on the eye, and
+  wrong: a duplicate you place yourself has a known starting point.
+- **There are two symmetric duplicates.** "Symmetrically by View" reflects
+  "based on the view direction. If the sketch is skewed to the right, it will
+  be duplicated to the left". "Symmetrically by Mirror can only be used when
+  the mirror is on… If multiple axes are active, multiple curves will be
+  duplicated at once." This build had one, hardwired to X. The button now uses
+  the mirror when it is on and the view when it is not.
+- **A new group goes directly above the active one**, not at the top of the
+  list, which is where this put it.
+- **A hidden group refuses ink.** "When a group is hidden, you cannot add new
+  curves to it even if it is the active group." Refused at the start of the
+  stroke rather than at the end.
+- **Group isolation**, which did not exist here: "Tap and hold the eyeball icon
+  on the far right to isolate the group. When a group is isolated, only the
+  curves within that group are visible… Tap and hold the eyeball icon again to
+  exit isolation." Held as a separate state rather than by hiding everything
+  else, so backing out does not leave a dozen groups switched off.
+
+Still missing from the same two pages, and bigger: **groups can be
+multi-selected** ("You can select multiple groups by tapping another group
+while one is already selected"), and selected groups can be **rearranged and
+merged**, not only deleted and duplicated.
+
 ## Still unread
 
 `/docs/interfaceandgestures/applepencil` and `squeezemenu`,

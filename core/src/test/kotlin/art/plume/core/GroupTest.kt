@@ -550,4 +550,60 @@ class GroupTest {
         for (s in members) sk.remove(s)
         assertEquals(0, sk.strokes.size)
     }
+    // ---- the documented behaviours ---------------------------------------
+
+    @Test
+    fun `a new group lands directly above the active one`() {
+        val sketch = Sketch()
+        val a = sketch.newGroup("a")
+        val b = sketch.newGroup("b")          // list is now [b, a]
+        sketch.setActiveGroup(a.id)
+
+        val fresh = sketch.newGroup("fresh", sketch.indexAboveActive())
+        assertEquals(
+            listOf("b", "fresh", "a"), sketch.groups.map { it.name },
+            "FACT: created directly above the current active group",
+        )
+        assertEquals(b.id, sketch.groups[0].id)
+        assertEquals(fresh.id, sketch.groups[1].id)
+    }
+
+    @Test
+    fun `isolating a group hides every other one without hiding them`() {
+        val sketch = Sketch()
+        val a = sketch.newGroup("a")
+        val b = sketch.newGroup("b")
+        val inA = Stroke(brush = "pen").also { it.pts.add(StrokePoint(Vec3())) }
+        val inB = Stroke(brush = "pen").also { it.pts.add(StrokePoint(Vec3())) }
+        sketch.add(inA); sketch.add(inB)
+        sketch.assign(inA, a); sketch.assign(inB, b)
+
+        sketch.isolatedGroup = a.id
+        assertTrue(sketch.visible(inA))
+        assertFalse(sketch.visible(inB), "only the curves within that group are visible")
+
+        /* the OTHER groups are not switched off, which is the whole point:
+           backing out of isolation must not leave a dozen hidden groups */
+        assertTrue(b.visible, "isolation is a way of looking, not a dozen hides")
+
+        sketch.isolatedGroup = null
+        assertTrue(sketch.visible(inB), "and it comes straight back")
+    }
+
+    @Test
+    fun `isolating a hidden group shows it, because you asked for that one`() {
+        val sketch = Sketch()
+        val a = sketch.newGroup("a")
+        val s = Stroke(brush = "pen").also { it.pts.add(StrokePoint(Vec3())) }
+        sketch.add(s); sketch.assign(s, a)
+
+        a.visible = false
+        sketch.isolatedGroup = a.id
+        /* Naming a group in the one gesture that means "show me this alone"
+           outranks the switch that hid it. The alternative — isolating onto a
+           blank canvas and leaving you to work out that the group you just
+           pointed at is switched off — is a worse answer to the same tap. */
+        assertTrue(sketch.visible(s), "isolation shows the group you named")
+    }
+
 }
