@@ -72,6 +72,9 @@ enum class ColorTarget { INK, BACKGROUND, LIGHT, GUIDE }
 enum class InputToggle {
     FINGER, AUTO_GUIDE, ISOLATE, CLAMP, HOLD_SHAPE, STABLE, ORTHO, THEME, HIDE_UI, DIAG,
     HOVER_NIB, ACTION_PILL,
+
+    /** FACT: "Toggle the Orbit Point on or off… Pin… Show orbit point." */
+    ORBIT_SHOW, ORBIT_PIN,
 }
 
 /** Everything a chrome button asks for that is not a change of tool. */
@@ -272,6 +275,12 @@ class Chrome(private val act: Activity, val t: Tokens) {
     private var envGrid = true
     private var envAxis = false
     private var envFog = false
+    private var optOrbitShow = true
+    private var optOrbitPin = false
+
+    /** The orbit point, drawn where the view is built around. */
+    private val orbitMark = OrbitMark(act, t)
+
     private var envShaded = true
     private var envRender = false
     private lateinit var renderMode: IcoButton
@@ -3369,6 +3378,17 @@ class Chrome(private val act: Activity, val t: Tokens) {
             .option("actionpill", act.getString(R.string.opt_actionpill)) {
                 onInput(InputToggle.ACTION_PILL)
             }
+            /* FACT: "Orbit Point Options — Toggle the Orbit Point on or off.
+               Enable the Pin orbit point option to pin the orbit point. Use
+               the Show orbit point option to toggle the visibility of the
+               orbit point on or off." Two switches, and this build reached
+               both of them only through a press-and-hold on the canvas. */
+            .option("orbitshow", act.getString(R.string.opt_orbit_show)) {
+                onInput(InputToggle.ORBIT_SHOW)
+            }
+            .option("orbitpin", act.getString(R.string.opt_orbit_pin)) {
+                onInput(InputToggle.ORBIT_PIN)
+            }
         body.addView(viewGrid, matchWrap(t.dp(4f)))
 
         val views = OptionGrid(act, t, 6)
@@ -3537,6 +3557,10 @@ class Chrome(private val act: Activity, val t: Tokens) {
                 height = ViewGroup.LayoutParams.MATCH_PARENT,
             ),
         )
+        /* FACT: the orbit point is "the center of the screen, marked with a
+           crosshair" — the camera looks at it, so that is exactly where it
+           projects, and no per-frame arithmetic is needed to place it */
+        root.addView(orbitMark, lp(Gravity.CENTER, width = t.dp(34f), height = t.dp(34f)))
         root.addView(ctxBar, lp(Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL, bottom = t.px(R.dimen.ctxBottom)))
         root.addView(toolPill, lp(Gravity.TOP or Gravity.END, top = e, right = e))
         root.addView(topLeft, lp(Gravity.TOP or Gravity.START, top = e, left = e))
@@ -4064,9 +4088,13 @@ class Chrome(private val act: Activity, val t: Tokens) {
         focal: Double, ortho: Boolean, hideUi: Boolean, diag: Boolean, save: String,
         hoverNib: Boolean = true,
         actionPillOn: Boolean = true,
+        orbitShow: Boolean = true,
+        orbitPin: Boolean = false,
     ) {
         optHoverNib = hoverNib
         optActionPill = actionPillOn
+        optOrbitShow = orbitShow
+        optOrbitPin = orbitPin
         optDiag = diag
         optFinger = finger; optAutoGuide = autoGuide; optIsolate = isolate
         optClamp = clamp; optHoldShape = holdShape; optStable = stableOn
@@ -5085,6 +5113,19 @@ class Chrome(private val act: Activity, val t: Tokens) {
         viewGrid.setOn("diag", optDiag)
         viewGrid.setOn("hovernib", optHoverNib)
         viewGrid.setOn("actionpill", optActionPill)
+        viewGrid.setOn("orbitshow", optOrbitShow)
+        viewGrid.setOn("orbitpin", optOrbitPin)
+        /*
+         * FACT: "Tap and hold on a curve or grid to pin the orbit point… The
+         * orbit point also functions as a focus point for Depth of Field."
+         *
+         * Which is why it is worth being able to SEE: with depth of field on,
+         * the sharp plane of the picture is wherever this is, and an invisible
+         * control that decides what is in focus is a control you tune by
+         * guesswork.
+         */
+        orbitMark.visibility = if (optOrbitShow && !optHideUi) View.VISIBLE else View.GONE
+        orbitMark.pinned = optOrbitPin
         stableBar.value = stableAmt
         stableValue.text = (stableAmt * 100).toInt().toString()
         radialBar.value = radialAmt.toDouble()

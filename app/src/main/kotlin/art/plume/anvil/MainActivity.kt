@@ -1240,8 +1240,42 @@ class MainActivity : Activity(), Gestures.Listener {
      * are how you are working rather than part of the drawing, and undoing
      * twice should not turn the stabiliser back on and lose your last stroke.
      */
+    /** FACT: "Use the Show orbit point option to toggle the visibility." */
+    private var orbitShow = true
+
     private fun flipInput(which: InputToggle) {
         when (which) {
+            /*
+             * FACT: "Toggle the Orbit Point on or off. Enable the Pin orbit
+             * point option to pin the orbit point."
+             *
+             * Pinning from here pins where the view is ALREADY centred, which
+             * is the difference between this and the press-and-hold: the hold
+             * says "there", and this says "here, and stay". Unpinning leaves
+             * the camera exactly where it is and lets the pivot come back to
+             * the middle of the work.
+             */
+            InputToggle.ORBIT_SHOW -> {
+                orbitShow = !orbitShow
+                pushSettings()
+            }
+            InputToggle.ORBIT_PIN -> {
+                val eye = camera.eye.copy()
+                if (camera.pinned) {
+                    camera.pinned = false
+                    camera.pivot.set(0.0, 0.0, 0.0)
+                } else {
+                    camera.pinned = true
+                }
+                camera.lookFrom(eye)
+                pushCamera()
+                pushSettings()
+                toast(
+                    getString(
+                        if (camera.pinned) R.string.pivot_pinned else R.string.pivot_released,
+                    ),
+                )
+            }
             InputToggle.FINGER -> {
                 gestures.fingerDraws = !gestures.fingerDraws
                 /* their setting, not our guess about their hardware: a pen
@@ -1319,6 +1353,8 @@ class MainActivity : Activity(), Gestures.Listener {
             getString(R.string.autosaves_here),
             hoverNibOn,
             actionPillOn,
+            orbitShow,
+            camera.pinned,
         )
     }
 

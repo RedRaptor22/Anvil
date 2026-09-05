@@ -1497,6 +1497,48 @@ class Joy2D(
 }
 
 /**
+ * THE ORBIT POINT, AND THE CROSSHAIR THE 2D JOYSTICK TURNS AROUND.
+ *
+ * FACT: "Tap and hold on a curve or grid to pin the orbit point… The orbit
+ * point also functions as a focus point for Depth of Field", and the 2D
+ * joystick's own page: "The scaling reference point is the center of the
+ * screen, marked with a crosshair."
+ *
+ * They are the same point. The camera looks AT the orbit point, so it always
+ * projects to the middle of the glass — which means this needs no arithmetic
+ * at all, only a place in the layout. Pinned, it fills in: a pinned pivot
+ * changes what every finger gesture does, and a mode you cannot see is a mode
+ * you forget you are in.
+ */
+class OrbitMark(ctx: Context, private val t: Tokens) : View(ctx) {
+
+    var pinned = false
+        set(v) { if (field != v) { field = v; invalidate() } }
+
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+
+    override fun onDraw(canvas: Canvas) {
+        val c = width / 2f
+        val arm = t.dpf(7f)
+        val gap = t.dpf(2.5f)
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = t.dpf(1.4f)
+        paint.strokeCap = Paint.Cap.ROUND
+        /* drawn over the drawing, so it carries its own contrast: a mid grey
+           reads against both a white page and a black one */
+        paint.color = if (pinned) t.accent else 0x99808894.toInt()
+        canvas.drawLine(c - arm, c, c - gap, c, paint)
+        canvas.drawLine(c + gap, c, c + arm, c, paint)
+        canvas.drawLine(c, c - arm, c, c - gap, paint)
+        canvas.drawLine(c, c + gap, c, c + arm, paint)
+        if (pinned) {
+            paint.style = Paint.Style.FILL
+            canvas.drawCircle(c, c, t.dpf(1.8f), paint)
+        }
+    }
+}
+
+/**
  * `#joyStrip` — the depth axis, towards and away from the camera.
  *
  * Separate from the pad because there is nowhere on a flat circle to put the

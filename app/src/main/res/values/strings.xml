@@ -361,4 +361,6 @@
     <string name="group_merged">Merged %1$d groups</string>
     <string name="group_merge_needs_two">Pick two groups to merge</string>
     <string name="group_pick_first">Hold a group to pick it</string>
+    <string name="opt_orbit_show">Orbit dot</string>
+    <string name="opt_orbit_pin">Pin orbit</string>
 </resources>
