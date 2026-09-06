@@ -46,7 +46,9 @@ class GuideEditingTest {
     @Test
     fun `a bent sweep starts at the orange line and follows the stroke`() {
         val g = sweptGuide()
-        val anchor = assertNotNull(g.sweep).anchor.copy()
+        /* the orange line's start, which is where A.6 says a bend begins —
+           not the profile's centroid, which marks nothing on the surface */
+        val orange = assertNotNull(g.anchorRow).first().copy()
 
         // a stroke heading off to the right and up
         val path = (0 until 20).map {
@@ -58,8 +60,8 @@ class GuideEditingTest {
         val sw = assertNotNull(g.sweep)
         assertEquals(0, sw.anchorIndex, "bending starts from the orange line")
         assertTrue(
-            sw.path[0].distanceTo(anchor) < 1e-9,
-            "the path was not translated onto the anchor",
+            sw.path[0].distanceTo(orange) < 1e-9,
+            "the path was not translated onto the orange line",
         )
 
         /*

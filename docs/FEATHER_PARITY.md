@@ -307,6 +307,30 @@ of a stroke. Such turns are eased open until they clear the reach; a bend the
 profile fits round is left exactly where it was drawn, which is asserted to
 the last decimal place.
 
+**The bend hinged on a point nothing marks.** A.6 says "the bending starts
+from the ORANGE LINE, which is the starting point of the 3D Guide", and the
+documentation's picture shows that line running the length of the surface from
+the dot labelled "Starting point" — the rail traced by the FIRST point of the
+profile you drew. It was read as the sweep's `anchor`, which is the profile's
+CENTROID: half a profile away, out in the middle of the surface, marking
+nothing and drawn nowhere. So a bend slid the guide sideways as it bent — on a
+profile one unit long, a stroke begun exactly on the orange line moved the
+surface's starting point 0.75 of a unit off it.
+
+The centroid is right for BUILDING a sweep, where it keeps the surface centred
+on the stroke you drew, and that is left alone. It is wrong for bending, where
+the documentation names the edge. `bend` now re-hangs the profile off its own
+first point, so the drawn line becomes the new orange line rather than a
+centreline through the middle of the surface. Being re-hung also leaves the
+next bend on the same footing as this one, which is what "you can repeat the
+Bend 3D Guide process multiple times" needs.
+
+**The orange line is not drawn.** `Guide.anchorRow` is computed on every
+rebuild and read by nothing: Anvil has never rendered the line the
+documentation puts on the surface and names twice. The bend now works from it
+correctly, but you cannot see where a bend will start. Not done, and a real
+divergence.
+
 ## Known and not done
 
 - **The eyedropper only samples the active group.** "The curve you want to

@@ -233,6 +233,23 @@ class Chrome(private val act: Activity, val t: Tokens) {
 
     val root = FrameLayout(act)
 
+    /**
+     * EVERY CANVAS CONTROL, IN ONE LAYER THAT HOME CAN TURN OFF.
+     *
+     * Home is a place the app can be, not a card laid over the drawing — so
+     * while it is up, the rail, the pill, the dock, the joystick and the rest
+     * have no business being on screen, laid out, or in the way of a tap.
+     * They were only ever HIDDEN BY THE GALLERY SITTING ON TOP OF THEM, which
+     * covers them on a plain rectangular screen and does not on a device with
+     * a display cutout: the root is inset by the cutout, so the gallery is
+     * inset with it and the controls underneath show around its edge.
+     *
+     * One parent for the lot of them answers it properly. Home hides the
+     * layer rather than covering it, which is also what stops a control that
+     * is merely out of sight from still being hit.
+     */
+    private val canvasLayer = FrameLayout(act)
+
     // ---- state the chrome renders ----------------------------------------
 
     private var tool = Tool.DRAW
@@ -1485,14 +1502,19 @@ class Chrome(private val act: Activity, val t: Tokens) {
         card.post {
             val a = IntArray(2); val r = IntArray(2)
             anchor.getLocationInWindow(a)
-            root.getLocationInWindow(r)
+            /* the box the card is actually laid out in, which is the layer and
+               not the root: a margin is measured from its own parent, and the
+               root is the one carrying the display cutout's padding */
+            canvasLayer.getLocationInWindow(r)
             val gap = t.dp(10f); val edge = t.dp(8f)
             val left = (a[0] - r[0]) + anchor.width + gap
             val top = (a[1] - r[1]) + anchor.height / 2 - card.height / 2
             val p = card.layoutParams as FrameLayout.LayoutParams
             p.gravity = Gravity.TOP or Gravity.START
-            p.leftMargin = left.coerceIn(edge, maxOf(edge, root.width - card.width - edge))
-            p.topMargin = top.coerceIn(edge, maxOf(edge, root.height - card.height - edge))
+            p.leftMargin =
+                left.coerceIn(edge, maxOf(edge, canvasLayer.width - card.width - edge))
+            p.topMargin =
+                top.coerceIn(edge, maxOf(edge, canvasLayer.height - card.height - edge))
             card.layoutParams = p
         }
     }
@@ -3536,13 +3558,22 @@ class Chrome(private val act: Activity, val t: Tokens) {
 
     private fun place() {
         val e = t.px(R.dimen.edge)
+        /* the layer everything up to the gallery goes into, filling the root */
+        root.addView(
+            canvasLayer,
+            lp(
+                Gravity.CENTER,
+                width = ViewGroup.LayoutParams.MATCH_PARENT,
+                height = ViewGroup.LayoutParams.MATCH_PARENT,
+            ),
+        )
         /* z order is child order in a FrameLayout, so this list IS the
            stylesheet's z-index ladder: 5 chrome · 6 tabs · 25 dock · 26/28
            popovers and docked cards · 29/30 modal · 31 slide · 50 toast */
         /* FIRST, so it sits UNDER every control: the preview belongs on the
            drawing, and one that wandered over a button would be a button you
            could not read. */
-        root.addView(
+        canvasLayer.addView(
             hoverNib,
             lp(
                 Gravity.CENTER,
@@ -3553,52 +3584,52 @@ class Chrome(private val act: Activity, val t: Tokens) {
         /* FACT: the orbit point is "the center of the screen, marked with a
            crosshair" — the camera looks at it, so that is exactly where it
            projects, and no per-frame arithmetic is needed to place it */
-        root.addView(orbitMark, lp(Gravity.CENTER, width = t.dp(34f), height = t.dp(34f)))
-        root.addView(ctxBar, lp(Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL, bottom = t.px(R.dimen.ctxBottom)))
-        root.addView(toolPill, lp(Gravity.TOP or Gravity.END, top = e, right = e))
-        root.addView(topLeft, lp(Gravity.TOP or Gravity.START, top = e, left = e))
-        root.addView(helpPanel, lp(Gravity.TOP or Gravity.START, top = e, left = t.px(R.dimen.helpLeft)))
-        root.addView(viewInfo, lp(Gravity.TOP or Gravity.START, top = e, left = t.px(R.dimen.viewInfoLeft)))
-        root.addView(brushRail, lp(Gravity.START or Gravity.CENTER_VERTICAL, left = e, width = t.px(R.dimen.brushRailW)))
-        root.addView(undoPill, lp(Gravity.BOTTOM or Gravity.START, left = e, bottom = t.px(R.dimen.undoBottom)))
+        canvasLayer.addView(orbitMark, lp(Gravity.CENTER, width = t.dp(34f), height = t.dp(34f)))
+        canvasLayer.addView(ctxBar, lp(Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL, bottom = t.px(R.dimen.ctxBottom)))
+        canvasLayer.addView(toolPill, lp(Gravity.TOP or Gravity.END, top = e, right = e))
+        canvasLayer.addView(topLeft, lp(Gravity.TOP or Gravity.START, top = e, left = e))
+        canvasLayer.addView(helpPanel, lp(Gravity.TOP or Gravity.START, top = e, left = t.px(R.dimen.helpLeft)))
+        canvasLayer.addView(viewInfo, lp(Gravity.TOP or Gravity.START, top = e, left = t.px(R.dimen.viewInfoLeft)))
+        canvasLayer.addView(brushRail, lp(Gravity.START or Gravity.CENTER_VERTICAL, left = e, width = t.px(R.dimen.brushRailW)))
+        canvasLayer.addView(undoPill, lp(Gravity.BOTTOM or Gravity.START, left = e, bottom = t.px(R.dimen.undoBottom)))
         /* bottom-left, above the undo pill on a tablet and above the dock on a
            phone — the one control that has to be one tap away at every width */
-        root.addView(penPill, lp(Gravity.BOTTOM or Gravity.START, left = e, bottom = t.px(R.dimen.penPillBottom)))
-        root.addView(selBar, lp(Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL, bottom = t.px(R.dimen.selBarBottom)))
-        root.addView(
+        canvasLayer.addView(penPill, lp(Gravity.BOTTOM or Gravity.START, left = e, bottom = t.px(R.dimen.penPillBottom)))
+        canvasLayer.addView(selBar, lp(Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL, bottom = t.px(R.dimen.selBarBottom)))
+        canvasLayer.addView(
             railTab,
             lp(
                 Gravity.START or Gravity.CENTER_VERTICAL,
                 width = t.px(R.dimen.railTabW), height = t.px(R.dimen.railTabH),
             ),
         )
-        root.addView(
+        canvasLayer.addView(
             joyPanel,
             lp(Gravity.END or Gravity.CENTER_VERTICAL, right = t.px(R.dimen.edge)),
         )
-        root.addView(
+        canvasLayer.addView(
             liquifyPanel,
             lp(
                 Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL,
                 bottom = t.px(R.dimen.liquifyBottom),
             ),
         )
-        root.addView(dock, lp(Gravity.BOTTOM, width = ViewGroup.LayoutParams.MATCH_PARENT))
-        root.addView(brushGrid, lp(Gravity.START or Gravity.CENTER_VERTICAL, left = t.px(R.dimen.brushGridLeft)))
-        root.addView(stagePanel, lp(Gravity.TOP or Gravity.END, top = t.px(R.dimen.stageTop), right = e, width = t.px(R.dimen.stagePanelW)))
-        root.addView(scrim, lp(Gravity.CENTER, width = ViewGroup.LayoutParams.MATCH_PARENT, height = ViewGroup.LayoutParams.MATCH_PARENT))
-        root.addView(sysMenu, lp(Gravity.CENTER, width = t.px(R.dimen.sysMenuW)))
-        root.addView(colorCard, lp(Gravity.START or Gravity.CENTER_VERTICAL, left = t.px(R.dimen.brushGridLeft), width = t.px(R.dimen.colorCardW)))
-        root.addView(slidePop, lp(Gravity.START or Gravity.CENTER_VERTICAL, left = t.px(R.dimen.brushGridLeft), width = t.px(R.dimen.slidePopW)))
-        root.addView(
+        canvasLayer.addView(dock, lp(Gravity.BOTTOM, width = ViewGroup.LayoutParams.MATCH_PARENT))
+        canvasLayer.addView(brushGrid, lp(Gravity.START or Gravity.CENTER_VERTICAL, left = t.px(R.dimen.brushGridLeft)))
+        canvasLayer.addView(stagePanel, lp(Gravity.TOP or Gravity.END, top = t.px(R.dimen.stageTop), right = e, width = t.px(R.dimen.stagePanelW)))
+        canvasLayer.addView(scrim, lp(Gravity.CENTER, width = ViewGroup.LayoutParams.MATCH_PARENT, height = ViewGroup.LayoutParams.MATCH_PARENT))
+        canvasLayer.addView(sysMenu, lp(Gravity.CENTER, width = t.px(R.dimen.sysMenuW)))
+        canvasLayer.addView(colorCard, lp(Gravity.START or Gravity.CENTER_VERTICAL, left = t.px(R.dimen.brushGridLeft), width = t.px(R.dimen.colorCardW)))
+        canvasLayer.addView(slidePop, lp(Gravity.START or Gravity.CENTER_VERTICAL, left = t.px(R.dimen.brushGridLeft), width = t.px(R.dimen.slidePopW)))
+        canvasLayer.addView(
             diag,
             lp(
                 Gravity.TOP or Gravity.END,
                 top = t.px(R.dimen.stageTop), right = t.px(R.dimen.edge), width = t.dp(184f),
             ),
         )
-        root.addView(keypad, lp(Gravity.CENTER))
-        root.addView(
+        canvasLayer.addView(keypad, lp(Gravity.CENTER))
+        canvasLayer.addView(
             walkPanel,
             lp(
                 Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL,
@@ -3607,7 +3638,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
             ),
         )
         /* under the icon that reveals it, at the top-right corner */
-        root.addView(
+        canvasLayer.addView(
             mirrorBar,
             lp(
                 Gravity.TOP or Gravity.END,
@@ -3615,13 +3646,13 @@ class Chrome(private val act: Activity, val t: Tokens) {
             ),
         )
         /* the tip sits over everything, because it names everything */
-        root.addView(
+        canvasLayer.addView(
             tipCard,
             lp(Gravity.TOP or Gravity.START),
         )
         /* top centre, clear of the readout on the left and the tool pill on
            the right — the one strip of the top edge nothing else uses */
-        root.addView(
+        canvasLayer.addView(
             actionPill,
             lp(Gravity.TOP or Gravity.CENTER_HORIZONTAL, top = t.px(R.dimen.actionPillTop)),
         )
@@ -4590,6 +4621,14 @@ class Chrome(private val act: Activity, val t: Tokens) {
 
     fun setGallery(open: Boolean) {
         gallery.visibility = if (open) View.VISIBLE else View.GONE
+        /*
+         * AND THE CANVAS CONTROLS GO WITH IT. Covering them was not the same
+         * as putting them away: the root is inset by a display cutout, so the
+         * gallery is inset too and the rail and the pill showed around its
+         * edge — and a control that is merely underneath is still a control
+         * that can be hit.
+         */
+        canvasLayer.visibility = if (open) View.GONE else View.VISIBLE
         if (open) closeTop() else homePicked.clear()
     }
 

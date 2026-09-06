@@ -86,15 +86,57 @@ class BendTest {
     @Test
     fun `the bend starts at the orange line, wherever the stroke was drawn`() {
         val g = Guides.createFromStroke(potProfile(), view, right, 1.0)!!
-        val anchor = g.sweep!!.anchor.copy()
+        /*
+         * The orange line's own start — the profile's first point, the dot the
+         * documentation marks "Starting point". NOT the profile's centroid,
+         * which this used to measure: that sits half a profile out in the
+         * middle of the surface, marks nothing, and is not what A.6 names.
+         */
+        val orange = g.anchorRow!!.first().copy()
 
         // a bend stroke drawn a long way from the guide
         val far = (0 until 30).map { i -> Vec3(5.0 + i * 0.01, 3.0, -2.0) }
         assertTrue(GuideEditing.bend(g, far))
 
         val path = g.sweep!!.path
-        assertEquals(0.0, path[0].distanceTo(anchor), 1e-9, "the path starts at the anchor")
+        assertEquals(
+            0.0, path[0].distanceTo(orange), 1e-9,
+            "the path starts at the orange line",
+        )
         assertEquals(0, g.sweep!!.anchorIndex, "and the orange line is that start")
+    }
+
+    /**
+     * THE GUIDE DOES NOT LEAP WHEN IT BENDS.
+     *
+     * FACT (A.6): "The bending starts from the orange line, which is the
+     * starting point of the 3D Guide." So the surface's starting point is
+     * still on the orange line when the bend is over — the guide hinges
+     * there, it does not jump off it.
+     *
+     * It used to hinge on the profile's CENTROID instead, so the surface slid
+     * out by the distance from the centroid to the edge: on a profile one
+     * unit long that was three quarters of a unit, away from a stroke started
+     * exactly on the line the documentation says to start from.
+     */
+    @Test
+    fun `the guide's starting point stays on the orange line through a bend`() {
+        val g = Guides.createFromStroke(potProfile(), view, right, 1.0)!!
+        val orange = g.anchorRow!!.first().copy()
+
+        val stroke = (0 until 24).map { i ->
+            val t = i / 23.0
+            Vec3(orange.x + t * 0.9, orange.y + sin(t * 2.0) * 0.2, orange.z)
+        }
+        assertTrue(GuideEditing.bend(g, stroke))
+
+        /* row 0's first point IS the guide's starting point: the profile is
+           hung off its own start, so it rides the drawn line */
+        val start = rowsOf(g).first().first()
+        assertEquals(
+            0.0, start.distanceTo(orange), 1e-9,
+            "the guide leapt ${start.distanceTo(orange)} off the orange line",
+        )
     }
 
     @Test

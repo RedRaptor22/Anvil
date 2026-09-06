@@ -18,9 +18,33 @@ object GuideEditing {
     /**
      * Bend a SWEPT guide by replacing its path with the stroke you drew.
      *
-     * The path is translated so it starts at the anchor — the orange line, the
-     * documented starting point of the bend — and otherwise used EXACTLY as
-     * drawn.
+     * FACT (A.6): "the 3D Guide will bend along the drawn line. The bending
+     * starts from the ORANGE LINE, which is the starting point of the 3D
+     * Guide."
+     *
+     * The orange line is the rail the profile's FIRST point traces as the
+     * guide is swept — in the documentation's picture it runs the length of
+     * the surface from the dot marked "Starting point", which is where the
+     * pen went down to draw the profile. Your bend stroke becomes that rail:
+     * it is translated so it begins where the orange line begins, and is
+     * otherwise used EXACTLY as drawn.
+     *
+     * IT USED TO RIDE ON THE PROFILE'S CENTROID, which is not on the orange
+     * line at all — it is half a profile away, out in the middle of the
+     * surface. So the bend hinged about a point nothing marks and nothing
+     * documents, and the guide leapt sideways as it bent: measured on a
+     * profile one unit long, starting the stroke on the orange line moved the
+     * surface's starting point 0.75 of a unit away from the pen. The centroid
+     * is the right anchor for BUILDING a sweep, where it keeps the surface
+     * centred on the stroke you drew; it is the wrong one for bending, where
+     * the documentation names the edge instead.
+     *
+     * So the profile is re-hung off its own first point before the new path
+     * is laid: `local` is shifted so the start sits at the origin, which is
+     * what makes the drawn line the new rail rather than a centreline. That
+     * also leaves the next bend on the same footing as this one — the anchor
+     * is already the start point — which is what "you can repeat the Bend 3D
+     * Guide process multiple times" needs.
      *
      * An earlier version in the web build also rotated the path so its start
      * tangent matched the guide's original extrusion direction. That was an
@@ -35,14 +59,28 @@ object GuideEditing {
     fun bend(guide: Guide, worldPath: List<Vec3>): Boolean {
         val sw = guide.sweep ?: return false
         if (worldPath.size < 2) return false
+        if (sw.local.isEmpty()) return false
+
+        /* where the orange line begins: the profile's first point, on the row
+           the guide was drawn on */
+        val orangeStart = guide.anchorRow?.firstOrNull()
+            ?: Guides.evalSweep(sw).getOrNull(sw.anchorIndex)?.firstOrNull()
+            ?: return false
+
+        /* re-hang the profile off that point, so it is the START that rides
+           the drawn line and the line becomes the new orange one */
+        val head = sw.local.first()
+        val local = sw.local.mapTo(ArrayList(sw.local.size)) {
+            Vec3(it.x - head.x, it.y - head.y, it.z - head.z)
+        }
 
         val path = Polyline.resample(worldPath, Tune.GUIDE_PATH_SEG + 1).toMutableList()
-        val shift = sw.anchor - path[0]
+        val shift = orangeStart - path[0]
         for (p in path) { p.x += shift.x; p.y += shift.y; p.z += shift.z }
-        relaxTightTurns(path, reachOf(sw))
+        relaxTightTurns(path, reachOf(local))
 
         val bent = Sweep(
-            sw.local, sw.anchor, 0,          // bending starts from the orange line
+            local, orangeStart.copy(), 0,    // bending starts from the orange line
             path, sw.basisR, sw.basisT, sw.depth,
         )
         guide.sweep = bent
@@ -56,9 +94,9 @@ object GuideEditing {
      * Only the two axes ACROSS the path count: the third runs along it and
      * cannot fold the surface however far it goes.
      */
-    private fun reachOf(sw: Sweep): Double {
+    private fun reachOf(local: List<Vec3>): Double {
         var most = 0.0
-        for (l in sw.local) most = max(most, kotlin.math.hypot(l.x, l.y))
+        for (l in local) most = max(most, kotlin.math.hypot(l.x, l.y))
         return most
     }
 
