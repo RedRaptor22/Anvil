@@ -1018,9 +1018,7 @@ class MainActivity : Activity(), Gestures.Listener {
                     loftSel.clear()
                     toast(getString(R.string.loft_needs_two)); return
                 }
-                previewLoft()
             }
-            Tool.PRIM -> previewPrimitive()
             else -> {}
         }
         tool = t
@@ -1032,6 +1030,27 @@ class MainActivity : Activity(), Gestures.Listener {
         if (t != Tool.SELECT) guides.active?.selected = false
         chrome.setTool(t)
         refreshControls()
+        /*
+         * THE PREVIEW IS BUILT AFTER THE TOOL IS THE CURRENT ONE.
+         *
+         * Both previews end in [showStaging], which asks `tool` which bar to
+         * put up. Staging from inside the `when` above ran while `tool` was
+         * still the PREVIOUS tool, so that question fell through to
+         * `else -> null` and the staging bar was hidden on the way in. The
+         * segments, taper and tension sliders live on that bar, and so do
+         * Done and Cancel — so the first tap on Primitives or Loft staged a
+         * guide you could see, could not shape, and could not accept. A
+         * second tap on the same tool appeared to fix it, because by then
+         * `tool` already matched, which is how this survived a device.
+         *
+         * The guards above still run first: a tool that refuses must not
+         * become the current one on its way out.
+         */
+        when (t) {
+            Tool.LOFT -> previewLoft()
+            Tool.PRIM -> previewPrimitive()
+            else -> {}
+        }
     }
 
     // ---- staging ----------------------------------------------------------
