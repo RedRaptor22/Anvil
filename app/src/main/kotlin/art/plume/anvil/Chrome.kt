@@ -632,34 +632,24 @@ class Chrome(private val act: Activity, val t: Tokens) {
      */
     private var built = false
 
-    init {
-        buildTopLeft()
-        buildViewInfo()
-        buildToolPill()
-        buildBrushRail()
-        buildUndoPill()
-        buildCtxBar()
-        buildSelBar()
-        buildKeypad()
-        buildDiag()
-        buildWalk()
-        buildJoyPanel()
-        buildLiquifyPanel()
-        buildStagePanel()
-        buildDock()
-        buildBrushGrid()
-        buildSlidePop()
-        buildColorCard()
-        buildSysMenu()
-        buildMirrorBar()
-        buildQuickMenu()
-        buildAskCard()
-        buildGallery()
-        place()
-        built = true
-        applyMode()
-        refresh()
-    }
+    /*
+     * AND THE INIT BLOCK IS AT THE VERY BOTTOM OF THIS FILE, on purpose.
+     *
+     * Kotlin runs property initialisers and init blocks in SOURCE ORDER, so
+     * a `val` declared below init is still null while init runs — and a
+     * builder that touches one gets a NullPointerException out of the
+     * constructor, out of onCreate, and an app that will not open. That is
+     * the same crash the `built` guard above fixed, arriving by a second
+     * door: not "assigned by a later builder" but "not declared yet at all".
+     *
+     * It happened. Five hundred lines of new panels were added at the end of
+     * this class with their fields beside them, which is the tidy place to
+     * put them, and every one of those fields was null by the time the
+     * builders ran. Guarding each site would be a list to keep; putting init
+     * last means every field in the class, wherever it is written, exists
+     * before a single builder runs. tools/initorder.py holds it there.
+     */
+
 
     // ======================================================================
     // construction
@@ -5184,6 +5174,35 @@ class Chrome(private val act: Activity, val t: Tokens) {
             setColor(argb)
             setStroke(t.dp(2f), t.dim)
         }
+    }
+
+    init {
+        buildTopLeft()
+        buildViewInfo()
+        buildToolPill()
+        buildBrushRail()
+        buildUndoPill()
+        buildCtxBar()
+        buildSelBar()
+        buildKeypad()
+        buildDiag()
+        buildWalk()
+        buildJoyPanel()
+        buildLiquifyPanel()
+        buildStagePanel()
+        buildDock()
+        buildBrushGrid()
+        buildSlidePop()
+        buildColorCard()
+        buildSysMenu()
+        buildMirrorBar()
+        buildQuickMenu()
+        buildAskCard()
+        buildGallery()
+        place()
+        built = true
+        applyMode()
+        refresh()
     }
 
     companion object {

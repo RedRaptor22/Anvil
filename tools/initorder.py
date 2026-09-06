@@ -9,11 +9,24 @@ test suite sees it either: `:core` has no Android in it, and the APK job only
 proves the code compiles. The app crashed on every launch for four commits
 because buildColorCard refreshed the whole screen halfway through construction.
 
-So this reads Chrome.kt and fails on the two shapes of that fault:
+So this reads Chrome.kt and fails on the shapes of that fault:
 
-  1. a builder that reads a `lateinit` a later builder assigns, and
+  1. a builder that reads a `lateinit` a later builder assigns,
   2. a missing `built` guard on refresh(), which is what stops a builder from
-     reaching every control in the app through one helper call.
+     reaching every control in the app through one helper call, and
+  3. a property with an initialiser declared BELOW the init block.
+
+The third is a second door onto the same crash, and it caught this project
+out once the guard was in place. Kotlin runs property initialisers and init
+blocks in SOURCE ORDER, so a `val panel = LinearLayout(act)` written below
+init is still null while init runs — and the builder that touches it throws a
+NullPointerException out of the constructor. It is invisible to the compiler,
+because the type says non-null and it will be non-null a moment later.
+
+Five hundred lines of new panels were added at the end of the class with their
+fields beside them, which is the tidy place to put them, and every one of
+those fields was null by the time the builders ran. The fix is structural:
+init goes LAST, after every declaration, and this holds it there.
 
 It needs nothing but Python, so it runs in the job that has no Android SDK.
 """
@@ -78,6 +91,28 @@ def main() -> int:
                         f"{SRC}:{i + 1}: {f}() reads `{name}`, which {home}() "
                         f"assigns later in init"
                     )
+
+    # ---- 3. nothing with an initialiser may be declared below init ----------
+    #
+    # A `lateinit` is exempt: it has no initialiser to be waiting for, and the
+    # builder that assigns it is ordered by check 1 above. Everything else —
+    # a val holding a view, a var holding a default — has to exist before the
+    # first builder runs, and source order is the only thing that decides.
+    init_line = start
+    companion = next(
+        (i for i, l in enumerate(lines) if re.match(r"    (?:private )?companion object", l)),
+        len(lines),
+    )
+    if init_line > companion:
+        faults.append(f"{SRC}: the init block sits inside or after the companion object")
+    for i in range(init_line + 1, companion):
+        m = re.match(r"    private (?:val|var) (\w+)\s*(?::[^=]+)?=", lines[i])
+        if m and "lateinit" not in lines[i]:
+            faults.append(
+                f"{SRC}:{i + 1}: `{m.group(1)}` is declared below the init block, "
+                f"so it is still null while the builders run — move it up, or "
+                f"move init further down"
+            )
 
     body = "\n".join(lines)
     if not re.search(r"fun refresh\(\) \{\n\s*if \(!built\) return\b", body):
