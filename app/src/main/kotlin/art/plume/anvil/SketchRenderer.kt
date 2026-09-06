@@ -1083,6 +1083,46 @@ class SketchRenderer : GLSurfaceView.Renderer {
         )
         drawLive(l.shaded)
 
+        /*
+         * INK MASKS THE GUIDE EVEN WHEN IT WROTE NO DEPTH.
+         *
+         * Guides are drawn last, over the ink, and they clear their own way
+         * with a depth prepass — so a guide is painted only where nothing
+         * nearer already stands in the depth buffer. Opaque ink puts itself
+         * there and is left crisp. Blended ink does not: the pass above turns
+         * depth writes OFF so overlapping translucent curves can build up on
+         * one another. So at every pixel covered ONLY by blended ink the
+         * buffer still held the background, the guide's prepass passed, and
+         * the translucent sheet was composited back over the stroke.
+         *
+         * That is the "some strokes go see-through" fault. It sorted the
+         * drawing by brush rather than by anything the eye could reason
+         * about: a pen came out solid because it is opaque, a pencil was
+         * veiled because it has grit, and ANY brush turned down below full
+         * opacity was veiled too. Painting a guide in did not cover it; it
+         * covered half of it.
+         *
+         * So the ink that skipped the depth buffer writes into it here, once
+         * all of it has been composited — colour masked off, so this changes
+         * nothing about how ink blends with ink, and only decides what the
+         * guide is allowed to paint over. Opaque ink has masked guides since
+         * the beginning; this is the rest of the ink doing what it already
+         * does, not a new rule.
+         *
+         * The live stroke is in it too, or the curve under your hand is
+         * veiled while you draw it and snaps clear when you lift.
+         */
+        GLES30.glColorMask(false, false, false, false)
+        GLES30.glDepthMask(true)
+        GLES30.glDisable(GLES30.GL_BLEND)
+        for ((i, s) in list.withIndex()) if (pass(s) != OPAQUE) drawStroke(s, l.shaded, i)
+        GLES30.glPolygonOffset(
+            if (liveIsPaint()) -1f else 0f,
+            -(1f + min(list.size, DEPTH_ORDER_CAP)),
+        )
+        drawLive(l.shaded)
+        GLES30.glColorMask(true, true, true, true)
+
         GLES30.glDisable(GLES30.GL_POLYGON_OFFSET_FILL)
         GLES30.glPolygonOffset(0f, 0f)
         GLES30.glDepthMask(true)

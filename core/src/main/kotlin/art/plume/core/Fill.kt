@@ -19,18 +19,52 @@ object Fill {
     /** A runaway fill is a hang; refuse instead. */
     const val MAX_ROWS = 400
 
+    /**
+     * THE NIB A FILL IS LAID WITH, WHATEVER BRUSH IS IN THE HAND.
+     *
+     * A fill is not brushwork. It is the guide's own shape in a colour, and
+     * the brush you happen to be holding is not part of that shape — it was
+     * chosen for the marks you draw BY hand, and a fill is the one mark you
+     * are asking not to have to.
+     *
+     * Taking the held brush made a fill inherit everything the brush was for:
+     * the sketch pencil filled a guide in grain and let the surface show
+     * through it, glow filled it with light instead of paint, taper thinned
+     * every row at both ends and left the outline ragged, and the round nibs
+     * filled a flat sheet with tubes. None of that is the guide's shape.
+     *
+     * `flat` is the one that is: a hard-edged ribbon (`square` 1, so rows abut
+     * instead of leaving scalloped seams) that lies ON the surface
+     * (`paint`, so it is a decal and takes the slope term that keeps a decal
+     * out of the surface it is painted onto), with no taper, no grain, no
+     * glow and no thickness standing proud of the sheet.
+     *
+     * Colour, size and opacity still come from the caller. Those are choices
+     * about the fill; the brush was a choice about something else.
+     */
+    const val BRUSH = "flat"
+
     sealed class Result {
         class Filled(val strokes: List<Stroke>) : Result()
         /** Why it could not: a message the UI can show as-is. */
         class Refused(val reason: String) : Result()
     }
 
-    /** [proto] supplies the brush, colour and size the fill is painted with. */
+    /**
+     * [proto] supplies the colour, size and opacity a fill is painted with.
+     * Its BRUSH is deliberately not used — see [BRUSH].
+     */
     fun fillGuide(guide: Guide, proto: Stroke): Result {
         val span = GuidePainting.surfaceSpan(guide)
             ?: return Result.Refused("This guide cannot be filled")
 
-        val half = StrokeGeometry.halfWidth(proto, proto.baseRadius)
+        /* the copy is what every row is cut from, so the substitution happens
+           once, here, and the pitch below is measured off the nib that is
+           actually going to be laid down */
+        val nib = proto.withPoints(emptyList())
+        nib.brush = BRUSH
+
+        val half = StrokeGeometry.halfWidth(nib, nib.baseRadius)
         val pitch = max(half * 2 * OVERLAP, 1e-5)
 
         // run the strokes the LONG way, so a fill is a few long curves rather
@@ -82,7 +116,7 @@ object Fill {
                 val hit = GuidePainting.sampleSurface(guide, su, sv)
                 if (hit == null) { run = closeRun(run, made); continue }
                 if (run == null) {
-                    run = proto.withPoints(emptyList())
+                    run = nib.withPoints(emptyList())
                     run.guideId = guide.id
                 }
                 run.pts.add(

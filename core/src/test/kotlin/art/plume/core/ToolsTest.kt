@@ -158,6 +158,20 @@ class ToolsTest {
         ),
     )
 
+    /**
+     * The half-width of the nib a fill is ACTUALLY laid with.
+     *
+     * Not the proto's: a fill does not use the brush in the hand (see
+     * [Fill.BRUSH]), so measuring a seam against the held brush measures a
+     * nib that never touched the guide. These checks are about rows meeting,
+     * which is a question about the nib doing the work.
+     */
+    private fun fillHalf(proto: Stroke): Double {
+        val nib = proto.withPoints(emptyList())
+        nib.brush = Fill.BRUSH
+        return StrokeGeometry.halfWidth(nib, nib.baseRadius)
+    }
+
     @Test
     fun `a fill covers the guide with rows that touch`() {
         val guide = sweptGuide()
@@ -180,12 +194,28 @@ class ToolsTest {
          * the rows stop touching — a 2mm groove down every seam. The row count
          * must be enough that the pitch never exceeds a nib width.
          */
-        val half = StrokeGeometry.halfWidth(proto, proto.baseRadius)
+        val half = fillHalf(proto)
         val across = kotlin.math.min(span.lu, span.lv)
         val rows = made.size
         assertTrue(
             across / rows <= half * 2 + 1e-9,
             "rows are ${across / rows} apart with a ${half * 2} nib: that is a seam",
+        )
+
+        /*
+         * AND THE COUNT IS THE CEILING, EXACTLY.
+         *
+         * The bound above has the overlap's ten percent of slack in it, so on
+         * a sheet that happens to divide evenly it will pass a row short —
+         * which is the very fault it was written for, surviving because this
+         * guide's arithmetic was kind. This sheet is one quad and no row is
+         * split, so the count is the rule itself and there is nowhere for a
+         * dropped row to hide.
+         */
+        val pitch = half * 2 * Fill.OVERLAP
+        assertEquals(
+            kotlin.math.ceil(across / pitch).toInt(), rows,
+            "a fill must round its row count UP: down leaves a groove per seam",
         )
     }
 
@@ -250,7 +280,7 @@ class ToolsTest {
         val span = assertNotNull(GuidePainting.surfaceSpan(guide))
         val rowsAcross = kotlin.math.ceil(
             kotlin.math.min(span.lu, span.lv) /
-                (StrokeGeometry.halfWidth(proto, proto.baseRadius) * 2 * Fill.OVERLAP),
+                (fillHalf(proto) * 2 * Fill.OVERLAP),
         ).toInt()
         assertTrue(
             made.size > rowsAcross,
