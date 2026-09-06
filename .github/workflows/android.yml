@@ -46,6 +46,15 @@ jobs:
           java-version: '17'
       - uses: android-actions/setup-android@v3
       - uses: gradle/actions/setup-gradle@v4
+      # THE CHECK THAT ACTUALLY STARTS THE APP.
+      #
+      # "CI proves the code compiles. It never launches the app" was true of
+      # every job here, and it is how a null field and a staging bar that
+      # never appeared both shipped. Robolectric runs the real framework and
+      # the real merged resources on the JVM, so the activity is constructed
+      # for real and its view tree can be asked whether the app came up on
+      # Home with the canvas put away. No emulator, no device, no KVM.
+      - run: ./gradlew :app:testDebugUnitTest --no-daemon
       - run: ./gradlew :app:assembleDebug --no-daemon
       - uses: actions/upload-artifact@v4
         with:
