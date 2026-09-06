@@ -145,6 +145,33 @@ class SketchRenderer : GLSurfaceView.Renderer {
         foldDirty = true
     }
 
+    /**
+     * THE ORANGE LINE: the active guide's starting edge, and the rail a bend
+     * hinges on.
+     *
+     * FACT (A.6): "The bending starts from the orange line, which is the
+     * starting point of the 3D Guide." It was computed on every rebuild and
+     * drawn by nothing, so the one mark the documentation puts on a guide —
+     * and names twice — was not on the surface. Bending worked from a line
+     * nobody could see.
+     */
+    private var anchorLine: FloatArray? = null
+    private var anchorBuffers: LineBuffers? = null
+    private var anchorDirty = false
+
+    fun setAnchorLine(pts: List<Vec3>?): Unit = synchronized(strokes) {
+        anchorLine = pts?.takeIf { it.size >= 2 }?.let { list ->
+            FloatArray(list.size * 3).also { out ->
+                for ((i, p) in list.withIndex()) {
+                    out[i * 3] = p.x.toFloat()
+                    out[i * 3 + 1] = p.y.toFloat()
+                    out[i * 3 + 2] = p.z.toFloat()
+                }
+            }
+        }
+        anchorDirty = true
+    }
+
     /** A screen-space polyline drawn over everything: the lasso boundary. */
     private var overlay: FloatArray? = null
     private var overlayBuffers: LineBuffers? = null
@@ -415,6 +442,9 @@ class SketchRenderer : GLSurfaceView.Renderer {
 
         // guides last: they are translucent scaffolding and belong over the ink
         drawGuides(m, e)
+
+        /* and the orange line on top of the guide it belongs to */
+        drawAnchorLine(m)
 
         if (post) endPost()
 
@@ -988,6 +1018,41 @@ class SketchRenderer : GLSurfaceView.Renderer {
         GLES30.glEnable(GLES30.GL_CULL_FACE)
         GLES30.glDepthMask(true)
         GLES30.glDisable(GLES30.GL_BLEND)
+    }
+
+    /**
+     * The guide's starting edge, in orange, over the surface it sits on.
+     *
+     * DEPTH TEST OFF, deliberately. The line lies exactly ON the guide — it is
+     * made of the surface's own vertices — so tested against it the two would
+     * fight for every pixel and the mark would come out stippled and
+     * flickering, which is worse than not drawing it. A polygon offset is the
+     * usual answer and does not apply to lines in ES. So it is drawn as the
+     * marker it is, the same way the orbit crosshair and the lasso are: always
+     * legible, because a landmark you have to hunt for is not one.
+     */
+    private fun drawAnchorLine(m: FloatArray) {
+        val pts = synchronized(strokes) {
+            if (anchorDirty) { releaseAnchor(); anchorDirty = false }
+            anchorLine
+        } ?: return
+
+        val n = pts.size / 3
+        val b = anchorBuffers
+            ?: uploadFlat(pts, 0f, 1f, FloatArray(n * 3).also {
+                for (i in 0 until n) {
+                    it[i * 3] = ORANGE_R; it[i * 3 + 1] = ORANGE_G; it[i * 3 + 2] = ORANGE_B
+                }
+            }).also { anchorBuffers = it }
+
+        GLES30.glDisable(GLES30.GL_DEPTH_TEST)
+        drawFlat(m, b, GLES30.GL_LINE_STRIP)
+        GLES30.glEnable(GLES30.GL_DEPTH_TEST)
+    }
+
+    private fun releaseAnchor() {
+        anchorBuffers?.let { pendingDelete.add(it.vbo); pendingDelete.add(it.cbo) }
+        anchorBuffers = null
     }
 
     private fun releaseFold() {
@@ -1767,6 +1832,11 @@ class SketchRenderer : GLSurfaceView.Renderer {
          * into a visible lift off the guide.
          */
         const val DEPTH_ORDER_CAP = 4096
+
+        /* the orange the documentation draws the starting line in */
+        const val ORANGE_R = 1.0f
+        const val ORANGE_G = 0.53f
+        const val ORANGE_B = 0.13f
 
         /** Which of the three ordered passes a stroke belongs to. */
         const val OPAQUE = 0

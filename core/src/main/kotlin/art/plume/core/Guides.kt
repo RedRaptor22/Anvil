@@ -182,6 +182,9 @@ object Guides {
         /* FACT (A.3): the orange line marks the guide's starting point, and is
            the anchor that bending works from. */
         guide.anchorRow = rows.getOrNull(sweep.anchorIndex)
+        /* and the line itself: one point per section, the first of each, which
+           is the rail the profile's start traces down the length of the sweep */
+        guide.startLine = rows.mapNotNull { it.firstOrNull()?.copy() }.takeIf { it.size >= 2 }
         return true
     }
 

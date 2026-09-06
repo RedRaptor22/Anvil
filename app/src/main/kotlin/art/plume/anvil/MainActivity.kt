@@ -3880,6 +3880,21 @@ class MainActivity : Activity(), Gestures.Listener {
         val list = guides.drawList()
         val staged = stagedGuide
         renderer.setGuides(if (staged == null) list else list + staged)
+        /*
+         * THE ORANGE LINE BELONGS TO THE GUIDE YOU WOULD BEND.
+         *
+         * FACT (A.6): "The bending starts from the orange line, which is the
+         * starting point of the 3D Guide." Bend acts on the ACTIVE guide, so
+         * that is the one whose starting line is worth marking — one line on
+         * the surface you are working on, rather than a stripe on every
+         * resource still standing in the scene.
+         *
+         * A staged guide outranks it, for the same reason it outranks
+         * everything on the joystick: it is the one thing on screen you have
+         * not accepted yet. A loft or a primitive has no [Guide.startLine] and
+         * this goes quiet, which is honest — bendMesh has no such mark either.
+         */
+        renderer.setAnchorLine((staged ?: guides.active)?.startLine)
         refreshControls()
         surface.requestRender()
     }

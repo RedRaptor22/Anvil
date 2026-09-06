@@ -107,6 +107,37 @@ class BendTest {
     }
 
     /**
+     * THE ORANGE LINE IS A RAIL, NOT A SECTION.
+     *
+     * The documentation draws it running the LENGTH of the surface from the
+     * dot marked "Starting point" — so it is the path traced by the profile's
+     * first point, one point per section, and it lies on an edge of the
+     * surface. A section across the guide would be the profile's own shape,
+     * which is a different curve entirely and is what `anchorRow` holds.
+     */
+    @Test
+    fun `the orange line runs the length of the guide, along the profile's start`() {
+        val g = Guides.createFromStroke(potProfile(), view, right, 1.0)!!
+        val sw = g.sweep!!
+        val rows = rowsOf(g)
+        val line = g.startLine!!
+
+        assertEquals(sw.path.size, line.size, "one point per section, down the sweep")
+        for (j in rows.indices) {
+            assertEquals(
+                0.0, line[j].distanceTo(rows[j].first()), 1e-12,
+                "the orange line is the rail through the profile's first point",
+            )
+        }
+        /* and it starts where the pen went down, which is the row the guide
+           was drawn on — the dot the documentation labels */
+        assertEquals(
+            0.0, line[sw.anchorIndex].distanceTo(g.anchorRow!!.first()), 1e-12,
+            "the orange line passes through the guide's starting point",
+        )
+    }
+
+    /**
      * THE GUIDE DOES NOT LEAP WHEN IT BENDS.
      *
      * FACT (A.6): "The bending starts from the orange line, which is the

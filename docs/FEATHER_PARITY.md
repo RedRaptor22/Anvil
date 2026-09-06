@@ -325,11 +325,17 @@ centreline through the middle of the surface. Being re-hung also leaves the
 next bend on the same footing as this one, which is what "you can repeat the
 Bend 3D Guide process multiple times" needs.
 
-**The orange line is not drawn.** `Guide.anchorRow` is computed on every
-rebuild and read by nothing: Anvil has never rendered the line the
-documentation puts on the surface and names twice. The bend now works from it
-correctly, but you cannot see where a bend will start. Not done, and a real
-divergence.
+**The orange line is now drawn.** It had been computed on every rebuild and
+read by nothing, so the one mark the documentation puts on a guide — and names
+twice — was not on the surface, and the bend worked from a line nobody could
+see. `Guide.startLine` is the line itself: the rail the profile's FIRST point
+traces down the sweep, which is what the picture on the Draw page colours, as
+against `anchorRow`, the section across the guide that it starts on. It is
+drawn for the active guide only, since Bend acts on that one, and with the
+depth test off — the line is made of the surface's own vertices, so tested
+against them it would stipple, and a polygon offset does not apply to lines in
+ES. A loft or a primitive has no drawn profile and so has no line, which
+agrees with `bendMesh`: it has no such mark to aim at.
 
 ## Known and not done
 

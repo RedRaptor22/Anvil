@@ -153,8 +153,25 @@ class Guide(
     var plane: PlaneData? = null
     var surface: GuideSurface? = null
 
-    /** The row the orange starting line sits on; Bend works from it. */
+    /** The row the orange line starts on; Bend hinges on its first point. */
     var anchorRow: List<Vec3>? = null
+
+    /**
+     * THE ORANGE LINE ITSELF — the rail the profile's FIRST point traces as
+     * the guide is swept.
+     *
+     * FACT (A.6): "The bending starts from the orange line, which is the
+     * starting point of the 3D Guide." The documentation draws it running the
+     * whole length of the surface from the dot it labels "Starting point",
+     * which is where the pen went down to draw the profile — so it is a rail
+     * along the sweep, not a section across it, and it lies on one edge of
+     * the surface rather than through the middle.
+     *
+     * Swept guides only. A loft or a primitive has no drawn profile to have a
+     * first point, and [GuideEditing.bendMesh] already says as much: it has no
+     * such mark to aim at, so it leaves the path where it was drawn.
+     */
+    var startLine: List<Vec3>? = null
 
     var selected = false
     var visible = true
