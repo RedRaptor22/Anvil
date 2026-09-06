@@ -239,6 +239,17 @@ class MainActivity : Activity(), Gestures.Listener {
      * closing it, saving it or painting on it are all impossible until Done.
      */
     private var stagedGuide: Guide? = null
+
+    /**
+     * Everything the joystick has done to the staged guide so far.
+     *
+     * A primitive is rebuilt from scratch whenever its segments or taper
+     * change, because those change its topology — so without this, moving a
+     * cube and then nudging its segment count put the cube back at the origin.
+     * The matrix is replayed onto each rebuild, which is what the web build's
+     * note about "carrying the staged object's matrix across" meant.
+     */
+    private var stagedMatrix: Mat4? = null
     private val loftSel = ArrayList<Stroke>()
     private var loftTension = 1.0
     private var primKind = "cube"
@@ -994,26 +1005,16 @@ class MainActivity : Activity(), Gestures.Listener {
         if (tool != t) endStamping()
 
         /*
-         * ONE GUIDE AT A TIME.
-         *
-         * FACT: "If any resource is active, you cannot draw or loft a new 3D
-         * Guide", and its other half — "If there is no active 3D Guide, you
-         * can draw or loft one."
-         *
-         * Drawing a new one used to REPLACE the active guide without saying
-         * so: the surface you were drawing on vanished at the end of the
-         * stroke that replaced it, and the only way to notice was that your
-         * curves had stopped landing where you expected. Closing first is one
-         * tap in the guide bar, and the quick menu will hand the closed one
-         * back, so the refusal costs nothing and the silent swap cost a
-         * surface.
+         * THE GUIDE TOOL IS ALWAYS REACHABLE. This refused to switch to it at
+         * all while a guide was active, reading FACT — "If any resource is
+         * active, you cannot draw or loft a new 3D Guide" — as a rule about
+         * the TOOL. It is a rule about creating, and the difference cost a
+         * whole workflow: with a guide up, which is the normal state once you
+         * have drawn one, the Guide tool could not be selected, and with it
+         * went hold-to-shape on a guide profile. Refusing at the door is not
+         * the same as refusing the thing, and only one of the two was asked
+         * for. What replacement does now is in makeGuideFrom.
          */
-        if (t != tool && (t == Tool.GUIDE || t == Tool.FLATGUIDE || t == Tool.LOFT)) {
-            if (guides.active != null) {
-                toast(getString(R.string.guide_already)); return
-            }
-        }
-
         when (t) {
             Tool.BEND -> if (guides.active == null) {
                 toast(getString(R.string.bend_needs_guide)); return
@@ -1065,10 +1066,13 @@ class MainActivity : Activity(), Gestures.Listener {
      */
     private fun previewLoft() {
         val merged = Curves.mergeStrokes(loftSel)
-        stagedGuide = if (merged.size >= 2) {
-            GuideEditing.loftFromCurves(merged, loftTension)
-        } else {
-            GuideEditing.loft(loftSel, loftTension)
+        stagedGuide = (
+            if (merged.size >= 2) GuideEditing.loftFromCurves(merged, loftTension)
+            else GuideEditing.loft(loftSel, loftTension)
+            )?.also { fresh ->
+            /* a change of tension rebuilds the loft too, and it has to come
+               back where you put it — same rule as a primitive's segments */
+            stagedMatrix?.let { GuideTransform.apply(fresh, it) }
         }
         pushGuides()
         showStaging()
@@ -1081,7 +1085,10 @@ class MainActivity : Activity(), Gestures.Listener {
          * build carries the staged object's matrix across; nothing here has
          * moved it yet, so there is nothing to carry.
          */
-        stagedGuide = Primitives.create(primKind, primSeg, primTaper)
+        stagedGuide = Primitives.create(primKind, primSeg, primTaper).also { fresh ->
+            /* where you have already put it, not back at the origin */
+            stagedMatrix?.let { GuideTransform.apply(fresh, it) }
+        }
         pushGuides()
         showStaging()
     }
@@ -1124,6 +1131,7 @@ class MainActivity : Activity(), Gestures.Listener {
     private fun cancelStaging() {
         if (stagedGuide == null && loftSel.isEmpty()) return
         stagedGuide = null
+        stagedMatrix = null
         for (st in loftSel) sketch.setSelected(st, false)
         loftSel.clear()
         chrome.setStaging(null)
@@ -1136,6 +1144,9 @@ class MainActivity : Activity(), Gestures.Listener {
         val g = stagedGuide ?: return
         val previous = guides.active
         stagedGuide = null
+        /* the guide keeps where it was put; only the record of how it got
+           there is spent, because Done is the history step now */
+        stagedMatrix = null
         for (st in loftSel) sketch.setSelected(st, false)
         loftSel.clear()
         chrome.setStaging(null)
@@ -1393,13 +1404,7 @@ class MainActivity : Activity(), Gestures.Listener {
         }
 
         if (guide != null) {
-            GuideTransform.apply(guide, m)
-            /* ONE HISTORY STEP FOR THE WHOLE DRAG, accumulated as a matrix.
-               A guide has no point list to snapshot the way a selection does,
-               so what is remembered is the transform itself — replayed to
-               redo, inverted to undo. That is the web build's model too. */
-            guideAccum = Mat4.multiply(m, guideAccum ?: Mat4().identity(), Mat4())
-            pushGuides()
+            moveGuideBy(guide, m)
         } else {
             Selection.transform(targets!!, m)
             refreshStrokeMeshes(targets)
@@ -1455,9 +1460,7 @@ class MainActivity : Activity(), Gestures.Listener {
         val m = Transform.view(camera, what, dx, dy, sweep, camera.pivot)
 
         if (guide != null) {
-            GuideTransform.apply(guide, m)
-            guideAccum = Mat4.multiply(m, guideAccum ?: Mat4().identity(), Mat4())
-            pushGuides()
+            moveGuideBy(guide, m)
         } else {
             Selection.transform(targets!!, m)
             refreshStrokeMeshes(targets)
@@ -1465,7 +1468,26 @@ class MainActivity : Activity(), Gestures.Listener {
         surface.requestRender()
     }
 
-    /** Close a guide drag into one undoable step. */
+    /**
+     * Move a guide, and remember it on whichever pile it belongs to.
+     *
+     * A guide has no point list to snapshot the way a selection does, so what
+     * is remembered is the TRANSFORM — replayed to redo, inverted to undo.
+     * A STAGED guide keeps its own pile instead: it is not in the document
+     * yet, so there is no history step to be part of, and its matrix has a
+     * second job — surviving the rebuild that a change of segments forces.
+     */
+    private fun moveGuideBy(guide: Guide, m: Mat4) {
+        GuideTransform.apply(guide, m)
+        if (guide === stagedGuide) {
+            stagedMatrix = Mat4.multiply(m, stagedMatrix ?: Mat4().identity(), Mat4())
+        } else {
+            guideAccum = Mat4.multiply(m, guideAccum ?: Mat4().identity(), Mat4())
+        }
+        pushGuides()
+    }
+
+    /** Close a guide drag into one undoable step. Staging has none to close. */
     private fun commitGuideTransform() {
         val m = guideAccum ?: return
         guideAccum = null
@@ -1489,7 +1511,19 @@ class MainActivity : Activity(), Gestures.Listener {
      * is the more specific thing to have asked for.
      */
     private val transformGuide: Guide?
-        get() = guides.active?.takeIf { it.selected }
+        /*
+         * THE ONE BEING STAGED OUTRANKS EVERYTHING, because it is the only
+         * thing on screen you have not accepted yet.
+         *
+         * FACT, from the Primitives page: "Use Joystick to Move — before
+         * finalizing the shape, use the joystick to transform it. You can also
+         * adjust its scale as needed." A staged guide is deliberately not in
+         * [guides] — it cannot be closed, saved or painted on until Done — and
+         * this read only that list, so a primitive could be resegmented and
+         * tapered and never moved an inch. It appeared at the origin and
+         * stayed there.
+         */
+        get() = stagedGuide ?: guides.active?.takeIf { it.selected }
 
     /** The fold is sized to the work, so it moves when the work does. */
     private fun pushFold() {
@@ -3708,10 +3742,27 @@ class MainActivity : Activity(), Gestures.Listener {
         history.run(
             Step(
                 "Create guide", cost = s.pts.size,
-                onRedo = { guides.setActive(g); pushGuides() },
+                onRedo = {
+                    /*
+                     * A NEW GUIDE REPLACES THE ONE YOU WERE ON, and closing
+                     * the old one on the way out is what makes that
+                     * survivable: it becomes the recallable guide, so the
+                     * surface you were drawing on is one tap away in the quick
+                     * menu rather than gone.
+                     *
+                     * FACT is "you cannot draw a new 3D Guide" while one is
+                     * active, and an earlier pass took that literally and
+                     * refused. Refusing is worse than replacing once
+                     * replacing is reversible, because the refusal blocks the
+                     * tool and the replacement blocks nothing.
+                     */
+                    if (guides.active != null) guides.close()
+                    guides.setActive(g); pushGuides()
+                },
                 onUndo = { guides.setActive(previous); pushGuides() },
             ),
         )
+        if (previous != null) announce(getString(R.string.guide_replaced))
         if (tool == Tool.GUIDE || tool == Tool.FLATGUIDE) setTool(Tool.DRAW)
     }
 

@@ -322,7 +322,6 @@
     <string name="tip_render_mode">Render mode — lights, shadows, materials</string>
     <string name="render_on">Rendering</string>
     <string name="render_off">Flat</string>
-    <string name="guide_already">Close the guide you are on first</string>
     <string name="home_recents">Recents</string>
     <string name="home_folders">Folders</string>
     <string name="home_settings">Settings</string>
@@ -363,4 +362,5 @@
     <string name="group_pick_first">Hold a group to pick it</string>
     <string name="opt_orbit_show">Orbit dot</string>
     <string name="opt_orbit_pin">Pin orbit</string>
+    <string name="guide_replaced">New guide — the old one is in the quick menu</string>
 </resources>

@@ -133,6 +133,21 @@ nothing here can read back would be a button that only loses work.
 brush rather than in absolute units, so a tenth of a millimetre off the line
 survives on a hairline and is dropped under a 30mm marker.
 
+## One guide at a time, read two ways
+
+FACT: "If any resource is active, you cannot draw or loft a new 3D Guide."
+
+Read once as a rule about the TOOL — refuse to switch to Guide while one is
+active — and that was wrong, expensively. With a guide up, which is the normal
+state once you have drawn one, the Guide tool could not be selected at all,
+and hold-to-shape on a guide profile went with it.
+
+It is a rule about CREATING, and this build now answers it by making the
+replacement survivable rather than by refusing: a new guide closes the one it
+replaces, which puts it in the quick menu's Recall, and the action pill says
+so. Refusing is worse than replacing once replacing is reversible, because the
+refusal blocks the tool and the replacement blocks nothing.
+
 ## Confirmed as already matching
 
 - **Draw 3D Guide**: "generated perpendicular to your viewing angle and varies
