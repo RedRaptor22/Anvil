@@ -358,14 +358,17 @@ class Chrome(private val act: Activity, val t: Tokens) {
      * with one page in it is a sheet of paper.
      */
     private val gallery = LinearLayout(act)
-    private lateinit var homeGrid: GridLayout
+    /** One sidebar row: the whole thing highlights, the label goes bold. */
+    private class NavRow(val row: LinearLayout, val label: TextView)
+
+    private lateinit var homeBody: LinearLayout
     private lateinit var homeSidebar: LinearLayout
     private lateinit var homePath: LinearLayout
     private lateinit var homeSortButton: TextButton
     private lateinit var homeBottom: LinearLayout
     private lateinit var homeCount: TextView
     private lateinit var homeAdd: TextButton
-    private val homeViews = LinkedHashMap<Int, TextButton>()
+    private val homeViews = LinkedHashMap<Int, NavRow>()
     private val askCard = LinearLayout(act)
     private lateinit var askTitle: TextView
     private lateinit var askField: EditText
@@ -4338,10 +4341,10 @@ class Chrome(private val act: Activity, val t: Tokens) {
         }
         right.addView(buildHomeBar())
 
-        homeGrid = GridLayout(act).apply { columnCount = 1 }
+        homeBody = LinearLayout(act).apply { orientation = LinearLayout.VERTICAL }
         right.addView(
             android.widget.ScrollView(act).apply {
-                addView(homeGrid)
+                addView(homeBody)
                 clipToPadding = false
                 setPadding(0, 0, 0, t.dp(84f))
                 layoutParams = LinearLayout.LayoutParams(
@@ -4403,21 +4406,49 @@ class Chrome(private val act: Activity, val t: Tokens) {
                 setPadding(t.dp(6f), 0, 0, t.dp(14f))
             },
         )
-        for ((view, label) in listOf(
-            HOME_RECENTS to R.string.home_recents,
-            HOME_FOLDERS to R.string.home_folders,
+        /* FACT, and the screenshot: an icon and a word, left aligned, with the
+           one you are looking at sitting on a soft rounded fill. The folder is
+           green wherever it appears, which is what makes the two rows tell
+           themselves apart at a glance rather than by reading. */
+        for ((view, pair) in listOf(
+            HOME_RECENTS to ("clock" to R.string.home_recents),
+            HOME_FOLDERS to ("folder" to R.string.home_folders),
         )) {
-            val b = TextButton(act, t, filled = true, small = false).apply {
-                text = act.getString(label)
+            val (iconName, label) = pair
+            val glyph = ImageView(act).apply {
+                setImageResource(
+                    act.resources.getIdentifier(
+                        "ic_$iconName", "drawable", act.packageName,
+                    ),
+                )
+                imageTintList = android.content.res.ColorStateList.valueOf(
+                    if (view == HOME_FOLDERS) t.green else t.ink,
+                )
+                layoutParams = LinearLayout.LayoutParams(t.dp(18f), t.dp(18f))
+                    .apply { marginEnd = t.dp(10f) }
+            }
+            val text = TextView(act).apply {
+                this.text = act.getString(label)
+                setTextColor(t.ink)
+                textSize = 14f
+                layoutParams = LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f,
+                )
+            }
+            val row = LinearLayout(act).apply {
+                orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                setPadding(t.dp(12f), t.dp(9f), t.dp(12f), t.dp(9f))
+                isClickable = true
+                setPadding(t.dp(10f), t.dp(9f), t.dp(10f), t.dp(9f))
+                addView(glyph)
+                addView(text)
                 setOnClickListener { onHomeView(view) }
                 layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
-                ).apply { bottomMargin = t.dp(4f) }
+                ).apply { bottomMargin = t.dp(2f) }
             }
-            homeViews[view] = b
-            homeSidebar.addView(b)
+            homeViews[view] = NavRow(row, text)
+            homeSidebar.addView(row)
         }
         homeSidebar.addView(
             View(act).apply {
@@ -4577,7 +4608,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
         currentId: String?,
         view: Int,
     ) {
-        if (!::homeGrid.isInitialized) return
+        if (!::homeBody.isInitialized) return
         homeItems = items
         homePath2 = path
         homeSort = sort
@@ -4588,8 +4619,18 @@ class Chrome(private val act: Activity, val t: Tokens) {
     }
 
     private fun rebuildHome() {
-        if (!::homeGrid.isInitialized) return
-        for ((k, b) in homeViews) b.on = k == homeView
+        if (!::homeBody.isInitialized) return
+        for ((k, nav) in homeViews) {
+            val on = k == homeView
+            nav.row.background = if (!on) null else GradientDrawable().apply {
+                setColor(t.panel2)
+                cornerRadius = t.dpf(10f)
+            }
+            nav.label.setTypeface(
+                nav.label.typeface,
+                if (on) android.graphics.Typeface.BOLD else android.graphics.Typeface.NORMAL,
+            )
+        }
         homeSortButton.text = act.getString(
             when (homeSort) {
                 1 -> R.string.sort_created
@@ -4606,11 +4647,10 @@ class Chrome(private val act: Activity, val t: Tokens) {
         val wide = act.resources.displayMetrics.widthPixels -
             (if (homeSidebar.visibility == View.VISIBLE) t.dp(176f) else 0) - t.dp(32f)
         val cols = ((wide / t.dp(TILE_DP)).coerceAtLeast(1)).coerceAtMost(6)
-        homeGrid.removeAllViews()
-        homeGrid.columnCount = cols
+        homeBody.removeAllViews()
 
         if (homeItems.isEmpty()) {
-            homeGrid.addView(
+            homeBody.addView(
                 TextView(act).apply {
                     text = act.getString(R.string.gallery_empty)
                     setTextColor(t.dim)
@@ -4620,7 +4660,41 @@ class Chrome(private val act: Activity, val t: Tokens) {
             )
             return
         }
-        for (item in homeItems) homeGrid.addView(homeTile(item, cols))
+
+        /*
+         * FOLDERS UNDER "FOLDERS", NOTES UNDER "NOTES".
+         *
+         * FACT is only that the Folders tab "displays folders and notes
+         * together", but the screen itself puts a heading over each group,
+         * and it earns its place: without one, a folder and a note are two
+         * tiles of the same size and the only thing telling them apart is
+         * that one has four small pictures on it instead of one big one.
+         * A heading that has nothing under it is not drawn.
+         */
+        section(R.string.home_folders, homeItems.filter { it.folder }, cols)
+        section(R.string.home_notes_heading, homeItems.filter { !it.folder }, cols)
+    }
+
+    private fun section(heading: Int, items: List<HomeItem>, cols: Int) {
+        if (items.isEmpty()) return
+        homeBody.addView(
+            TextView(act).apply {
+                text = act.getString(heading)
+                setTextColor(t.ink)
+                textSize = 17f
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+                setPadding(t.dp(5f), t.dp(6f), 0, t.dp(6f))
+            },
+        )
+        homeBody.addView(
+            GridLayout(act).apply {
+                columnCount = cols
+                for (item in items) addView(homeTile(item, cols))
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { bottomMargin = t.dp(10f) }
+            },
+        )
     }
 
     /** FACT: "6. Current Path… When inside a folder, you can go back." */

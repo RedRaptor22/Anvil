@@ -62,7 +62,7 @@
     <string name="brush_flat">Marker — a blade, held flat against the guide</string>
     <string name="brush_wide">Ribbon — a 3mm sheet lying on the guide</string>
     <string name="brush_glow">Glow — additive, and never shaded</string>
-    <string name="gallery_empty">Nothing here yet — start something.</string>
+    <string name="gallery_empty">Nothing here yet. Tap + to start a note.</string>
     <string name="gallery_curves">%1$d curves</string>
     <string name="gallery_open_now">open</string>
     <string name="work_new">New sketch</string>
@@ -144,7 +144,7 @@
 
     <!-- the Curves tab -->
     <string name="select_all">Select all</string>
-    <string name="group_hint">Tap a row to draw into it, its name to rename · hold to select its curves · the arrow moves the selection in</string>
+    <string name="group_hint">Tap a row to draw into it, its name to rename · hold to pick it for merge or delete · tap the count to select its curves · the arrow moves the selection in</string>
     <string name="group_new">Group %1$d</string>
 
     <string name="nothing_selected">Nothing selected</string>
@@ -363,4 +363,5 @@
     <string name="opt_orbit_show">Orbit dot</string>
     <string name="opt_orbit_pin">Pin orbit</string>
     <string name="guide_replaced">New guide — the old one is in the quick menu</string>
+    <string name="home_notes_heading">Notes</string>
 </resources>

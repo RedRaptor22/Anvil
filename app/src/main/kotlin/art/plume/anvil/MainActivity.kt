@@ -407,38 +407,24 @@ class MainActivity : Activity(), Gestures.Listener {
         refreshGroups()
         refreshResources()
         pushLiquify()
-        /*
-         * FIRST RUN ONLY, and only on an empty page: someone whose autosave
-         * restored a drawing has plainly been here before, whatever the flag
-         * says.
-         */
-        /* the folders exist whether or not the shelf is shown: a first run
-           that goes straight to the walkthrough still has a library, and the
-           Home button will want it a minute later */
         readLibrary()
-        val firstRun = !getPreferences(MODE_PRIVATE).getBoolean(PREF_WALKED, false) &&
-            sketch.strokes.isEmpty()
-        if (firstRun) {
-            startWalk(0)
-        } else {
-            /*
-             * OPEN ON THE SHELF, NOT ON THE PAGE.
-             *
-             * Once there is more than one drawing, dropping straight into
-             * whichever was last touched is a guess — and the wrong guess costs
-             * you a trip to a menu you did not know was there. A sketchbook
-             * opens by being picked up and chosen from.
-             *
-             * The last work is still restored behind it, so closing the shelf
-             * without choosing puts you back exactly where you were, and the
-             * shelf is skipped entirely when there is nothing to choose
-             * between.
-             */
-            if (listWorks().isNotEmpty()) {
-                pushHome()
-                chrome.setGallery(true)
-            }
-        }
+        /*
+         * THE APP OPENS ON HOME. ALWAYS.
+         *
+         * This had two conditions on it and each of them, on its own, dropped
+         * you straight onto the canvas. A first run went to the walkthrough
+         * instead; and Home was skipped entirely when there were no notes yet
+         * — which is exactly the state a fresh install is in. So the one
+         * person guaranteed never to see the home screen was someone opening
+         * the app for the first time, which is the person it is for.
+         *
+         * Feather opens on Home with nothing in it too: an empty shelf with a
+         * + on it is not a dead end, it is the invitation. Anvil does the
+         * same now, and the walkthrough waits until you have actually gone to
+         * the canvas — see [openWork] — where the things it points at exist.
+         */
+        pushHome()
+        chrome.setGallery(true)
         pushSettings()
         refreshControls()
         syncBrushControls()
@@ -4593,6 +4579,16 @@ class MainActivity : Activity(), Gestures.Listener {
         announce(
             getString(if (id == null) R.string.work_new else R.string.work_opened),
         )
+        /*
+         * THE WALKTHROUGH WAITS FOR THE CANVAS.
+         *
+         * It used to run at launch, ahead of Home, which put a tour of the
+         * drawing tools in front of someone who had not reached the drawing
+         * yet — and, worse, meant a first run never saw the home screen at
+         * all. It points at the rail, the pill and the guide bar, so it
+         * belongs at the first moment those are on screen.
+         */
+        if (!getPreferences(MODE_PRIVATE).getBoolean(PREF_WALKED, false)) startWalk(0)
     }
 
     /** The current document, written to [id]'s file before anything moves on. */
