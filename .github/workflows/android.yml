@@ -113,7 +113,10 @@ jobs:
             adb logcat -c
             ./gradlew :app:connectedDebugAndroidTest --no-daemon
             mkdir -p shots
-            adb pull /sdcard/Android/data/art.plume.anvil/files/shots shots || true
+            # Android/media, because Android 11 closed Android/data to the
+            # shell user: the pull fails there against files that do exist
+            adb pull /sdcard/Android/media/art.plume.anvil/shots shots || true
+            ls -la shots
             adb logcat -d > shots/logcat.txt
       - uses: actions/upload-artifact@v4
         if: always()

@@ -35,9 +35,22 @@ class ScreenshotTest {
     private val device: UiDevice
         get() = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
 
+    /**
+     * Android/MEDIA, not Android/data.
+     *
+     * The obvious home for these is the app's external files dir, and the
+     * pictures land there perfectly well — adb simply cannot read them back.
+     * Android 11 closed /sdcard/Android/data to the shell user, so the pull
+     * fails with "No such file or directory" against files that plainly
+     * exist, and the run comes back with a logcat and nothing to look at.
+     * Android/media stayed readable, and an app may write its own directory
+     * there without asking for a permission.
+     */
     private fun outDir(): File {
         val ctx = InstrumentationRegistry.getInstrumentation().targetContext
-        return File(ctx.getExternalFilesDir(null), "shots").apply { mkdirs() }
+        val media = ctx.externalMediaDirs.firstOrNull()
+            ?: ctx.getExternalFilesDir(null)
+        return File(media, "shots").apply { mkdirs() }
     }
 
     private fun shoot(name: String) {
