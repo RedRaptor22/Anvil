@@ -116,9 +116,9 @@ jobs:
             # run-as, not pull: the shell cannot read either external
             # directory on Android 11, and reports a forbidden path as a
             # missing one — which reads exactly like a test that wrote nothing
-            for f in $(adb shell run-as art.plume.anvil ls files/shots | tr -d '\r'); do
-              adb exec-out run-as art.plume.anvil cat "files/shots/$f" > "shots/$f"
-            done
+            # ONE LINE: this action feeds the script to `sh -c` a line at a
+            # time, so a loop written over four of them is four broken commands
+            for f in $(adb shell run-as art.plume.anvil ls files/shots | tr -d '\r'); do adb exec-out run-as art.plume.anvil cat "files/shots/$f" > "shots/$f"; done
             ls -la shots
             adb logcat -d > shots/logcat.txt
       - uses: actions/upload-artifact@v4
