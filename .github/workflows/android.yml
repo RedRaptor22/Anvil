@@ -115,8 +115,7 @@ jobs:
             # finish, and the uninstall deletes the pictures before anything
             # can fetch them — which reads as adb failing to find a path
             # rather than as a package that is no longer there
-            ./gradlew :app:connectedDebugAndroidTest --no-daemon \
-              -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true
+            ./gradlew :app:connectedDebugAndroidTest --no-daemon -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true
             mkdir -p shots
             # run-as, because the files are in the app's own data directory
             # ONE LINE: this action feeds the script to `sh -c` a line at a
