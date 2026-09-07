@@ -19,6 +19,8 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "0.1.0"
+        /* the instrumented tests that run on an emulator and photograph it */
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
@@ -54,4 +56,8 @@ dependencies {
     implementation("androidx.activity:activity:1.9.2")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.13")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test:rules:1.6.1")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")
 }
