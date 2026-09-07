@@ -229,16 +229,31 @@ class ScreenshotTest {
                 scene.setActive(null)
                 /* and clear the fill, or the pot is photographed through it */
                 grab<art.plume.core.Sketch>(act, "sketch").clear()
-                val prof = (0 until 24).map { Vec3(0.0, 0.5 - it / 23.0, 0.0) }
-                val g = Guides.createFromStroke(prof, Vec3(0.0, 0.0, -1.0), Vec3(1.0, 0.0, 0.0), 4.0)
+                /*
+                 * The path the app really makes when you hold to a circle:
+                 * Shapes' circle in screen pixels, unprojected onto the
+                 * camera-facing draw plane. A circle written by hand does not
+                 * exercise the fault; this does.
+                 */
+                val cam = grab<art.plume.core.Camera>(act, "camera")
+                val tmp = Vec3()
+                cam.refreshDrawPlane(null)
+                val prof = ArrayList<Vec3>()
+                for (i in 0 until 24) {
+                    val py = 500.0 + i / 23.0 * 700.0
+                    cam.planePoint(1200.0, py, tmp)?.let { prof.add(it.copy()) }
+                }
+                val fwd = Vec3(); cam.forward(fwd)
+                val rt = Vec3(); val u = Vec3(); val bk = Vec3(); cam.basis(rt, u, bk)
+                val g = Guides.createFromStroke(prof, fwd, rt, cam.radius)
                 if (g != null) {
-                    val rim = g.anchorRow!!.first()
-                    val circle = (0 until 48).map {
-                        val th = it / 47.0 * 2 * Math.PI
-                        Vec3(
-                            rim.x + Math.sin(th) * 0.6, rim.y,
-                            rim.z + (Math.cos(th) - 1.0) * 0.6,
-                        )
+                    cam.refreshDrawPlane(g.sweep!!.anchor)
+                    val circle = ArrayList<Vec3>()
+                    for (q in art.plume.core.Shapes.Shape.Circle(1500.0, 900.0, 260.0).points) {
+                        val w = cam.planePoint(q.x, q.y, tmp) ?: continue
+                        if (circle.isEmpty() || circle.last().distanceTo(w) > 0.0005) {
+                            circle.add(w.copy())
+                        }
                     }
                     GuideEditing.bend(g, circle)
                     scene.setActive(g)

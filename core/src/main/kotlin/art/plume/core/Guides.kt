@@ -1,5 +1,8 @@
 package art.plume.core
 
+import kotlin.math.sin
+import kotlin.math.cos
+import kotlin.math.atan2
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -144,10 +147,77 @@ object Guides {
         val t0 = Frames.computeTangents(path, closed)[0]
         val frames = Frames.transportFrames(path, sweep.seedFor(t0), closed)
 
+        /*
+         * THE WHOLE PATH DECIDES THE ROLL, AND THE PROFILE WEIGHTS THE VOTE.
+         *
+         * The seed only sets the section's angle about the path; transport
+         * carries that one choice the whole way round, so wherever the path
+         * BEGINS decides how the entire surface sits. That is fine for a
+         * stroke, which begins where the pen went down. It is wrong for a
+         * SNAPPED CIRCLE, which is generated from screen angle zero however
+         * the hand actually drew it, and always in the same winding — so a
+         * circle drawn one way round and a circle drawn the other produced
+         * the same path, and the pot came out standing above its own rim.
+         * Held to a circle, that was every time.
+         *
+         * Rotating the seed by an angle about the tangent rotates every
+         * transported frame by the same angle about its own tangent, so the
+         * roll is ONE number for the whole sweep and can be chosen once, from
+         * all of it.
+         *
+         * What it is chosen to maximise matters as much. Aligning the frame's
+         * two axes with the profile's own, evenly, asks the wrong question: a
+         * profile that is a line has nothing meaningful along its narrow axis,
+         * and letting that half of the sum argue with the half that carries
+         * the whole shape is how a pot gets turned over to keep an axis
+         * nothing was drawn along. So the sum is weighted by how much profile
+         * actually lies on each axis — it maximises the alignment of the
+         * SWEPT section with the section as drawn, summed over its points and
+         * over every station of the path. A line profile is then decided
+         * almost entirely by the direction it runs in, an L-shaped one by
+         * both of its arms in proportion, and a path's direction of travel
+         * stops being able to turn either of them over.
+         *
+         * On a straight path at creation the sum is already aligned and the
+         * angle is zero, so nothing moves.
+         */
+        val up0 = sweep.basisT cross sweep.basisR
+        var sxx = 0.0
+        var syy = 0.0
+        var sxy = 0.0
+        for (l in sweep.local) {
+            sxx += l.x * l.x
+            syy += l.y * l.y
+            sxy += l.x * l.y
+        }
+        var sumA = 0.0
+        var sumB = 0.0
+        val sj = Vec3()
+        for (j in path.indices) {
+            val rj = frames.r[j]
+            sj.set(frames.t[j] cross rj)
+            val rr0 = rj dot sweep.basisR
+            val ru0 = rj dot up0
+            val sr0 = sj dot sweep.basisR
+            val su0 = sj dot up0
+            sumA += rr0 * sxx + ru0 * sxy + sr0 * sxy + su0 * syy
+            sumB += sr0 * sxx + su0 * sxy - rr0 * sxy - ru0 * syy
+        }
+        val roll = if (sumA * sumA + sumB * sumB > 1e-12) atan2(sumB, sumA) else 0.0
+        val rollC = cos(roll)
+        val rollS = sin(roll)
+
         val rows = ArrayList<List<Vec3>>(path.size)
         val s = Vec3()
+        val rr = Vec3()
         for (j in path.indices) {
-            val tv = frames.t[j]; val rv = frames.r[j]
+            val tv = frames.t[j]
+            s.set(tv cross frames.r[j])
+            val rv = rr.set(
+                frames.r[j].x * rollC + s.x * rollS,
+                frames.r[j].y * rollC + s.y * rollS,
+                frames.r[j].z * rollC + s.z * rollS,
+            )
             s.set(tv cross rv)
             val row = ArrayList<Vec3>(sweep.local.size)
             for (l in sweep.local) {

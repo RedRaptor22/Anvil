@@ -338,6 +338,73 @@ class BendTest {
         assertTrue(top <= rim.y + 1e-9, "part of the pot stands above its own rim")
     }
 
+    /**
+     * HELD TO A CIRCLE, THE POT STILL STANDS UP — EITHER WAY ROUND.
+     *
+     * The path here is the one the app really makes: `Shapes.Shape.Circle`
+     * in screen pixels, unprojected onto the camera-facing draw plane, which
+     * is what hold-to-shape and snap-to-circle hand to Bend. It differs from
+     * a circle written by hand in two ways that both mattered — it is
+     * generated from screen angle zero wherever the stroke actually began,
+     * and always in the same winding however the hand went round.
+     *
+     * So the section's way up was being decided by an arbitrary start whose
+     * tangent runs along the profile's own length, which is the one direction
+     * that says nothing about which way up the section belongs. Bent by hand
+     * the pot stood up; held to a circle it stood on its head, every time.
+     *
+     * Both windings are checked, because a circle drawn anticlockwise is
+     * still the same pot as one drawn clockwise: the sweep runs the other way
+     * round it, and that is all.
+     */
+    @Test
+    fun `a snapped circle bends the pot the same way up, either winding`() {
+        val cam = Camera()
+        cam.resize(2560, 1800)
+        cam.apply()
+        cam.refreshDrawPlane(null)
+
+        val tmp = Vec3()
+        val profile = ArrayList<Vec3>()
+        for (i in 0 until 24) {
+            val py = 500.0 + i / 23.0 * 700.0
+            cam.planePoint(1200.0, py, tmp)?.let { profile.add(it.copy()) }
+        }
+        val fwd = Vec3(); cam.forward(fwd)
+        val right = Vec3(); val up = Vec3(); val back = Vec3()
+        cam.basis(right, up, back)
+
+        val drawn = Guides.createFromStroke(profile, fwd, right, cam.radius)!!
+        val row = rowsOf(drawn)[drawn.sweep!!.anchorIndex]
+        assertTrue(row.first().y > row.last().y, "the orange end was drawn uppermost")
+
+        cam.refreshDrawPlane(drawn.sweep!!.anchor)
+        val circle = ArrayList<Vec3>()
+        for (p in Shapes.Shape.Circle(1500.0, 900.0, 260.0).points) {
+            val w = cam.planePoint(p.x, p.y, tmp) ?: continue
+            if (circle.isEmpty() || circle.last().distanceTo(w) > 0.0005) circle.add(w.copy())
+        }
+        assertTrue(Guides.pathIsClosed(circle), "the snapped circle is a ring")
+
+        val ends = ArrayList<Double>()
+        for (wound in listOf(circle, circle.reversed())) {
+            val g = Guides.createFromStroke(profile, fwd, right, cam.radius)!!
+            val rim = g.anchorRow!!.first().copy()
+            assertTrue(GuideEditing.bend(g, wound))
+            val r0 = rowsOf(g).first()
+            assertEquals(0.0, r0.first().distanceTo(rim), 1e-9, "the rim moved")
+            assertTrue(
+                r0.last().y < r0.first().y,
+                "the pot stood on its head: body end at ${r0.last().y}, rim at ${r0.first().y}",
+            )
+            ends.add(r0.last().y)
+        }
+        assertEquals(
+            ends[0], ends[1], 1e-9,
+            "which way the circle was drawn changed which way up the pot came out",
+        )
+    }
+
     @Test
     fun `a ring the hand left open still welds`() {
         /* The screenshot's notch: a hand lifts the pen before it quite gets
