@@ -36,21 +36,23 @@ class ScreenshotTest {
         get() = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
 
     /**
-     * Android/MEDIA, not Android/data.
+     * INTERNAL STORAGE, AND FETCHED WITH run-as.
      *
-     * The obvious home for these is the app's external files dir, and the
-     * pictures land there perfectly well — adb simply cannot read them back.
-     * Android 11 closed /sdcard/Android/data to the shell user, so the pull
-     * fails with "No such file or directory" against files that plainly
-     * exist, and the run comes back with a logcat and nothing to look at.
-     * Android/media stayed readable, and an app may write its own directory
-     * there without asking for a permission.
+     * Both external homes for these failed the same way and it took two runs
+     * to stop believing the error: adb reports "No such file or directory"
+     * for a path the shell is merely forbidden to look at, so pictures that
+     * had been written, and asserted to exist, came back as a directory that
+     * appeared empty. Android 11 closed /sdcard/Android/data to the shell
+     * user, and Android/media did not save it either.
+     *
+     * The app's own files directory has no such ambiguity. It is unreadable
+     * by the shell directly and completely readable through `run-as`, which
+     * a debug build allows — one mechanism, documented, rather than a path
+     * that depends on which storage rules the image happens to enforce.
      */
     private fun outDir(): File {
         val ctx = InstrumentationRegistry.getInstrumentation().targetContext
-        val media = ctx.externalMediaDirs.firstOrNull()
-            ?: ctx.getExternalFilesDir(null)
-        return File(media, "shots").apply { mkdirs() }
+        return File(ctx.filesDir, "shots").apply { mkdirs() }
     }
 
     private fun shoot(name: String) {
@@ -58,6 +60,9 @@ class ScreenshotTest {
         val f = File(outDir(), "$name.png")
         val ok = device.takeScreenshot(f)
         check(ok && f.exists() && f.length() > 0) { "screenshot $name failed" }
+        /* say where it went, so a run that comes back empty can be told from
+           a run that never wrote anything */
+        android.util.Log.i("ANVILSHOT", "wrote ${f.absolutePath} (${f.length()} bytes)")
     }
 
     /** Reach a private member, because the app exposes no test seam. */
