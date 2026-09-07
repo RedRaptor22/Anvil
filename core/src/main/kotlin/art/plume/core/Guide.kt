@@ -70,30 +70,73 @@ class Sweep(
      *
      * THE PROFILE KEEPS THE SIDE IT WAS DRAWN ON, which is the whole of it.
      *
-     * This used to carry [basisR] round by the shortest rotation from
-     * [basisT] to the new tangent. That is continuous and it is wrong at the
-     * far end: a path leaving the anchor back TOWARDS the camera is close to
-     * the reverse of the axis the guide was extruded along, so the shortest
-     * rotation is close to a half turn — and a half turn rolls the section
-     * over. A guide whose outer wall stood on the left came back with the
-     * wall on the right, from nothing the hand did.
+     * A frame perpendicular to the new tangent has one degree of freedom left,
+     * and the question is which turn of it is the profile's own. Two earlier
+     * answers each got half of it:
      *
-     * Projecting the drawn right onto the plane the new tangent defines picks
-     * the frame that is CLOSEST to the one the profile was drawn in, out of
-     * all the frames perpendicular to the path. The section tips as the path
-     * tips and never turns over, so left stays left.
+     * Carrying [basisR] round by the shortest rotation from [basisT] is
+     * continuous, and wrong at the far end — a path leaving back towards the
+     * camera is close to the reverse of that axis, so the shortest rotation is
+     * close to a half turn and rolls the section over.
      *
-     * It still reduces to [basisR] exactly at guide creation, where the path
-     * runs along [basisT] and the drawn right is already perpendicular to it.
-     * The one case with nothing to project is a path leaving along the
-     * profile's own right, where every frame is equally far from the drawn
-     * one and the old rotation is as good an answer as any.
+     * PROJECTING [basisR] onto the plane fixed that and broke a different
+     * case. Where the path leaves along the profile's own right, basisR and
+     * the tangent are nearly parallel and the projection is not a direction at
+     * all — it is the numerical remainder of two vectors that cancelled, a few
+     * thousandths long and pointing wherever the rounding went. Normalising it
+     * yields a full-sized axis built out of noise. The guard for this was
+     * `lengthSq > 1e-12`, which such a remainder passes by eight orders of
+     * magnitude. On a pot bent into a ring the residue came out as (0, 0,
+     * -0.011), the seed landed on -Z instead of +Z, and the second axis
+     * inverted with it: the profile hung upwards from the rim, so the pot
+     * built itself upside down with the orange line underneath.
+     *
+     * So neither axis is trusted alone. The frame taken is the one closest to
+     * the WHOLE of the original — the turn that maximises
+     * `r · basisR + s · s0` over every frame perpendicular to the tangent,
+     * where s0 is the second axis the profile was drawn against. It has a
+     * closed form: in any orthonormal basis (e1, e2) of the free plane the
+     * best angle is atan2(B, A) for A and B below, and because it is an
+     * optimum it does not care which basis it was computed in — including one
+     * built from that same noisy projection.
+     *
+     * At creation, where the path runs along [basisT], it returns [basisR]
+     * exactly. Where the path leaves along the profile's right it returns the
+     * axis that keeps the section upright rather than the rounding error. Only
+     * a sweep that leaves BACKWARDS is genuinely ambiguous — every frame is
+     * then equally far from the original — and there the old projection is as
+     * good an answer as any, so it is what is used.
      */
     fun seedFor(t0: Vec3, out: Vec3 = Vec3()): Vec3 {
-        out.set(basisR).addScaled(t0, -(basisR dot t0))
-        if (out.lengthSq() > 1e-12) return out.normalize()
-        if ((basisT dot t0) < -0.999999) return out.set(basisR)
-        return Polyline.rotateBetween(basisT, t0, basisR, out)
+        /* the axis the profile's own "up" was measured against */
+        val s0 = basisT cross basisR
+
+        /* any orthonormal basis of the plane the tangent leaves free; which
+           one is immaterial, since what follows is an optimum over the plane */
+        val e1 = Vec3().set(basisR).addScaled(t0, -(basisR dot t0))
+        if (e1.lengthSq() < 1e-12) e1.set(s0).addScaled(t0, -(s0 dot t0))
+        if (e1.lengthSq() < 1e-12) Vec3.perpTo(t0, e1) else e1.normalize()
+        val e2 = t0 cross e1
+
+        val a = (e1 dot basisR) + (e2 dot s0)
+        val b = (e2 dot basisR) - (e1 dot s0)
+        val n = kotlin.math.sqrt(a * a + b * b)
+        if (n > 1e-9) {
+            return out.set(
+                (e1.x * a + e2.x * b) / n,
+                (e1.y * a + e2.y * b) / n,
+                (e1.z * a + e2.z * b) / n,
+            )
+        }
+        /*
+         * a * a + b * b is zero only for a path leaving BACKWARDS, where every
+         * frame is equally far from the original and the rotation is a half
+         * turn about an axis nothing picks. Turning about the section's own up
+         * is the choice that keeps it: the surface comes back towards you the
+         * same way up, and the two directions either side of the reversal
+         * agree with it instead of jumping.
+         */
+        return out.set(s0 cross t0).normalize()
     }
 }
 

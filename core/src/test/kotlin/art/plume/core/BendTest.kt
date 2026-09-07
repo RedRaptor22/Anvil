@@ -1,5 +1,6 @@
 package art.plume.core
 
+import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.test.Test
@@ -237,18 +238,48 @@ class BendTest {
         return (a[0] - a[a.size - 1]) dot right
     }
 
+    /**
+     * The section's own UP, at the start of the sweep — the axis a roll-over
+     * inverts, and the one the wall measurement cannot see.
+     */
+    private fun sectionUp(g: Guide): Vec3 {
+        val sw = g.sweep!!
+        val closed = Guides.pathIsClosed(sw.path)
+        val t = Frames.computeTangents(sw.path, closed)[0]
+        val fr = Frames.transportFrames(sw.path, sw.seedFor(t), closed)
+        return fr.t[0] cross fr.r[0]
+    }
+
+    /**
+     * THE SECTION IS NEVER ROLLED OVER, BEND WHERE YOU LIKE.
+     *
+     * This used to measure which side of the SCREEN the wall came out on and
+     * demand it stay left in all twenty-four directions. That is the wrong
+     * axis, and demanding it hid the fault it was meant to catch.
+     *
+     * `s = t cross r`, so the side the wall lands on and the way up the
+     * section sits are the SAME degree of freedom: fixing one fixes the other.
+     * Forcing the wall to stay left for a path bending into the screen can
+     * only be done by rolling the section a half turn — and that is exactly
+     * what the old seed did, for every direction in that family, measured
+     * here as `s · s0 = -1` throughout. The wall stayed put and the section
+     * came out upside down, which is invisible to a channel drawn symmetric
+     * about its floor and extremely visible on a pot: the rim ended up
+     * underneath, with the orange line beneath the body instead of round the
+     * top of it. That is what came back from the device.
+     *
+     * So the property asserted is the one that was actually meant — the
+     * section does not turn over — stated on the axis that turns. The wall's
+     * screen side is no longer pinned, because a surface bending away from
+     * you SHOULD present its wall to the other side; that is the sweep
+     * turning round, not the profile rolling.
+     */
     @Test
-    fun `the profile keeps the side it was drawn on, bend where you like`() {
+    fun `the section is never rolled over, bend where you like`() {
         val drawn = Guides.createFromStroke(channel(), view, right, 1.0)!!
         assertTrue(wallSide(drawn) < 0.0, "the wall was drawn on the left")
+        val up0 = sectionUp(drawn)
 
-        /*
-         * The fault: a path leaving the anchor back TOWARDS the camera is
-         * close to the reverse of the axis the guide was extruded along, so
-         * the shortest rotation from one to the other is close to a half turn
-         * — and a half turn rolled the section over. The wall came back on
-         * the right from nothing the hand did.
-         */
         for (deg in 0 until 360 step 15) {
             val a = Math.toRadians(deg.toDouble())
             for (dir in listOf(
@@ -260,12 +291,51 @@ class BendTest {
                 }
                 val g = Guides.createFromStroke(channel(), view, right, 1.0)!!
                 assertTrue(GuideEditing.bend(g, path))
+                val dot = sectionUp(g) dot up0
                 assertTrue(
-                    wallSide(g) <= 1e-9,
-                    "bending $deg deg along $dir put the wall on the right",
+                    dot >= -1e-9,
+                    "bending $deg deg along $dir rolled the section over ($dot)",
                 )
             }
         }
+    }
+
+    /**
+     * A POT BENT INTO A RING STANDS UP THE WAY IT WAS DRAWN.
+     *
+     * The documented worked example, and the one that came back from the
+     * device upside down: a profile drawn from the rim downwards, bent round
+     * a circle, must still hang DOWNWARDS from the rim. The orange line is
+     * the rim, so it belongs round the top of the pot and not underneath it.
+     *
+     * The circle's opening tangent runs along the profile's own right, which
+     * is where projecting `basisR` onto the plane stops being a direction and
+     * becomes the remainder of two vectors that cancelled — a few thousandths
+     * long, pointing wherever the rounding went. The seed took it, the second
+     * axis inverted with it, and the pot built itself the other way up.
+     */
+    @Test
+    fun `a profile bent into a ring keeps the rim on top`() {
+        val profile = (0 until 24).map { Vec3(0.0, 0.5 - it / 23.0, 0.0) }
+        val g = Guides.createFromStroke(profile, view, right, 1.0)!!
+        val rim = g.anchorRow!!.first().copy()
+
+        val rad = 0.6
+        val circle = (0 until 48).map {
+            val th = it / 47.0 * 2 * PI
+            Vec3(rim.x + sin(th) * rad, rim.y, rim.z + (cos(th) - 1.0) * rad)
+        }
+        assertTrue(GuideEditing.bend(g, circle))
+
+        val row = rowsOf(g).first()
+        assertEquals(0.0, row.first().distanceTo(rim), 1e-9, "the rim moved")
+        assertTrue(
+            row.last().y < row.first().y,
+            "the pot is upside down: the body rose to ${row.last().y} above a rim at ${row.first().y}",
+        )
+        /* and the whole surface hangs below the rim, not above it */
+        val top = rowsOf(g).flatten().maxOf { it.y }
+        assertTrue(top <= rim.y + 1e-9, "part of the pot stands above its own rim")
     }
 
     @Test

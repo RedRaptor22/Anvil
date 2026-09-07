@@ -6,6 +6,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import androidx.test.uiautomator.UiDevice
+import art.plume.core.GuideEditing
 import art.plume.core.Guides
 import art.plume.core.Vec3
 import java.io.File
@@ -152,6 +153,61 @@ class ScreenshotTest {
             }
             shoot("03-guide-with-orange-line")
             drawViews(scenario, "03-guide-with-orange-line")
+
+            /*
+             * 4-6: the two faults that came back from the device. A tube bent
+             * into a doughnut and then FILLED, which came back patterned
+             * rather than covered; and a pot profile bent round a ring, which
+             * came back upside down with its rim underneath.
+             */
+            scenario.onActivity { act ->
+                val scene = grab<art.plume.core.GuideScene>(act, "guides")
+                for (g in scene.resources.toList()) scene.remove(g)
+                scene.setActive(null)
+                val prof = (0 until 40).map {
+                    val a = it / 39.0 * 2 * Math.PI
+                    Vec3(Math.cos(a) * 0.18, Math.sin(a) * 0.18, 0.0)
+                }
+                val g = Guides.createFromStroke(prof, Vec3(0.0, 0.0, -1.0), Vec3(1.0, 0.0, 0.0), 4.0)
+                if (g != null) {
+                    val rim = g.anchorRow!!.first()
+                    val circle = (0 until 64).map {
+                        val th = it / 63.0 * 2 * Math.PI
+                        Vec3(
+                            rim.x + Math.sin(th) * 0.9, rim.y,
+                            rim.z + (Math.cos(th) - 1.0) * 0.9,
+                        )
+                    }
+                    GuideEditing.bend(g, circle)
+                    scene.setActive(g)
+                    call(act, "pushGuides")
+                }
+            }
+            shoot("04-donut")
+
+            scenario.onActivity { act -> call(act, "fillActiveGuide") }
+            shoot("05-donut-filled")
+
+            scenario.onActivity { act ->
+                val scene = grab<art.plume.core.GuideScene>(act, "guides")
+                scene.setActive(null)
+                val prof = (0 until 24).map { Vec3(0.0, 0.5 - it / 23.0, 0.0) }
+                val g = Guides.createFromStroke(prof, Vec3(0.0, 0.0, -1.0), Vec3(1.0, 0.0, 0.0), 4.0)
+                if (g != null) {
+                    val rim = g.anchorRow!!.first()
+                    val circle = (0 until 48).map {
+                        val th = it / 47.0 * 2 * Math.PI
+                        Vec3(
+                            rim.x + Math.sin(th) * 0.6, rim.y,
+                            rim.z + (Math.cos(th) - 1.0) * 0.6,
+                        )
+                    }
+                    GuideEditing.bend(g, circle)
+                    scene.setActive(g)
+                    call(act, "pushGuides")
+                }
+            }
+            shoot("06-pot-rim-on-top")
         }
     }
 }
