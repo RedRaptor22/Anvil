@@ -227,6 +227,8 @@ class ScreenshotTest {
             scenario.onActivity { act ->
                 val scene = grab<art.plume.core.GuideScene>(act, "guides")
                 scene.setActive(null)
+                /* and clear the fill, or the pot is photographed through it */
+                grab<art.plume.core.Sketch>(act, "sketch").clear()
                 val prof = (0 until 24).map { Vec3(0.0, 0.5 - it / 23.0, 0.0) }
                 val g = Guides.createFromStroke(prof, Vec3(0.0, 0.0, -1.0), Vec3(1.0, 0.0, 0.0), 4.0)
                 if (g != null) {
