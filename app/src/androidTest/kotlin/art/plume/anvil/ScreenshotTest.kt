@@ -112,6 +112,14 @@ class ScreenshotTest {
         return f.get(target) as T
     }
 
+    private fun setField(target: Any, name: String, value: Any) {
+        val f = generateSequence(target.javaClass) { it.superclass }
+            .mapNotNull { runCatching { it.getDeclaredField(name) }.getOrNull() }
+            .first()
+        f.isAccessible = true
+        f.set(target, value)
+    }
+
     private fun call(target: Any, name: String) {
         val m = generateSequence(target.javaClass) { it.superclass }
             .mapNotNull { runCatching { it.getDeclaredMethod(name) }.getOrNull() }
@@ -185,7 +193,35 @@ class ScreenshotTest {
             }
             shoot("04-donut")
 
-            scenario.onActivity { act -> call(act, "fillActiveGuide") }
+            /*
+             * FILL IN A LIGHT COLOUR, ON A FRAMED DONUT.
+             *
+             * The first pass of this filled in the app's default ink, which is
+             * very nearly black, against a dark page — so a fill full of holes
+             * and a fill that covered everything photograph identically. The
+             * reported fault is gaps, and gaps are only visible in a colour
+             * that is not the background.
+             */
+            scenario.onActivity { act ->
+                setField(act, "color", art.plume.core.Rgba(0.66, 0.69, 0.96))
+                call(act, "resetView")
+                call(act, "pushCamera")
+                val scene = grab<art.plume.core.GuideScene>(act, "guides")
+                val g = scene.active
+                if (g != null) {
+                    val sp = art.plume.core.GuidePainting.surfaceSpan(g)
+                    val nib = art.plume.core.Stroke(brush = art.plume.core.Fill.BRUSH, baseRadius = 14.0 * art.plume.core.MM * 0.5)
+                    val half = art.plume.core.StrokeGeometry.halfWidth(nib, nib.baseRadius)
+                    android.util.Log.i(
+                        "ANVILSHOT",
+                        "fill span lu=${sp?.lu} lv=${sp?.lv} nu=${sp?.nu} nv=${sp?.nv}" +
+                            " half=$half pitch=${half * 2 * art.plume.core.Fill.OVERLAP}",
+                    )
+                }
+                call(act, "fillActiveGuide")
+                val n = grab<art.plume.core.Sketch>(act, "sketch").strokes.size
+                android.util.Log.i("ANVILSHOT", "fill produced $n strokes")
+            }
             shoot("05-donut-filled")
 
             scenario.onActivity { act ->
