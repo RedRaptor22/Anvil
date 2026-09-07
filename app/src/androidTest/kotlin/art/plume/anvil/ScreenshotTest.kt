@@ -3,6 +3,8 @@ package art.plume.anvil
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import androidx.test.uiautomator.UiDevice
 import art.plume.core.Guides
 import art.plume.core.Vec3
@@ -58,6 +60,37 @@ class ScreenshotTest {
         return File(ctx.filesDir, "shots").apply { mkdirs() }
     }
 
+    /**
+     * THE VIEW LAYER, DRAWN SEPARATELY.
+     *
+     * UiAutomator's screenshot came back with the GL surface and nothing else
+     * on it — no rail, no pill, and Home itself missing — which could mean the
+     * chrome was not there or could mean the capture does not composite the
+     * app window over a SurfaceView. Those are opposite bugs and the picture
+     * cannot tell them apart, so the window draws itself into a bitmap here
+     * and is saved beside the other one. Between the pair, whichever layer is
+     * empty is the one at fault.
+     */
+    private fun drawViews(scenario: ActivityScenario<MainActivity>, name: String) {
+        scenario.onActivity { act ->
+            val v = act.window.decorView
+            if (v.width <= 0 || v.height <= 0) return@onActivity
+            val bmp = Bitmap.createBitmap(v.width, v.height, Bitmap.Config.ARGB_8888)
+            v.draw(Canvas(bmp))
+            File(outDir(), "$name-views.png").outputStream().use {
+                bmp.compress(Bitmap.CompressFormat.PNG, 100, it)
+            }
+            val chrome = grab<Chrome>(act, "chrome")
+            android.util.Log.i(
+                "ANVILSHOT",
+                "$name decor=${v.width}x${v.height}" +
+                    " root=${grab<android.view.View>(chrome, "root").visibility}" +
+                    " gallery=${grab<android.view.View>(chrome, "gallery").visibility}" +
+                    " canvasLayer=${grab<android.view.View>(chrome, "canvasLayer").visibility}",
+            )
+        }
+    }
+
     private fun shoot(name: String) {
         Thread.sleep(1200)                 // let the GL thread land a frame
         val f = File(outDir(), "$name.png")
@@ -91,12 +124,14 @@ class ScreenshotTest {
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             // 1. the start menu, which should have no canvas controls on it
             shoot("01-home")
+            drawViews(scenario, "01-home")
 
             // 2. the canvas
             scenario.onActivity { act ->
                 grab<Chrome>(act, "chrome").onOpenWork(null)
             }
             shoot("02-canvas")
+            drawViews(scenario, "02-canvas")
 
             // 3. a swept guide, with the orange starting line on it
             scenario.onActivity { act ->
@@ -116,6 +151,7 @@ class ScreenshotTest {
                 camera.hashCode()
             }
             shoot("03-guide-with-orange-line")
+            drawViews(scenario, "03-guide-with-orange-line")
         }
     }
 }
