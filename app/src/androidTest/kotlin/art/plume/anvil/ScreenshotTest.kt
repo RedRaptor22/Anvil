@@ -36,19 +36,22 @@ class ScreenshotTest {
         get() = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
 
     /**
-     * INTERNAL STORAGE, AND FETCHED WITH run-as.
+     * INTERNAL STORAGE, FETCHED WITH run-as AFTER THE RUN.
      *
-     * Both external homes for these failed the same way and it took two runs
-     * to stop believing the error: adb reports "No such file or directory"
-     * for a path the shell is merely forbidden to look at, so pictures that
-     * had been written, and asserted to exist, came back as a directory that
-     * appeared empty. Android 11 closed /sdcard/Android/data to the shell
-     * user, and Android/media did not save it either.
+     * Two runs were lost to a wrong diagnosis worth writing down. adb could
+     * not find the pictures under /sdcard/Android/data, and could not find
+     * them under Android/media either, and both failures look exactly like
+     * Android 11's scoped storage — which is what they were blamed on.
      *
-     * The app's own files directory has no such ambiguity. It is unreadable
-     * by the shell directly and completely readable through `run-as`, which
-     * a debug build allows — one mechanism, documented, rather than a path
-     * that depends on which storage rules the image happens to enforce.
+     * They were not. Gradle UNINSTALLS the app when connectedAndroidTest
+     * finishes, and an uninstall takes every one of those directories with
+     * it. The pictures were written, asserted, and then deleted before
+     * anything went looking for them; "No such file or directory" was the
+     * plain truth about a package that no longer existed. The giveaway was
+     * run-as finally saying so in as many words: "unknown package".
+     *
+     * So the app's own files directory is fine — it just has to still be
+     * there, which is what leaveApksInstalledAfterRun buys in the workflow.
      */
     private fun outDir(): File {
         val ctx = InstrumentationRegistry.getInstrumentation().targetContext

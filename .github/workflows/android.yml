@@ -111,11 +111,14 @@ jobs:
           disable-animations: true
           script: |
             adb logcat -c
-            ./gradlew :app:connectedDebugAndroidTest --no-daemon
+            # KEEP THE APK INSTALLED. Gradle uninstalls it when the tests
+            # finish, and the uninstall deletes the pictures before anything
+            # can fetch them — which reads as adb failing to find a path
+            # rather than as a package that is no longer there
+            ./gradlew :app:connectedDebugAndroidTest --no-daemon \
+              -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true
             mkdir -p shots
-            # run-as, not pull: the shell cannot read either external
-            # directory on Android 11, and reports a forbidden path as a
-            # missing one — which reads exactly like a test that wrote nothing
+            # run-as, because the files are in the app's own data directory
             # ONE LINE: this action feeds the script to `sh -c` a line at a
             # time, so a loop written over four of them is four broken commands
             for f in $(adb shell run-as art.plume.anvil ls files/shots | tr -d '\r'); do adb exec-out run-as art.plume.anvil cat "files/shots/$f" > "shots/$f"; done
