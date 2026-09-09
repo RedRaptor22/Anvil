@@ -511,6 +511,29 @@ class MainActivity : Activity(), Gestures.Listener {
      */
     private fun wireChrome() {
         chrome.onTool = { t -> setTool(t) }
+        /*
+         * The globe's drag is the canvas's own orbit, in the same dp units, so
+         * it turns the view at exactly the rate two fingers would.
+         */
+        chrome.onNavOrbit = { dx, dy ->
+            camera.orbitBy(dx, dy)
+            pushCamera()
+            refreshControls()
+        }
+        /*
+         * And a tap on a ball takes the camera to that standard view. It goes
+         * through the camera's own applyOrthoView rather than setting angles
+         * here, so a ball and the Front/Top/Right the rest of the app already
+         * talks about cannot mean two different things — including its rule
+         * that Top and Bottom keep the azimuth, since looking straight down,
+         * theta only decides which way up the drawing is.
+         */
+        chrome.onNavAim = { v ->
+            camera.applyOrthoView(v)
+            pushCamera()
+            refreshControls()
+            announce(getString(R.string.nav_aimed, v.name))
+        }
         chrome.onAction = { a -> doAction(a) }
         chrome.onSizeMm = { mm -> sizeMM = mm }
         chrome.onOpacity = { o -> applyOpacityToSelectionOrBrush(o) }
@@ -4889,8 +4912,21 @@ class MainActivity : Activity(), Gestures.Listener {
         })
     }
 
+    /** Scratch for the globe's basis, so a camera move allocates nothing. */
+    private val navRight = Vec3()
+    private val navUp = Vec3()
+    private val navBack = Vec3()
+
     private fun pushCamera() {
         renderer.setCamera(camera)
+        /*
+         * THE GLOBE FOLLOWS THE CAMERA. Every path that moves the view comes
+         * through here — orbit, pan, zoom, a snap, a document load — so this
+         * is the one place the gizmo has to be told, and it cannot fall out of
+         * step with what is on screen.
+         */
+        camera.basis(navRight, navUp, navBack)
+        chrome.setNavBasis(navRight, navUp, navBack)
         surface.requestRender()
     }
 

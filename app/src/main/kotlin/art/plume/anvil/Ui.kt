@@ -9,6 +9,7 @@ import android.graphics.Outline
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
+import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.view.Gravity
@@ -1817,5 +1818,148 @@ class StepSwipe(
             }
         }
         return true
+    }
+}
+
+/**
+ * THE NAVIGATION GLOBE — Blender's axis gizmo, for aiming the camera exactly.
+ *
+ * Six balls, one on each end of each world axis, projected through the
+ * camera's own basis so they sit where those axes actually point. Drag
+ * anywhere on it and the view orbits, at the same rate two fingers on the
+ * canvas would. Tap a ball and the camera goes and looks straight down that
+ * axis — which is the whole point of the thing: orbiting by hand gets you
+ * NEAR the front view, and a tap gets you exactly the front view.
+ *
+ * The near balls are filled and carry their letter; the far ones are hollow,
+ * because a globe you can see the back of is how you tell which way round it
+ * is. Positive axes are labelled, negative ones are not, exactly as Blender
+ * has them — the label is what says which of a pair you are looking at.
+ *
+ * Drawing runs back to front down [NavGizmo.balls]; hit-testing runs the
+ * other way, so where an axis points at the camera and stacks its two balls
+ * on one pixel, the tap goes to the one you can actually see.
+ */
+class NavGlobe(
+    ctx: Context,
+    private val t: Tokens,
+    private val onOrbit: (dxDp: Double, dyDp: Double) -> Unit,
+    private val onAim: (art.plume.core.Camera.OrthoView) -> Unit,
+) : View(ctx) {
+
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val text = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        textAlign = Paint.Align.CENTER
+        typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+    }
+
+    private var balls: List<art.plume.core.NavGizmo.Ball> = emptyList()
+    private var downX = 0f
+    private var downY = 0f
+    private var lastX = 0f
+    private var lastY = 0f
+    private var moved = false
+
+    init {
+        val side = t.px(R.dimen.navGlobe)
+        layoutParams = FrameLayout.LayoutParams(side, side)
+    }
+
+    /** The camera's basis, pushed in whenever the view moves. */
+    fun setBasis(right: art.plume.core.Vec3, up: art.plume.core.Vec3, back: art.plume.core.Vec3) {
+        balls = art.plume.core.NavGizmo.balls(right, up, back)
+        invalidate()
+    }
+
+    private fun colourOf(axis: Int): Int = when (axis) {
+        art.plume.core.NavGizmo.AXIS_X -> t.red
+        art.plume.core.NavGizmo.AXIS_Y -> t.green
+        else -> t.blue
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        val c = width / 2f
+        /* the balls reach the rim, so the globe's own radius is short of it by
+           one ball or the outermost would be clipped in half */
+        val ball = width * 0.15f
+        val r = c - ball
+
+        paint.style = Paint.Style.FILL
+        paint.color = t.panel
+        canvas.drawCircle(c, c, c, paint)
+
+        text.textSize = ball * 1.1f
+        for (b in balls) {
+            val x = c + (b.x * r).toFloat()
+            val y = c + (b.y * r).toFloat()
+            val col = colourOf(b.axis)
+
+            if (b.inFront) {
+                /* a spoke to the centre, so a ball reads as an axis and not as
+                   a dot floating in a circle */
+                paint.style = Paint.Style.STROKE
+                paint.strokeWidth = t.dpf(2f)
+                paint.color = col
+                canvas.drawLine(c, c, x, y, paint)
+
+                paint.style = Paint.Style.FILL
+                paint.color = col
+                canvas.drawCircle(x, y, ball, paint)
+                if (b.positive) {
+                    text.color = t.onActive
+                    /* centred on the ball: half the text height above its
+                       baseline, which is what descent-ascent halves give */
+                    val dy = (text.descent() + text.ascent()) / 2f
+                    canvas.drawText(b.label, x, y - dy, text)
+                }
+            } else {
+                paint.style = Paint.Style.FILL
+                paint.color = t.panel2
+                canvas.drawCircle(x, y, ball, paint)
+                paint.style = Paint.Style.STROKE
+                paint.strokeWidth = t.dpf(1.5f)
+                paint.color = col
+                canvas.drawCircle(x, y, ball - t.dpf(0.75f), paint)
+            }
+        }
+    }
+
+    override fun onTouchEvent(ev: MotionEvent): Boolean {
+        when (ev.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                downX = ev.x; downY = ev.y
+                lastX = ev.x; lastY = ev.y
+                moved = false
+                parent?.requestDisallowInterceptTouchEvent(true)
+                return true
+            }
+            MotionEvent.ACTION_MOVE -> {
+                val slop = t.dpf(6f)
+                if (!moved && kotlin.math.hypot(ev.x - downX, ev.y - downY) > slop) moved = true
+                if (moved) {
+                    val d = resources.displayMetrics.density
+                    onOrbit(((ev.x - lastX) / d).toDouble(), ((ev.y - lastY) / d).toDouble())
+                    lastX = ev.x; lastY = ev.y
+                }
+                return true
+            }
+            MotionEvent.ACTION_UP -> {
+                if (!moved) {
+                    /* gizmo space: -1..1 across the ring the balls sit on */
+                    val c = width / 2f
+                    val r = c - width * 0.15f
+                    if (r > 0f) {
+                        val gx = (ev.x - c) / r
+                        val gy = (ev.y - c) / r
+                        val hit = art.plume.core.NavGizmo.hit(
+                            balls, gx.toDouble(), gy.toDouble(), (width * 0.15f / r).toDouble(),
+                        )
+                        if (hit != null) onAim(hit.view)
+                    }
+                }
+                return true
+            }
+        }
+        return super.onTouchEvent(ev)
     }
 }

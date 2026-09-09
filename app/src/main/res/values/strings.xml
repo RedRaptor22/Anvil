@@ -364,4 +364,5 @@
     <string name="opt_orbit_pin">Pin orbit</string>
     <string name="guide_replaced">New guide — the old one is in the quick menu</string>
     <string name="home_notes_heading">Notes</string>
+    <string name="nav_aimed">%1$s view</string>
 </resources>

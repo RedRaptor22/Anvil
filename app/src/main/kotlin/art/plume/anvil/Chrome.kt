@@ -295,6 +295,29 @@ class Chrome(private val act: Activity, val t: Tokens) {
     private var optOrbitShow = true
     private var optOrbitPin = false
 
+    /**
+     * THE NAVIGATION GLOBE's two answers: a drag orbits, a tap on a ball aims.
+     *
+     * Orbit deltas are in dp so they arrive in the same units the canvas's own
+     * two-finger orbit uses, and the activity can hand both to the same place
+     * rather than keeping a second sensitivity in step with the first.
+     */
+    var onNavOrbit: (dxDp: Double, dyDp: Double) -> Unit = { _, _ -> }
+    var onNavAim: (art.plume.core.Camera.OrthoView) -> Unit = {}
+
+    private val navGlobe = NavGlobe(
+        act, t,
+        onOrbit = { dx, dy -> onNavOrbit(dx, dy) },
+        onAim = { v -> onNavAim(v) },
+    )
+
+    /** Where the camera is pointing, for the globe to project its axes with. */
+    fun setNavBasis(
+        right: art.plume.core.Vec3,
+        up: art.plume.core.Vec3,
+        back: art.plume.core.Vec3,
+    ) = navGlobe.setBasis(right, up, back)
+
     /** The orbit point, drawn where the view is built around. */
     private val orbitMark = OrbitMark(act, t)
 
@@ -3601,6 +3624,20 @@ class Chrome(private val act: Activity, val t: Tokens) {
             lp(
                 Gravity.START or Gravity.CENTER_VERTICAL,
                 width = t.px(R.dimen.railTabW), height = t.px(R.dimen.railTabH),
+            ),
+        )
+        /*
+         * RIGHT EDGE, UNDER THE TOOL PILL. The left edge is the brush rail's
+         * and the middle of the right edge is the joystick's, so the globe
+         * takes the corner below the tools — near the pill it belongs with,
+         * and clear of both.
+         */
+        canvasLayer.addView(
+            navGlobe,
+            lp(
+                Gravity.TOP or Gravity.END,
+                top = t.px(R.dimen.navGlobeTop), right = t.px(R.dimen.edge),
+                width = t.px(R.dimen.navGlobe), height = t.px(R.dimen.navGlobe),
             ),
         )
         canvasLayer.addView(

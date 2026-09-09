@@ -81,6 +81,9 @@
     <dimen name="walkW">440dp</dimen>
     <dimen name="joyW">132dp</dimen>
     <dimen name="joyPad">108dp</dimen>
+    <!-- the navigation globe, a shade smaller than the joystick pad -->
+    <dimen name="navGlobe">96dp</dimen>
+    <dimen name="navGlobeTop">96dp</dimen>
 
     <!-- the dot that marks a tool hiding a second mode -->
     <dimen name="modeDot">3dp</dimen>
