@@ -123,6 +123,17 @@ jobs:
             mkdir -p shots
             adb exec-out screencap -p > shots/00-launched-from-launcher.png
             adb shell dumpsys activity activities | grep -E "mResumedActivity|topResumedActivity" > shots/resumed.txt || true
+            # THE VIEW TREE, to tell a black app from a black photograph.
+            # Two capture APIs have both come back with only the GL layer on
+            # this emulator, so a picture without the chrome in it does not
+            # prove the chrome is not there. The dump does.
+            adb exec-out uiautomator dump /sdcard/win.xml > /dev/null 2>&1 || true
+            adb pull /sdcard/win.xml shots/window-launched.xml || true
+            adb shell input tap 1280 900
+            adb shell sleep 3
+            adb exec-out screencap -p > shots/00b-after-tap.png
+            adb exec-out uiautomator dump /sdcard/win2.xml > /dev/null 2>&1 || true
+            adb pull /sdcard/win2.xml shots/window-after-tap.xml || true
             adb logcat -d > shots/launch-logcat.txt
             adb logcat -c
             # KEEP THE APK INSTALLED. Gradle uninstalls it when the tests
