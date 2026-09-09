@@ -147,6 +147,18 @@ jobs:
             # time, so a loop written over four of them is four broken commands
             for f in $(adb shell run-as art.plume.anvil ls files/shots | tr -d '\r'); do adb exec-out run-as art.plume.anvil cat "files/shots/$f" > "shots/$f"; done
             ls -la shots
+            # AND AGAIN, WITH WORK ALREADY SAVED.
+            # The first launch is a fresh install with an empty shelf. The
+            # report is from a device that has been drawn on, and the app
+            # restores an autosave and a library before it shows anything —
+            # so the second launch is the one that walks that path.
+            adb shell am force-stop art.plume.anvil
+            adb shell am start -W -n art.plume.anvil/.MainActivity
+            adb shell sleep 8
+            adb exec-out screencap -p > shots/07-relaunch-with-work.png
+            adb exec-out uiautomator dump /sdcard/win3.xml > /dev/null 2>&1 || true
+            adb pull /sdcard/win3.xml shots/window-relaunch.xml || true
+            adb shell dumpsys activity activities | grep -E "mResumedActivity" > shots/resumed-relaunch.txt || true
             adb logcat -d > shots/logcat.txt
       - uses: actions/upload-artifact@v4
         if: always()
