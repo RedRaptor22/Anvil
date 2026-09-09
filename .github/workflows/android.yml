@@ -111,6 +111,20 @@ jobs:
           disable-animations: true
           script: |
             adb logcat -c
+            # A REAL LAUNCH, THE WAY A PERSON DOES IT.
+            # The instrumented test starts the activity itself, which proves
+            # the activity works and not that the app opens: a launcher start
+            # goes through the manifest, the theme and the splash, and
+            # `screencap` captures the composited screen — views included,
+            # which UiAutomator's own screenshot does not manage here.
+            ./gradlew :app:installDebug --no-daemon
+            adb shell am start -W -n art.plume.anvil/.MainActivity
+            adb shell sleep 8
+            mkdir -p shots
+            adb exec-out screencap -p > shots/00-launched-from-launcher.png
+            adb shell dumpsys activity activities | grep -E "mResumedActivity|topResumedActivity" > shots/resumed.txt || true
+            adb logcat -d > shots/launch-logcat.txt
+            adb logcat -c
             # KEEP THE APK INSTALLED. Gradle uninstalls it when the tests
             # finish, and the uninstall deletes the pictures before anything
             # can fetch them — which reads as adb failing to find a path
