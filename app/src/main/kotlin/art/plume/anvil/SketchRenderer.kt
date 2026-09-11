@@ -19,12 +19,12 @@ import art.plume.core.MeshData
 import art.plume.core.Rgba
 import art.plume.core.ShadowFit
 import art.plume.core.Stroke
-import art.plume.core.decal
-import art.plume.core.isDecal
 import art.plume.core.StrokeGeometry
 import art.plume.core.Symmetry
 import art.plume.core.Tune
 import art.plume.core.Vec3
+import art.plume.core.decal
+import art.plume.core.isDecal
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
@@ -1230,10 +1230,12 @@ class SketchRenderer : GLSurfaceView.Renderer {
      * the world, and the far wall of a shape comes through the near one.
      *
      * The measurement was always relative, so it is anchored at the end that
-     * matters: the newest curve is pulled [DEPTH_ORDER_CAP] units forward and
-     * every older one a unit less, down to a floor of one. The ordering
-     * between any two curves within the cap of each other is exactly what it
-     * was; what is gone is the part that grew with the size of the drawing.
+     * matters. The ramp is counted DOWN from the newest curve: the newest gets
+     * the whole span, each older one a unit less, and everything past the span
+     * rests on a floor of one unit. Under [DEPTH_ORDER_CAP] curves that is
+     * arithmetically the same ramp as before — a drawing of forty still runs
+     * one to forty — and over it the span stops growing instead of the floor
+     * dropping away.
      *
      * What that costs: two curves more than [DEPTH_ORDER_CAP] apart in the
      * drawing both sit on the floor and tie, so a pair of OVERLAPPING,
@@ -1244,7 +1246,8 @@ class SketchRenderer : GLSurfaceView.Renderer {
      */
     private fun ageOffset(order: Int, count: Int): Float {
         val age = (count - 1 - order).coerceAtLeast(0)
-        return -(1f + (DEPTH_ORDER_CAP - min(age, DEPTH_ORDER_CAP)))
+        val span = min(count - 1, DEPTH_ORDER_CAP).coerceAtLeast(0)
+        return -(1f + (span - min(age, span)))
     }
 
     /**
@@ -1868,6 +1871,9 @@ class SketchRenderer : GLSurfaceView.Renderer {
          * thinnest separation anything in a drawing has. Five hundred and
          * twelve curves is also far more than can plausibly overlap on one
          * patch of one guide, which is the tie this exists to settle.
+         *
+         * A drawing smaller than this spends less: the span is the drawing's
+         * own length, so nothing pays for headroom it is not using.
          */
         const val DEPTH_ORDER_CAP = 512
 

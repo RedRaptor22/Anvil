@@ -672,10 +672,8 @@ class MainActivity : Activity(), Gestures.Listener {
         chrome.onKeypad = { which, v ->
             when (which) {
                 "size" -> { sizeMM = clamp(v, Tune.BRUSH_MIN_MM, Tune.BRUSH_MAX_MM) }
-                "erase" -> {
-                    eraseMM = clamp(v, Tune.BRUSH_MIN_MM, Tune.BRUSH_MAX_MM)
-                    chrome.setEraseSize(eraseMM)
-                }
+                /* syncBrushControls below pushes it back to the panel */
+                "erase" -> eraseMM = clamp(v, Tune.BRUSH_MIN_MM, Tune.BRUSH_MAX_MM)
                 "opacity" -> applyOpacityToSelectionOrBrush(clamp(v / 100.0, 0.05, 1.0))
             }
             syncBrushControls()
