@@ -3981,7 +3981,9 @@ class MainActivity : Activity(), Gestures.Listener {
         proto.patternIntensity = patternIntensity
         proto.patternAngle = patternAngle
         proto.patternContrast = patternContrast
-        when (val r = Fill.fillGuide(g, proto)) {
+        /* the paint stands on the side of the guide you are looking at, the
+           same as a hand-drawn curve does — see Fill.fillGuide */
+        when (val r = Fill.fillGuide(g, proto, camera.eye)) {
             is Fill.Result.Refused -> toast(r.reason)
             is Fill.Result.Filled -> {
                 /* FILL'S CURVES JOIN THE ACTIVE GROUP like every other curve.

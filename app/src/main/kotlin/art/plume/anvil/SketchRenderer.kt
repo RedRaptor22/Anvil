@@ -23,8 +23,6 @@ import art.plume.core.StrokeGeometry
 import art.plume.core.Symmetry
 import art.plume.core.Tune
 import art.plume.core.Vec3
-import art.plume.core.decal
-import art.plume.core.isDecal
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
@@ -1170,10 +1168,7 @@ class SketchRenderer : GLSurfaceView.Renderer {
         /* the live stroke last, and newer than everything: it is the one you
            are drawing right now */
         GLES30.glBlendFunc(GLES30.GL_SRC_ALPHA, GLES30.GL_ONE_MINUS_SRC_ALPHA)
-        GLES30.glPolygonOffset(
-            if (liveIsDecal()) -1f else 0f,
-            ageOffset(list.size, list.size),
-        )
+        GLES30.glPolygonOffset(0f, ageOffset(list.size, list.size))
         drawLive(l.shaded)
 
         /*
@@ -1209,10 +1204,7 @@ class SketchRenderer : GLSurfaceView.Renderer {
         GLES30.glDepthMask(true)
         GLES30.glDisable(GLES30.GL_BLEND)
         for ((i, s) in list.withIndex()) if (pass(s) != OPAQUE) drawStroke(s, l.shaded, i, list.size)
-        GLES30.glPolygonOffset(
-            if (liveIsDecal()) -1f else 0f,
-            ageOffset(list.size, list.size),
-        )
+        GLES30.glPolygonOffset(0f, ageOffset(list.size, list.size))
         drawLive(l.shaded)
         GLES30.glColorMask(true, true, true, true)
 
@@ -1284,21 +1276,25 @@ class SketchRenderer : GLSurfaceView.Renderer {
      * depths differ by an ULP or two and which one shows varies ACROSS THE
      * SURFACE. That is the diagonal — it follows the diagonal of the quad.
      *
-     * The slope term is FOR DECALS ONLY — see [decal], which is where the
-     * three conditions and the reason for each of them are. It used to be for
-     * `paint`, a flag six of the eight brushes carry, and among those six are
-     * a cube, a three-millimetre ribbon and a pencil: solids with a silhouette
-     * whose depth slope is the steepest in the drawing. A slope-scaled offset
-     * at a grazing angle is not a nudge, and giving one to a tube pulls the
-     * whole rim of the tube towards the eye. That is most of the reported
-     * bleed-through: it showed at some angles and not others because the slope
-     * it scales by IS the angle.
+     * THE SLOPE TERM IS GONE, and what replaced it is geometry.
+     *
+     * It existed for one case: a blade lying IN a guide, sharing the guide's
+     * own depth, where a constant nudge stops being a nudge once the surface
+     * is seen edge-on. Sections do not lie in a surface any more — see
+     * [StrokeGeometry.standsOn] — they stand on it, a full thickness clear of
+     * it and on the side facing the pen. A gap you can measure needs no depth
+     * hack to defend it.
+     *
+     * Which is the better outcome by some distance, because the slope term was
+     * also the most dangerous thing here: it scales with how fast depth
+     * changes across a pixel, so on a silhouette it is a shove rather than a
+     * nudge, and the rim of every tube is a silhouette. It had been handed to
+     * `paint` — six of the eight brushes, a cube and a pencil among them —
+     * which is most of the reported bleed-through, and the reason it came and
+     * went as the object turned.
      */
     private fun drawStroke(s: Stroke, shadedNow: Boolean, order: Int, count: Int) {
-        GLES30.glPolygonOffset(
-            if (s.decal) -1f else 0f,
-            ageOffset(order, count),
-        )
+        GLES30.glPolygonOffset(0f, ageOffset(order, count))
         setMaterial(s.materialOf, shadedNow)
         setPattern(s)
         GLES30.glUniform1f(uGrit, if (s.cfg.grit) 1f else 0f)
@@ -1738,15 +1734,6 @@ class SketchRenderer : GLSurfaceView.Renderer {
     fun setLive(buffer: LiveStroke?) {
         synchronized(strokes) { live = buffer }
     }
-
-    /**
-     * The same [decal] test as a committed curve gets, asked of the one under
-     * the pen: a blade painted onto a guide. `guideId` is set by the first
-     * sample that lands on a surface, so this answers true from the moment the
-     * curve is on one and the preview sorts the way the finished curve will.
-     */
-    private fun liveIsDecal(): Boolean =
-        synchronized(strokes) { live }?.let { it.cfg.isDecal(it.guided) } ?: false
 
     private fun drawLive(shadedNow: Boolean = shaded) {
         val buffer = synchronized(strokes) { live } ?: return

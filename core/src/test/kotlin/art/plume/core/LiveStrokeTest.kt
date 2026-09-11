@@ -67,6 +67,56 @@ class LiveStrokeTest {
         }
     }
 
+    /**
+     * THE SAME CLAIM, FOR A CURVE ON A GUIDE — which is where the geometry
+     * differs and where the test above never went.
+     *
+     * Every curve with a surface under it now STANDS on that surface instead
+     * of straddling it, and the lift is aimed by the section's roll. The rings
+     * measure that roll while the pen is down, because nothing has frozen it
+     * onto the points yet; the two end caps were reading the frozen value, so
+     * they were lifted along the transported reference while the tube between
+     * them stood on the guide — two cones pulled sideways out of the ends of
+     * the preview, snapping into place on the pen-up. It was reachable before
+     * only with `cube` and `wide`; it is reachable with everything now.
+     *
+     * The whole mesh is compared float for float, as above. The surface normal
+     * is the radial direction of the cylinder the test helix winds around, so
+     * it is a real surface at a real angle to the transport rather than one
+     * chosen to agree with it.
+     */
+    @Test
+    fun `a curve on a guide previews exactly as it commits, caps included`() {
+        for (brush in Brushes.table.keys) {
+            val batch = Stroke(brush = brush, baseRadius = 14.0 * MM * 0.5)
+            val s = Stroke(brush = brush, baseRadius = 14.0 * MM * 0.5)
+            val live = LiveStroke()
+            live.begin(s)
+            /* the pen learns it is on a guide from its first sample, not from
+               the pen-down, which is the order the activity does it in */
+            s.guideId = 5
+            batch.guideId = 5
+            for (i in 0 until 40) {
+                val p = sample(i)
+                val n = Vec3(p.x, 0.0, p.z)
+                if (n.lengthSq() > Vec3.EPS) n.normalize() else n.set(0.0, 1.0, 0.0)
+                s.pts.add(StrokePoint(p.copy(), pressure = 1.0, nrm = n.copy()))
+                batch.pts.add(StrokePoint(p.copy(), pressure = 1.0, nrm = n.copy()))
+                live.append(s)
+            }
+            Nib.freezeFrames(batch)
+            val mesh = assertNotNull(StrokeGeometry.build(batch), "no mesh for $brush")
+
+            assertEquals(mesh.vertexCount, live.vertexCount, "$brush vertex count")
+            for (i in 0 until mesh.vertexCount * 3) {
+                assertEquals(
+                    mesh.positions[i].toDouble(), live.positions[i].toDouble(), 1e-6,
+                    "$brush position[$i]",
+                )
+            }
+        }
+    }
+
     @Test
     fun `it still matches after the buffer has had to grow several times`() {
         // 64 is the opening capacity and it grows by 1.8x, so 400 crosses it

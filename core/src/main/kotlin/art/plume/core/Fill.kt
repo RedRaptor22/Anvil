@@ -34,10 +34,10 @@ object Fill {
      * filled a flat sheet with tubes. None of that is the guide's shape.
      *
      * `flat` is the one that is: a hard-edged ribbon (`square` 1, so rows abut
-     * instead of leaving scalloped seams) that lies ON the surface
-     * (`paint`, so it is a decal and takes the slope term that keeps a decal
-     * out of the surface it is painted onto), with no taper, no grain, no
-     * glow and no thickness standing proud of the sheet.
+     * instead of leaving scalloped seams) thin enough to read as a coat of
+     * paint rather than a slab — it stands on the surface like everything else
+     * does now (see [StrokeGeometry.standsOn]), by the least any brush can —
+     * with no taper, no grain and no glow.
      *
      * Colour, size and opacity still come from the caller. Those are choices
      * about the fill; the brush was a choice about something else.
@@ -53,8 +53,16 @@ object Fill {
     /**
      * [proto] supplies the colour, size and opacity a fill is painted with.
      * Its BRUSH is deliberately not used — see [BRUSH].
+     *
+     * [eye] is where the fill is being watched from, and it decides which face
+     * of the guide the paint stands on — the same question a hand-drawn sample
+     * answers from its own pen ray. A fill covers the whole surface, including
+     * parts of it turned away from you, so it is answered per row rather than
+     * once: each run of paint stands on the side of the guide that was facing
+     * the eye underneath it. Null leaves the surface's own winding to decide,
+     * which is what a fill with no camera to consult can honestly do.
      */
-    fun fillGuide(guide: Guide, proto: Stroke): Result {
+    fun fillGuide(guide: Guide, proto: Stroke, eye: Vec3? = null): Result {
         val span = GuidePainting.surfaceSpan(guide)
             ?: return Result.Refused("This guide cannot be filled")
 
@@ -119,9 +127,11 @@ object Fill {
                     run = nib.withPoints(emptyList())
                     run.guideId = guide.id
                 }
-                run.pts.add(
-                    StrokePoint(hit.point.copy(), pressure = 1.0, nrm = hit.normal.copy()),
-                )
+                val n = hit.normal.copy()
+                if (eye != null && ((n dot (eye - hit.point)) < 0.0)) {
+                    n.set(-n.x, -n.y, -n.z)
+                }
+                run.pts.add(StrokePoint(hit.point.copy(), pressure = 1.0, nrm = n))
             }
             closeRun(run, made)
         }

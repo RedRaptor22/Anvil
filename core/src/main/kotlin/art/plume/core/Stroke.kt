@@ -19,7 +19,7 @@ import kotlin.math.sqrt
  *  - [taper]  length of the taper at each end, in nib radii (0 = none)
  *  - [tip]    radius the taper narrows to, as a fraction of the nib
  *  - [wide]   width multiplier over the base radius
- *  - [rise]   the section stands ON the surface rather than straddling it
+ *  - [rise]   the section stands on its surface even in free space
  *  - [glow]   additive material
  */
 data class Brush(
@@ -31,6 +31,16 @@ data class Brush(
     val caps: Boolean,
     val wide: Double,
     val glow: Boolean = false,
+    /**
+     * ALWAYS stands on its surface, with nothing under it.
+     *
+     * Every curve painted onto a guide does that now — see
+     * [StrokeGeometry.standsOn] — so this is no longer what separates a brush
+     * that sits on a surface from one that is sunk into it. What is left of it
+     * is the claim `cube` and `wide` make about THEMSELVES: they are
+     * extrusions, standing on whatever is beneath them, in free space as much
+     * as on a guide.
+     */
     val rise: Boolean = false,
     val paint: Boolean = false,
     val grit: Boolean = false,
@@ -72,16 +82,6 @@ object Brushes {
         ),
         Brush("glow", 1.00, 0.00, 6.0, 0.10, true, 1.30, glow = true),
     ).associateBy { it.name }
-
-    /**
-     * The ellipse ratio at or below which a section has no inside worth
-     * drawing — a blade, not a tube.
-     *
-     * Read by [Stroke.decal], and a named number because the renderer decides
-     * how to sort a curve's depth by it and a table of brushes is the wrong
-     * place to bury that.
-     */
-    const val BLADE = 0.1
 
     val aliases = mapOf(
         "square" to "rectangle", "marker" to "flat", "chisel" to "flat",
@@ -514,13 +514,13 @@ object StrokeGeometry {
         s.v.set(t cross s.u)
 
         /*
-         * A RISEN SECTION STANDS ON THE SURFACE rather than straddling it:
+         * A SECTION ON A SURFACE STANDS ON IT rather than straddling it:
          * shifting the centre by -ry along v puts the section's near face on the
          * stroke and its far face one full height out along the normal, which is
          * what makes the cube brush an extrusion FROM the surface instead of a
          * rod half sunk into it.
          */
-        val riseShift = if (cfg.rise) -ry else 0.0
+        val riseShift = if (standsOn(stroke, pt)) -ry else 0.0
 
         /*
          * PAINT SHADES AS THE SURFACE, NOT AS ITSELF.
@@ -577,9 +577,40 @@ object StrokeGeometry {
     }
 
     /**
+     * WHETHER THIS SECTION STANDS ON ITS SURFACE OR STRADDLES IT.
+     *
+     * Straddling was the default and only `cube` and `wide` opted out of it,
+     * which meant that for six of the eight brushes HALF THE INK WAS INSIDE
+     * THE GUIDE. That is what "the curves sit in between the guide's surface"
+     * is: a pen stroke painted on a sheet is a rod sunk to its waist, showing
+     * half the thickness it was asked for, and a wide ribbon is a sheet with
+     * its own surface cutting through the middle of it.
+     *
+     * Paint sits ON what you paint on. So every curve that HAS a surface under
+     * it now stands on it: the base on the guide, the full thickness out along
+     * the normal — which [GuidePainting] has aimed at the face the pen was on,
+     * so "out" means towards you and not into the scaffolding.
+     *
+     * FREE SPACE IS LEFT ALONE, and the distinction is not arbitrary. With no
+     * guide the samples land on a plane through the pivot that faces the
+     * camera and is not drawn; there is no surface for ink to sit on top of,
+     * only the place you aimed at, and a curve centred on where you drew it is
+     * what every free-space stroke in every saved note already is. The two
+     * brushes that always rise still always rise: `wide` is documented as
+     * standing three millimetres proud of whatever it is on, and that is a
+     * claim about the brush rather than about the surface.
+     */
+    internal fun standsOn(stroke: Stroke, pt: StrokePoint): Boolean {
+        if (stroke.cfg.rise) return true
+        if (stroke.guideId == null) return false
+        val n = pt.nrm ?: return false
+        return n.lengthSq() > Vec3.EPS
+    }
+
+    /**
      * The disc at one end of the tube.
      *
-     * Its centre is the point itself unless the brush rises off the surface,
+     * Its centre is the point itself unless the section stands off the surface,
      * in which case it moves with the rings — a cap left on the point while
      * the wall stood off it was a cone jammed into the end of the extrusion.
      *
@@ -591,15 +622,30 @@ object StrokeGeometry {
         stroke: Stroke, i: Int, t: Vec3, sign: Double,
         pos: FloatArray, nor: FloatArray, col: FloatArray,
         arcS: Double = 0.0, total: Double = 0.0, r: Vec3? = null,
+        /**
+         * The section angle, when the caller has just measured one — exactly
+         * as [writeRing] takes it, and for the same reason.
+         *
+         * The cap has to be lifted along the SAME axis as the rings it closes,
+         * and the axis comes out of the roll. Mid-stroke the point's own roll
+         * has not been frozen yet and reads zero, so the live preview was
+         * lifting its two end discs along the transported reference while
+         * every ring between them stood on the surface: a cone pulled sideways
+         * out of each end of the tube. It only ever showed on `cube` and
+         * `wide`, the two brushes that used to rise. Every brush on a guide
+         * rises now, so every brush on a guide would have shown it.
+         */
+        roll: Double? = null,
     ) {
         val cfg = stroke.cfg
         val sh = shadeAt(stroke, i, arcS, total)
         val slot = if (sign < 0) 0 else 1
         val pt = stroke.pts[i]
         val c = pt.p.copy()
-        if (cfg.rise && r != null) {
+        if (standsOn(stroke, pt) && r != null) {
             val ry = max(halfThick(stroke, sh.radius), 1e-5)
-            val ca = cos(pt.roll); val sa = sin(pt.roll)
+            val ang = roll ?: pt.roll
+            val ca = cos(ang); val sa = sin(ang)
             val b = t cross r
             val u = Vec3(
                 r.x * ca + b.x * sa,
@@ -654,28 +700,3 @@ object StrokeGeometry {
         return at
     }
 }
-
-/**
- * A DECAL: a curve that lies IN a surface rather than on top of one.
- *
- * Three things at once, and all three are load-bearing. The section has to be
- * a blade, because a blade has no thickness to hold it off the surface and so
- * shares the surface's own depth. It must not be a [Brush.rise] brush, which
- * is defined as standing ON the surface — `wide` is a blade three millimetres
- * proud, and three millimetres is exactly the separation a decal does not
- * have. And it has to be painted onto something: a ribbon in free space has
- * no surface to be coplanar with, so there is nothing for it to fight.
- *
- * The renderer gives decals, and only decals, a SLOPE-scaled depth offset.
- * The reason for the narrowness is in what that offset costs: it grows with
- * how fast depth changes across a pixel, so at a grazing angle it is not a
- * nudge but a shove, and anything given one at a grazing angle comes through
- * whatever is in front of it. Curves painted around a tube are seen at a
- * grazing angle at both of its edges, every frame.
- */
-val Stroke.decal: Boolean
-    get() = cfg.isDecal(guideId != null)
-
-/** [Stroke.decal] for a curve still being drawn, which has no id yet. */
-fun Brush.isDecal(onSurface: Boolean): Boolean =
-    onSurface && flat <= Brushes.BLADE && !rise

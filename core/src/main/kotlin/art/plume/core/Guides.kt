@@ -522,7 +522,7 @@ object GuidePainting {
         if (hit != null) {
             val (ia, ib, ic) = s.mesh.triangleIndices(hit.triangle)
             return SurfaceSample(
-                hit.point, faceNormal(s, hit.triangle),
+                hit.point, facingViewer(faceNormal(s, hit.triangle), ray.direction),
                 frameOnTriangle(s, ia, ib, ic, hit.point),
                 onSurface = true,
             )
@@ -568,10 +568,37 @@ object GuidePainting {
          */
         val (ia, ib, ic) = s.mesh.triangleIndices(tri)
         return SurfaceSample(
-            result.copy(), faceNormal(s, tri),
+            result.copy(), facingViewer(faceNormal(s, tri), ray.direction),
             frameOnTriangle(s, ia, ib, ic, result),
             onSurface = false,
         )
+    }
+
+    /**
+     * THE FACE OF THE GUIDE THAT IS TOWARDS YOU.
+     *
+     * A guide is a SHEET you orbit around, drawn from both sides with culling
+     * off, so the normal its winding gives has no relation to where you are
+     * standing — on a swept surface it points inward as readily as outward.
+     * That was harmless while the answer was only used for lighting. It is not
+     * harmless now that it decides which way the ink is extruded: half the
+     * time the geometric normal points AWAY, and a curve built along it stands
+     * behind the surface it was painted on, hidden by the thing it is meant to
+     * be lying on.
+     *
+     * So the sample reports the face the PEN was on. It is baked into the
+     * point at that moment and never revisited — the same choice [Nib] makes
+     * about the roll, for the same reason: everything downstream moves points
+     * without knowing anything about surfaces, and a curve that recomputed
+     * which side it lived on would hop across the guide as you orbited past
+     * its edge.
+     *
+     * [viewDir] points away from the eye, so a normal facing the eye has a
+     * negative dot with it.
+     */
+    private fun facingViewer(n: Vec3, viewDir: Vec3): Vec3 {
+        if ((n dot viewDir) > 0.0) n.set(-n.x, -n.y, -n.z)
+        return n
     }
 
     private fun faceNormal(s: GuideSurface, tri: Int): Vec3 {
