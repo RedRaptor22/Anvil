@@ -406,31 +406,53 @@ class ScreenshotTest {
                 android.util.Log.i("ANVILSHOT", "bleed scene: ${sketch.strokes.size} curves")
             }
 
-            val shot = shoot("08-bleed-through")
-            val bmp = android.graphics.BitmapFactory.decodeFile(shot.absolutePath)
-            checkNotNull(bmp) { "the capture could not be decoded" }
-
+            /*
+             * ASK FOR THE FRAME. The surface is RENDERMODE_WHEN_DIRTY, and
+             * pushStrokes hands the renderer its curves without requesting
+             * one — in the app that is fine, because every route to it goes
+             * through refreshScene, which does ask. Driving the state
+             * directly skips that, so whether the scene was ever drawn came
+             * down to whether something incidental happened to dirty the
+             * surface. It usually did, and one run it did not: nought green
+             * pixels, and the guard below correctly reported that the run
+             * proved nothing. Asking, and asking again between attempts, is
+             * the fix; the retry is for the capture, which has its own
+             * timing.
+             */
             var greens = 0
             var reds = 0
             var seen = 0
-            val x0 = bmp.width * 2 / 5; val x1 = bmp.width * 3 / 5
-            val y0 = bmp.height * 2 / 5; val y1 = bmp.height * 3 / 5
-            for (y in y0 until y1) for (x in x0 until x1) {
-                val c = bmp.getPixel(x, y)
-                val cr = android.graphics.Color.red(c)
-                val cg = android.graphics.Color.green(c)
-                val cb = android.graphics.Color.blue(c)
-                seen++
-                if (cg > cr + 40 && cg > cb + 40) greens++
-                if (cr > cg + 40 && cr > cb + 40) reds++
+            for (attempt in 1..5) {
+                scenario.onActivity { act ->
+                    grab<android.opengl.GLSurfaceView>(act, "surface").requestRender()
+                }
+                val shot = shoot("08-bleed-through")
+                val bmp = android.graphics.BitmapFactory.decodeFile(shot.absolutePath)
+                    ?: continue
+                greens = 0; reds = 0; seen = 0
+                val x0 = bmp.width * 2 / 5; val x1 = bmp.width * 3 / 5
+                val y0 = bmp.height * 2 / 5; val y1 = bmp.height * 3 / 5
+                for (y in y0 until y1) for (x in x0 until x1) {
+                    val c = bmp.getPixel(x, y)
+                    val cr = android.graphics.Color.red(c)
+                    val cg = android.graphics.Color.green(c)
+                    val cb = android.graphics.Color.blue(c)
+                    seen++
+                    if (cg > cr + 40 && cg > cb + 40) greens++
+                    if (cr > cg + 40 && cr > cb + 40) reds++
+                }
+                android.util.Log.i(
+                    "ANVILSHOT", "bleed attempt $attempt: $greens green, $reds red of $seen",
+                )
+                if (greens > seen / 5) break
             }
-            android.util.Log.i("ANVILSHOT", "bleed: $greens green, $reds red of $seen")
             check(greens > seen / 5) {
-                "the wall is not in the capture ($greens green of $seen) — this run " +
-                    "proves nothing about what is behind it"
+                "the wall is not in the capture ($greens green of $seen) after five " +
+                    "tries — this run proves nothing about what is behind it"
             }
             check(reds * 200 < seen) {
-                "$reds of $seen pixels behind the wall came through it"
+                "$reds of $seen pixels behind the wall came through it " +
+                    "($greens green in the same box)"
             }
         }
     }
