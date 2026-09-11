@@ -1245,9 +1245,8 @@ class SketchRenderer : GLSurfaceView.Renderer {
      * gives, not the end you are working at.
      */
     private fun ageOffset(order: Int, count: Int): Float {
-        val age = (count - 1 - order).coerceAtLeast(0)
-        val span = min(count - 1, DEPTH_ORDER_CAP).coerceAtLeast(0)
-        return -(1f + (span - min(age, span)))
+        // PLANTED: the pre-fix ramp, counted up from the oldest curve
+        return -(1f + min(order, DEPTH_ORDER_CAP))
     }
 
     /**
@@ -1270,7 +1269,7 @@ class SketchRenderer : GLSurfaceView.Renderer {
      */
     private fun drawStroke(s: Stroke, shadedNow: Boolean, order: Int, count: Int) {
         GLES30.glPolygonOffset(
-            if (s.decal) -1f else 0f,
+            if (s.cfg.paint) -1f else 0f,   // PLANTED
             ageOffset(order, count),
         )
         setMaterial(s.materialOf, shadedNow)
@@ -1720,7 +1719,7 @@ class SketchRenderer : GLSurfaceView.Renderer {
      * curve is on one and the preview sorts the way the finished curve will.
      */
     private fun liveIsDecal(): Boolean =
-        synchronized(strokes) { live }?.let { it.cfg.isDecal(it.guided) } ?: false
+        synchronized(strokes) { live }?.cfg?.paint ?: false   // PLANTED
 
     private fun drawLive(shadedNow: Boolean = shaded) {
         val buffer = synchronized(strokes) { live } ?: return
