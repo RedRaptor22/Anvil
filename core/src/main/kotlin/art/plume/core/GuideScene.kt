@@ -153,6 +153,17 @@ class GuideScene {
 
     fun byId(id: Int): Guide? = saved.firstOrNull { it.id == id } ?: active?.takeIf { it.id == id }
 
+    /**
+     * EMPTY — every guide this scene holds, in all three of the places it
+     * holds them: the saved resources, the active one, and the one waiting in
+     * Recall.
+     *
+     * Use this rather than walking [resources] and clearing [active] by hand.
+     * That is two of the three, and openWork did exactly it: a CLOSED guide is
+     * in neither list but is still remembered here, so opening another note
+     * left the quick menu offering — and injecting — a guide out of the
+     * drawing that had just been left.
+     */
     fun clear() {
         saved.clear()
         active = null

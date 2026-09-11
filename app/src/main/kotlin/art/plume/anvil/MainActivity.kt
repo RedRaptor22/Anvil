@@ -4599,7 +4599,37 @@ class MainActivity : Activity(), Gestures.Listener {
      * yet, and losing the last stroke of a drawing because you went to look at
      * a different one would be unforgivable.
      */
+    /**
+     * END WHAT IS IN FLIGHT, BEFORE THE DOCUMENT UNDER IT CHANGES.
+     *
+     * Half of the editor's state is not in the sketch and not in the guide
+     * scene: a primitive being staged, a liquify session you can still
+     * Compare against, a stamp still laying copies, a Find Group waiting for
+     * the next press, a shape still being adjusted, a stroke still under the
+     * pen. [setTool] already ends the first three when you leave a tool,
+     * because a half-made thing belongs to the tool that was making it.
+     *
+     * It belongs to the DOCUMENT just as much, and nothing said so. Opening
+     * another note cleared the sketch, the guides and the history and left all
+     * of that standing — so a primitive staged in one drawing was still on
+     * screen in the next one, with its bar up, and Done would have committed
+     * it into a note it was never drawn in.
+     */
+    private fun endTransientEditing() {
+        cancelStaging()
+        endLiquifySession()
+        endStamping()
+        findingGroup = false
+        disarmShapeHold()
+        adjusting = null
+        /* a stroke still being drawn belongs to the note being left */
+        synchronized(liveBuffer) { live = null }
+        renderer.setLive(null)
+    }
+
     private fun openWork(id: String?) {
+        /* nothing half-made crosses from one note to the next */
+        endTransientEditing()
         /*
          * WRITTEN BEFORE WE LEAVE, ON THIS THREAD.
          *
@@ -4623,8 +4653,12 @@ class MainActivity : Activity(), Gestures.Listener {
         getPreferences(MODE_PRIVATE).edit().putString(PREF_WORK, target).apply()
 
         sketch.clear()
-        for (g in guides.resources.toList()) guides.remove(g)
-        guides.setActive(null)
+        guides.clear()
+        /* FACT: "Brush presets are saved per note." restoreAutosave reloads
+           them for a note that has some, and a NEW note has none — so without
+           this the rail came up carrying the last drawing's brushes and would
+           have saved them into a note they were never made in. */
+        presets.clear()
         history.clear()
         if (id != null) restoreAutosave()
         refreshGroups()
@@ -4649,10 +4683,34 @@ class MainActivity : Activity(), Gestures.Listener {
     }
 
     /** The current document, written to [id]'s file before anything moves on. */
+    /**
+     * NOTHING WORTH WRITING: no ink, no guide on screen, and none put away.
+     *
+     * The saved resources count. A note whose guides have all been closed to
+     * the Resource tab has no strokes and no active guide, and is very far
+     * from empty — writing it off as nothing would have thrown away every
+     * guide in it.
+     */
+    private fun documentIsEmpty(): Boolean =
+        sketch.strokes.isEmpty() && guides.active == null && guides.resources.isEmpty()
+
+    /**
+     * AN EMPTY NOTE IS ONLY SKIPPED WHILE IT HAS NO FILE.
+     *
+     * Both save paths used to skip the write whenever the sketch was empty.
+     * That is right for a note nobody has drawn in — a first run should not
+     * litter the shelf with files for notes that were opened and closed. It is
+     * wrong the moment a file exists, because then "empty" does not mean
+     * "nothing to save", it means SOMEBODY DELETED THEIR DRAWING. The write
+     * was skipped, the old strokes stayed on disk, and the next open brought
+     * back work that had been deliberately erased — an undo nobody asked for,
+     * arriving a session later.
+     */
     private fun saveWorkNow(id: String) {
-        if (sketch.strokes.isEmpty() && guides.active == null) return
+        val file = workFile(id)
+        if (documentIsEmpty() && !file.exists()) return
         val text = currentDocumentText()
-        val ok = runCatching { workFile(id).writeText(text) }.isSuccess
+        val ok = runCatching { file.writeText(text) }.isSuccess
         setSaveState(if (ok) 0 else 2)
     }
 
@@ -4718,7 +4776,10 @@ class MainActivity : Activity(), Gestures.Listener {
     }
 
     private fun writeAutosave() {
-        if (sketch.strokes.isEmpty() && guides.active == null) { setSaveState(0); return }
+        /* resolved first: the guard needs to know whether this note already
+           has a file — see saveWorkNow for why that decides it */
+        val into = autosaveFile()
+        if (documentIsEmpty() && !into.exists()) { setSaveState(0); return }
         val text = currentDocumentText()
         /*
          * WHICH FILE IS DECIDED HERE, NOT ON THE IO THREAD.
@@ -4734,7 +4795,6 @@ class MainActivity : Activity(), Gestures.Listener {
          * calling thread also fixes the ordering: each work's write completes
          * before the next one's begins.
          */
-        val into = autosaveFile()
         io.execute {
             val ok = runCatching { into.writeText(text) }.isSuccess
             /*
