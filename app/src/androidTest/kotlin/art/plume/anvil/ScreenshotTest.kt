@@ -286,6 +286,11 @@ class ScreenshotTest {
      *    used to get one; the red bars driven into the screen below are drawn
      *    with it for exactly that reason.
      *
+     * The name is an identifier rather than a sentence in backticks, which the
+     * rest of this project's tests use: these run on the DEVICE, so they are
+     * dexed, and D8 refuses a method name with a space in it below DEX 040.
+     * The JVM suites are not dexed and can go on reading like sentences.
+     *
      * THIS IS AN ASSERTION, NOT A PHOTOGRAPH. The picture is kept too, but a
      * picture that has to be looked at is a test nobody runs. The scene is a
      * green wall with red bars behind it, and the question — is any red
@@ -294,7 +299,7 @@ class ScreenshotTest {
      * capture failed and the absence of red proves nothing.
      */
     @Test
-    fun `nothing behind the wall shows through it`() {
+    fun nothingBehindTheWallShowsThroughIt() {
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             scenario.onActivity { act ->
                 grab<Chrome>(act, "chrome").onOpenWork(null)
