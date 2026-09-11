@@ -34,6 +34,20 @@ class DocumentTool {
     var color = Rgba(0.106, 0.110, 0.129)
     var sizeMM = 14.0
     var opacity = 1.0
+
+    /**
+     * THE ERASER'S OWN SIZE, which it did not used to have.
+     *
+     * It read [sizeMM] — the brush's — so the eraser had no width you could
+     * set without also resizing the pen, and a panel offering to set it would
+     * have been a panel that quietly changed a different tool. A rubber is not
+     * a nib and the two are not chosen for the same reasons.
+     *
+     * Additive to the shared file format: the web build has no key for it and
+     * simply leaves the default in place, which is the brush's own starting
+     * width and therefore exactly the behaviour that file came from.
+     */
+    var eraseMM = 14.0
     var pressureOn = true
     var pressureTarget = "size"
     var radial = 1
@@ -531,6 +545,7 @@ object Document {
         toolOut.put("patContrast", q(tool.patternContrast))
         toolOut.put("brush", tool.brush).put("color", packColor(tool.color))
         toolOut.put("sizeMM", q(tool.sizeMM)).put("opacity", q(tool.opacity))
+        toolOut.put("eraseMM", q(tool.eraseMM))
         toolOut.put("pressureOn", tool.pressureOn).put("pressureTarget", tool.pressureTarget)
         toolOut.put("radial", maxOf(1, tool.radial))
         toolOut.put("stableOn", tool.stableOn).put("stable", q(tool.stable))
@@ -697,6 +712,9 @@ object Document {
             tool.brush = Brushes.resolve(t.str("brush")).name
             tool.color = unpackColor(t.str("color"), tool.color)
             tool.sizeMM = t.num("sizeMM", tool.sizeMM)
+            /* a file written before the eraser had a size of its own says
+               nothing, and the fallback is the width it was erasing at */
+            tool.eraseMM = t.num("eraseMM", tool.sizeMM)
             tool.opacity = t.num("opacity", 1.0)
             tool.pressureOn = t.bool("pressureOn", true)
             tool.pressureTarget = t.str("pressureTarget") ?: "size"

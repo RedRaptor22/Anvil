@@ -466,6 +466,38 @@ class DocumentTest {
     }
 
     @Test
+    fun `the eraser keeps a width of its own, and an old note keeps the brush's`() {
+        /* The eraser used to read the brush's size, which meant it could not
+           be set without resizing the pen. It has one of its own now, and
+           this checks both halves of that: the new field travels, and a note
+           written before it existed still opens erasing at the width it was
+           erasing at rather than at some default nobody chose. */
+        val tool = DocumentTool()
+        tool.sizeMM = 9.0
+        tool.eraseMM = 31.0
+
+        val text = Document.toJsonText(
+            Sketch(), GuideScene(), Camera().apply { resize(800, 800) }, tool = tool,
+        )
+        val back = Document.restore(
+            text, Sketch(), GuideScene(), Camera().apply { resize(800, 800) },
+        )
+        assertTrue(back.ok)
+        assertEquals(9.0, back.tool.sizeMM, 1e-9)
+        assertEquals(31.0, back.tool.eraseMM, 1e-9)
+
+        val older = text.replace("\"eraseMM\"", "\"wasEraseMM\"")
+        val old = Document.restore(
+            older, Sketch(), GuideScene(), Camera().apply { resize(800, 800) },
+        )
+        assertTrue(old.ok)
+        assertEquals(
+            9.0, old.tool.eraseMM, 1e-9,
+            "a note from before the eraser had a size must open at the brush's",
+        )
+    }
+
+    @Test
     fun `a material and its pattern survive a round trip`() {
         val sketch = Sketch()
         val plain = stroke()

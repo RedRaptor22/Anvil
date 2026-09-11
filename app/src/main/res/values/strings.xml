@@ -165,6 +165,11 @@
     <string name="apply">Apply</string>
     <string name="liquify_done">Liquify finished</string>
 
+    <!-- the eraser strip -->
+    <string name="eraser">Eraser</string>
+    <string name="erase_size">Eraser size</string>
+    <string name="erase_guard">Protect curves behind the guide</string>
+
     <!-- the settings modal -->
     <string name="input">Input</string>
     <string name="view">View</string>

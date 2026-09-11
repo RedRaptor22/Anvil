@@ -92,7 +92,7 @@ class ScreenshotTest {
         }
     }
 
-    private fun shoot(name: String) {
+    private fun shoot(name: String): File {
         Thread.sleep(1200)                 // let the GL thread land a frame
         val f = File(outDir(), "$name.png")
         val ok = device.takeScreenshot(f)
@@ -100,6 +100,7 @@ class ScreenshotTest {
         /* say where it went, so a run that comes back empty can be told from
            a run that never wrote anything */
         android.util.Log.i("ANVILSHOT", "wrote ${f.absolutePath} (${f.length()} bytes)")
+        return f
     }
 
     /** Reach a private member, because the app exposes no test seam. */
@@ -261,6 +262,145 @@ class ScreenshotTest {
                 }
             }
             shoot("06-pot-rim-on-top")
+        }
+    }
+
+    /**
+     * THE BACK OF A SHAPE MUST NOT COME THROUGH THE FRONT OF IT.
+     *
+     * Reported from a device: "parts of their stroke bleed through the back
+     * and appear in front of the front viewing strokes" — a tube whose far
+     * wall showed through its near wall at some angles and not others, and a
+     * scene where curves plainly behind an object were drawn over it.
+     *
+     * Three things were wrong and all three are exercised here.
+     *
+     *  - THE DEPTH BUFFER WAS SIXTEEN BITS, because that is what
+     *    GLSurfaceView picks when nobody asks. See [DepthFirstConfigChooser].
+     *  - THE AGE TIE-BREAK GREW WITH THE DRAWING. Each curve was pulled one
+     *    depth step further towards the eye than the one before it, counting
+     *    from the first, so the pull on recent curves was the length of the
+     *    whole drawing rather than a tie-break.
+     *  - THE SLOPE OFFSET WAS GIVEN TO SOLIDS. It scales with how fast depth
+     *    changes across a pixel, so on anything steep it is a shove. `cube`
+     *    used to get one; the red bars driven into the screen below are drawn
+     *    with it for exactly that reason.
+     *
+     * THIS IS AN ASSERTION, NOT A PHOTOGRAPH. The picture is kept too, but a
+     * picture that has to be looked at is a test nobody runs. The scene is a
+     * green wall with red bars behind it, and the question — is any red
+     * visible where the wall is — is one a few thousand pixel reads can
+     * answer. The wall is checked for first: if the green is not there the
+     * capture failed and the absence of red proves nothing.
+     */
+    @Test
+    fun `nothing behind the wall shows through it`() {
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            scenario.onActivity { act ->
+                grab<Chrome>(act, "chrome").onOpenWork(null)
+                call(act, "resetView")
+                call(act, "pushCamera")
+            }
+            scenario.onActivity { act ->
+                val cam = grab<art.plume.core.Camera>(act, "camera")
+                val sketch = grab<art.plume.core.Sketch>(act, "sketch")
+                sketch.clear()
+                val group = sketch.ensureGroup().id
+                val r = cam.radius
+                val fwd = Vec3(); cam.forward(fwd)
+                val right = Vec3(); val up = Vec3(); val back = Vec3()
+                cam.basis(right, up, back)
+                val mid = cam.pivot.copy()
+
+                fun at(across: Double, high: Double, deep: Double) = Vec3(
+                    mid.x + right.x * across + up.x * high + fwd.x * deep,
+                    mid.y + right.y * across + up.y * high + fwd.y * deep,
+                    mid.z + right.z * across + up.z * high + fwd.z * deep,
+                )
+
+                fun bar(a: Vec3, b: Vec3, brush: String, colour: art.plume.core.Rgba, rad: Double) {
+                    val st = art.plume.core.Stroke(
+                        brush = brush, color = colour, baseRadius = rad,
+                    )
+                    st.pressureTarget = "none"
+                    st.material = art.plume.core.Material.SHADELESS
+                    st.group = group
+                    for (i in 0..16) {
+                        val t = i / 16.0
+                        st.pts.add(
+                            art.plume.core.StrokePoint(
+                                Vec3(
+                                    a.x + (b.x - a.x) * t,
+                                    a.y + (b.y - a.y) * t,
+                                    a.z + (b.z - a.z) * t,
+                                ),
+                                pressure = 1.0,
+                            ),
+                        )
+                    }
+                    art.plume.core.Nib.freezeFrames(st)
+                    sketch.add(st)
+                }
+
+                /* the wall: overlapping bars across the view, at the pivot */
+                val green = art.plume.core.Rgba(0.15, 0.85, 0.25)
+                var h = -0.5 * r
+                while (h <= 0.5 * r + 1e-9) {
+                    bar(at(-0.7 * r, h, 0.0), at(0.7 * r, h, 0.0), "pen", green, 0.05 * r)
+                    h += 0.06 * r
+                }
+
+                /*
+                 * BEHIND IT BY A HAIR. The gap is deliberately small — a
+                 * hundred and twenty-fifth of the view — because that is the
+                 * scale the fault lived at: the two walls of a tube are this
+                 * far apart near its rim, which is where the bleed-through
+                 * showed and why turning the object made it come and go.
+                 */
+                val red = art.plume.core.Rgba(0.92, 0.12, 0.12)
+                val gap = 0.008 * r
+                var a = -0.25 * r
+                while (a <= 0.25 * r + 1e-9) {
+                    bar(at(a, -0.3 * r, gap), at(a, 0.3 * r, gap), "pen", red, 0.04 * r)
+                    a += 0.1 * r
+                }
+                /* and driven away from the eye, so their silhouette is as
+                   steep as depth gets: this is the slope offset's scene */
+                var k = -0.2 * r
+                while (k <= 0.2 * r + 1e-9) {
+                    bar(at(k, 0.0, gap), at(k, 0.0, 0.45 * r), "cube", red, 0.04 * r)
+                    k += 0.1 * r
+                }
+                call(act, "pushStrokes")
+                android.util.Log.i("ANVILSHOT", "bleed scene: ${sketch.strokes.size} curves")
+            }
+
+            val shot = shoot("08-bleed-through")
+            val bmp = android.graphics.BitmapFactory.decodeFile(shot.absolutePath)
+            checkNotNull(bmp) { "the capture could not be decoded" }
+
+            var greens = 0
+            var reds = 0
+            var seen = 0
+            val x0 = bmp.width * 2 / 5; val x1 = bmp.width * 3 / 5
+            val y0 = bmp.height * 2 / 5; val y1 = bmp.height * 3 / 5
+            for (y in y0 until y1) for (x in x0 until x1) {
+                val c = bmp.getPixel(x, y)
+                val cr = android.graphics.Color.red(c)
+                val cg = android.graphics.Color.green(c)
+                val cb = android.graphics.Color.blue(c)
+                seen++
+                if (cg > cr + 40 && cg > cb + 40) greens++
+                if (cr > cg + 40 && cr > cb + 40) reds++
+            }
+            android.util.Log.i("ANVILSHOT", "bleed: $greens green, $reds red of $seen")
+            check(greens > seen / 5) {
+                "the wall is not in the capture ($greens green of $seen) — this run " +
+                    "proves nothing about what is behind it"
+            }
+            check(reds * 200 < seen) {
+                "$reds of $seen pixels behind the wall came through it"
+            }
         }
     }
 }

@@ -116,6 +116,30 @@ object Tune {
     const val GUIDE_PATH_SEG = 64
 
     /**
+     * FACT: every figure in the documentation draws a guide's construction
+     * geometry in ORANGE — the starting line along the profile, and the curve
+     * you are dragging out while you make or bend one.
+     *
+     * It is one colour in one place because two things read it: the renderer
+     * paints the starting line with it, and the tools hand it to the curve
+     * under the pen so that the line you are dragging and the line you end up
+     * with are the same colour. They were two independent literals, and the
+     * curve under the pen was not using either — it came out in whatever the
+     * ink colour and brush happened to be, so making a guide with a wide
+     * marker loaded looked like painting, not like drawing a line.
+     */
+    val GUIDE_LINE = Rgba(1.0, 0.53, 0.13)
+
+    /**
+     * GUESS: how thick a construction line is drawn, in millimetres.
+     *
+     * Visible at arm's length and well under the 14 mm the brush starts at:
+     * this is a line that says where a surface will be, and a line that hides
+     * the surface it is describing is no use.
+     */
+    const val GUIDE_LINE_MM = 6.0
+
+    /**
      * GUESS: how near its own start a swept path has to end to be a loop.
      *
      * A twentieth of the path's length. A hand drawing a circle closes to

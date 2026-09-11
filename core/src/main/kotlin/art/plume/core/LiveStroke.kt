@@ -123,11 +123,25 @@ class LiveStroke {
     var cfg: Brush = Brushes.resolve("pen")
         private set
 
+    /**
+     * Whether the curve under the pen has landed on a guide.
+     *
+     * The same question [Stroke.guideId] answers for a finished curve, and
+     * asked for the same reason: the renderer sorts a decal's depth
+     * differently from a curve floating in space, and the preview has to sort
+     * the way the finished curve will or it jumps on the pen-up. It is set on
+     * every sample rather than once at the start, because the first sample is
+     * taken before the pen is known to have hit anything.
+     */
+    var guided: Boolean = false
+        private set
+
     // ---- lifecycle ------------------------------------------------------
 
     fun begin(stroke: Stroke) {
         seg = StrokeGeometry.segmentsFor(stroke)
         cfg = stroke.cfg
+        guided = stroke.guideId != null
         // a live stroke is open by definition — it has not been closed yet, and
         // commit re-runs the batch build, which detects a loop and welds it
         caps = stroke.cfg.caps
@@ -184,6 +198,7 @@ class LiveStroke {
      * appended, in order; this reads `stroke.pts` and does not append to it.
      */
     fun append(stroke: Stroke) {
+        guided = stroke.guideId != null
         val n = stroke.pts.size
         if (n == 0 || n == pointCount) return
         ensureCapacity(n)

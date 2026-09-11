@@ -166,6 +166,136 @@ class FlowTest {
         )
     }
 
+    /**
+     * THE CURVE UNDER THE PEN IS A CONSTRUCTION LINE, NOT INK.
+     *
+     * Guide, Flat Guide and Bend all draw a curve that is handed to the
+     * geometry and thrown away, and all three used to draw it with whatever
+     * brush was loaded — so making a guide with the wide marker selected
+     * painted a shaded ribbon across the screen and called it a profile.
+     *
+     * Both halves are asserted together on purpose: the drawing tools must
+     * NOT have been dragged into the same rule, and a check that only looks at
+     * the guide tools would pass with every stroke in the app turned orange.
+     */
+    @Test
+    fun `the guide and bend tools draw an orange line, and Draw still draws ink`() {
+        val act = launch()
+        val chrome = f<Chrome>(act, "chrome")
+        chrome.onOpenWork(null)
+
+        // a brush nothing would mistake for a construction line
+        chrome.onBrush("wide")
+        chrome.onSizeMm(40.0)
+        chrome.onColor(android.graphics.Color.rgb(20, 30, 200))
+
+        for (t in listOf(Tool.GUIDE, Tool.FLATGUIDE, Tool.BEND)) {
+            chrome.onTool(t)
+            penDown(act, 400f, 400f)
+            val live = f<art.plume.core.Stroke?>(act, "live")
+            assertTrue("$t put nothing under the pen", live != null)
+            assertEquals("$t did not use the construction nib", "pen", live!!.brush)
+            assertEquals(
+                "$t did not draw in the guide orange",
+                art.plume.core.Tune.GUIDE_LINE, live.color,
+            )
+            assertEquals(
+                "$t drew at the brush's size", art.plume.core.Tune.GUIDE_LINE_MM * 0.001 * 0.5,
+                live.baseRadius, 1e-12,
+            )
+            assertEquals("a construction line must not taper", "none", live.pressureTarget)
+            call0(act, "endTransientEditing")
+        }
+
+        chrome.onTool(Tool.DRAW)
+        penDown(act, 400f, 400f)
+        val ink = f<art.plume.core.Stroke?>(act, "live")
+        assertEquals("Draw stopped using the chosen brush", "wide", ink!!.brush)
+        assertEquals("Draw stopped using the chosen size", 0.02, ink.baseRadius, 1e-12)
+    }
+
+    /**
+     * And nothing orange is left in the drawing afterwards: the construction
+     * line is consumed by the guide it makes.
+     */
+    @Test
+    fun `a finished guide leaves no construction line in the sketch`() {
+        val act = launch()
+        val chrome = f<Chrome>(act, "chrome")
+        chrome.onOpenWork(null)
+        chrome.onTool(Tool.GUIDE)
+        penDown(act, 300f, 300f)
+        for (i in 1..20) penMove(act, 300f + i * 12f, 300f + i * 4f)
+        call0(act, "endStroke")
+        val sketch = f<art.plume.core.Sketch>(act, "sketch")
+        assertTrue(
+            "the guide's own profile was left behind as a curve",
+            sketch.strokes.none { it.color == art.plume.core.Tune.GUIDE_LINE },
+        )
+    }
+
+    /**
+     * THE ERASER'S PANEL, AND THE WIDTH IT IS FOR.
+     *
+     * The panel is only useful because the eraser has a size of its own; while
+     * it read the brush's, a size control on it would have been a control that
+     * quietly resized the pen. So the two are asserted together.
+     */
+    @Test
+    fun `the eraser panel shows for both erasers and sets a width of its own`() {
+        val act = launch()
+        val chrome = f<Chrome>(act, "chrome")
+        chrome.onOpenWork(null)
+
+        assertEquals("the eraser panel is up with no eraser selected",
+            View.GONE, vis(chrome, "erasePanel"))
+        chrome.onTool(Tool.ERASE)
+        assertEquals(View.VISIBLE, vis(chrome, "erasePanel"))
+        chrome.onTool(Tool.VACUUM)
+        assertEquals("vacuum is the other eraser and keeps the panel",
+            View.VISIBLE, vis(chrome, "erasePanel"))
+        chrome.onTool(Tool.DRAW)
+        assertEquals(View.GONE, vis(chrome, "erasePanel"))
+
+        chrome.onTool(Tool.ERASE)
+        chrome.onSizeMm(33.0)
+        chrome.onEraseSize(4.0)
+        assertEquals("the eraser's width followed the brush's",
+            4.0, f<Double>(act, "eraseMM"), 1e-9)
+        assertEquals("setting the eraser resized the brush",
+            33.0, f<Double>(act, "sizeMM"), 1e-9)
+    }
+
+    private fun penDown(act: MainActivity, x: Float, y: Float) {
+        val m = generateSequence(act.javaClass as Class<*>) { it.superclass }
+            .mapNotNull {
+                runCatching {
+                    it.getDeclaredMethod(
+                        "beginStroke",
+                        Float::class.javaPrimitiveType, Float::class.javaPrimitiveType,
+                        Float::class.javaPrimitiveType,
+                    )
+                }.getOrNull()
+            }.first()
+        m.isAccessible = true
+        m.invoke(act, x, y, 0.5f)
+    }
+
+    private fun penMove(act: MainActivity, x: Float, y: Float) {
+        val m = generateSequence(act.javaClass as Class<*>) { it.superclass }
+            .mapNotNull {
+                runCatching {
+                    it.getDeclaredMethod(
+                        "moveStroke",
+                        Float::class.javaPrimitiveType, Float::class.javaPrimitiveType,
+                        Float::class.javaPrimitiveType,
+                    )
+                }.getOrNull()
+            }.first()
+        m.isAccessible = true
+        m.invoke(act, x, y, 0.5f)
+    }
+
     private fun call1(target: Any, name: String, argType: Class<*>, arg: Any) {
         val m = generateSequence(target.javaClass as Class<*>) { it.superclass }
             .mapNotNull { runCatching { it.getDeclaredMethod(name, argType) }.getOrNull() }.first()

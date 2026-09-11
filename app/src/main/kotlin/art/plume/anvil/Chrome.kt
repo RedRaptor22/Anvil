@@ -187,6 +187,9 @@ class Chrome(private val act: Activity, val t: Tokens) {
     var onKeypad: (which: String, value: Double) -> Unit = { _, _ -> }
 
     /** The liquify strip. Its three numbers are dragged, like everything else. */
+    /** The eraser's own width, in millimetres — not the brush's. */
+    var onEraseSize: (Double) -> Unit = {}
+
     var onLiquifyMode: (String) -> Unit = {}
     var onLiquifyValue: (which: String, value: Double) -> Unit = { _, _ -> }
     var onLiquifyApply: () -> Unit = {}
@@ -377,6 +380,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
     private val ctxBar = panel(act, t)
     private val selBar = panel(act, t)
     private val liquifyPanel = panel(act, t)
+    private val erasePanel = panel(act, t)
     private val joyPanel = panel(act, t)
     private val walkPanel = panel(act, t, large = true)
     private val keypad = panel(act, t, large = true)
@@ -563,6 +567,13 @@ class Chrome(private val act: Activity, val t: Tokens) {
     private var lqSizeV = 120.0
     private var lqRangeV = 60.0
     private var lqStrengthV = 55.0
+
+    /* the eraser panel's model */
+    private lateinit var eraseSize: DragValue
+    private lateinit var eraseSizeIcon: IcoButton
+    private lateinit var eraseGuard: IcoButton
+    private val eraseModes = HashMap<Tool, IcoButton>()
+    private var eraseMm = 14.0
 
     /* the settings modal's model */
     private var optFinger = true
@@ -1780,6 +1791,96 @@ class Chrome(private val act: Activity, val t: Tokens) {
         joyPanel.addView(joyTarget)
         joyPanel.visibility = View.GONE
     }
+
+    /**
+     * `#erasePanel` — the eraser's own settings, in the same strip liquify
+     * uses and for the same reason: it belongs under the drawing, where your
+     * hand already is, not in a card on the far side of the screen.
+     *
+     * WHAT BELONGS ON IT. The eraser has exactly three things you can change
+     * about it, and all three used to be somewhere else or nowhere at all.
+     *
+     *  - WHICH ERASER. FACT (C.6): the Eraser "removes points from the center
+     *    of the curve" and Vacuum "erases entire curves it touches". They are
+     *    one slot in the tool pill and swap on a repeat tap, which is fine
+     *    when you know the rule and invisible when you do not. Two buttons say
+     *    which one is running.
+     *  - HOW WIDE. It had no width of its own — it read the brush's, so there
+     *    was nothing to put here until there was. See [DocumentTool.eraseMM].
+     *    Vacuum takes whole curves and has no radius, so the control goes dim
+     *    rather than away: a control that disappears reads as a bug, and one
+     *    that is dim reads as "not for this".
+     *  - WHAT IT IS ALLOWED TO TOUCH. FACT (C.6) again: curves behind the
+     *    active guide are protected from the eraser. That rule was reachable
+     *    only from the settings modal, three taps from the tool it governs,
+     *    and it is the one that decides whether an erase takes the far side of
+     *    the shape with it. It is the same switch, shown where it matters.
+     */
+    private fun buildErasePanel() {
+        erasePanel.setPadding(t.dp(10f), t.dp(8f), t.dp(10f), t.dp(8f))
+        erasePanel.addView(
+            TextView(act).apply {
+                text = act.getString(R.string.eraser)
+                setTextColor(t.dim2)
+                textSize = 10f
+                letterSpacing = 0.1f
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+                setPadding(0, 0, t.dp(6f), 0)
+            },
+        )
+        for (which in listOf(Tool.ERASE, Tool.VACUUM)) {
+            val b = IcoButton(act, t).icon(which.icon).apply {
+                setOnClickListener { select(which) }
+                TOOL_TIPS[which]?.let { r -> Tip.attach(this, tipCard, act.getString(r)) }
+                layoutParams = LinearLayout.LayoutParams(t.dp(40f), t.dp(34f))
+                    .apply { marginEnd = t.dp(4f) }
+            }
+            eraseModes[which] = b
+            erasePanel.addView(b)
+        }
+
+        erasePanel.addView(divider(act, t))
+        eraseSizeIcon = IcoButton(act, t).icon("size").apply {
+            /* the readout beside it is the control; this opens the same
+               keypad the brush size uses, for when you want a number */
+            setOnClickListener {
+                openKeypad(
+                    "erase", act.getString(R.string.erase_size), eraseMm, "mm", this,
+                )
+            }
+            Tip.attach(this, tipCard, act.getString(R.string.erase_size))
+        }
+        erasePanel.addView(eraseSizeIcon)
+        /* millimetres of world, like the brush, so it moves geometrically:
+           the same drag is the same proportion at 2 mm and at 200 */
+        eraseSize = DragValue(
+            act, t, logarithmic = true, rate = 0.011,
+            get = { eraseMm },
+            set = { v -> pushErase(v) },
+        ).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                t.dp(44f), ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { marginStart = t.dp(2f) }
+        }
+        erasePanel.addView(eraseSize)
+
+        erasePanel.addView(divider(act, t))
+        eraseGuard = IcoButton(act, t).icon("guide").apply {
+            setOnClickListener { onInput(InputToggle.ISOLATE) }
+            Tip.attach(this, tipCard, act.getString(R.string.erase_guard))
+        }
+        erasePanel.addView(eraseGuard)
+        erasePanel.visibility = View.GONE
+    }
+
+    private fun pushErase(mm: Double) {
+        eraseMm = mm.coerceIn(Tune.BRUSH_MIN_MM, Tune.BRUSH_MAX_MM)
+        onEraseSize(eraseMm)
+        refresh()
+    }
+
+    /** The eraser's width, pushed back by whoever owns it. */
+    fun setEraseSize(mm: Double) { eraseMm = mm; refresh() }
 
     private fun buildLiquifyPanel() {
         liquifyPanel.setPadding(t.dp(10f), t.dp(8f), t.dp(10f), t.dp(8f))
@@ -3651,6 +3752,13 @@ class Chrome(private val act: Activity, val t: Tokens) {
                 bottom = t.px(R.dimen.liquifyBottom),
             ),
         )
+        canvasLayer.addView(
+            erasePanel,
+            lp(
+                Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL,
+                bottom = t.px(R.dimen.liquifyBottom),
+            ),
+        )
         canvasLayer.addView(dock, lp(Gravity.BOTTOM, width = ViewGroup.LayoutParams.MATCH_PARENT))
         canvasLayer.addView(brushGrid, lp(Gravity.START or Gravity.CENTER_VERTICAL, left = t.px(R.dimen.brushGridLeft)))
         canvasLayer.addView(stagePanel, lp(Gravity.TOP or Gravity.END, top = t.px(R.dimen.stageTop), right = e, width = t.px(R.dimen.stagePanelW)))
@@ -3771,11 +3879,19 @@ class Chrome(private val act: Activity, val t: Tokens) {
                 Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL,
                 left = e, right = e, bottom = t.px(R.dimen.dockH) + t.dp(4f),
             )
+            erasePanel.layoutParams = lp(
+                Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL,
+                left = e, right = e, bottom = t.px(R.dimen.dockH) + t.dp(4f),
+            )
         } else {
             ctxBar.layoutParams = lp(Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL, bottom = t.px(R.dimen.ctxBottom))
             toastCard.layoutParams = lp(Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL, bottom = t.px(R.dimen.toastBottom))
             selBar.layoutParams = lp(Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL, bottom = t.px(R.dimen.selBarBottom))
             liquifyPanel.layoutParams = lp(
+                Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL,
+                bottom = t.px(R.dimen.liquifyBottom),
+            )
+            erasePanel.layoutParams = lp(
                 Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL,
                 bottom = t.px(R.dimen.liquifyBottom),
             )
@@ -5199,6 +5315,25 @@ class Chrome(private val act: Activity, val t: Tokens) {
             }
         liquifyPanel.visibility =
             if (tool == Tool.LIQUIFY && selectionCount > 0) View.VISIBLE else View.GONE
+        /*
+         * The eraser's settings, whenever an eraser is the tool — and never at
+         * the same time as liquify's strip, which is in the same place and
+         * belongs to a tool you cannot be holding at the same time.
+         */
+        val erasing = tool == Tool.ERASE || tool == Tool.VACUUM
+        erasePanel.visibility = if (erasing) View.VISIBLE else View.GONE
+        if (erasing) {
+            for ((k, b) in eraseModes) b.on = k == tool
+            eraseSize.text = eraseMm.toInt().toString()
+            /* dim, not gone: vacuum takes whole curves and has no radius, and
+               a control that vanishes reads as something having broken */
+            val sized = tool == Tool.ERASE
+            eraseSize.alpha = if (sized) 1f else 0.3f
+            eraseSizeIcon.alpha = if (sized) 1f else 0.3f
+            eraseSize.isEnabled = sized
+            eraseSizeIcon.isEnabled = sized
+            eraseGuard.on = optIsolate
+        }
         for ((k, b) in lqModes) b.on = k == lqMode
         lqSize.text = lqSizeV.toInt().toString()
         lqRange.text = lqRangeV.toInt().toString()
@@ -5339,6 +5474,7 @@ class Chrome(private val act: Activity, val t: Tokens) {
         buildWalk()
         buildJoyPanel()
         buildLiquifyPanel()
+        buildErasePanel()
         buildStagePanel()
         buildDock()
         buildBrushGrid()

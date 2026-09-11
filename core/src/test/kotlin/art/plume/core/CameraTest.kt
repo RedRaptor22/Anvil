@@ -286,13 +286,57 @@ class CameraTest {
         // and the draw plane refuses it rather than mirroring it into view
         assertTrue(c.planePoint(540.0, 1200.0, Vec3()) != null)
     }
-}
 
-/**
- * The six standard views, and the snap onto them.
- *
- * FACT (B.1): a one-finger double-tap snaps to the nearest of the six.
- */
+    /**
+     * THE ORTHOGRAPHIC DEPTH RANGE IS THE VIEW'S, NOT A CONSTANT.
+     *
+     * It was a flat -4000 near plane against a scene-sized far one, which for
+     * a sketch you can hold in your hands is a depth range four hundred times
+     * bigger than the thing being drawn. Orthographic depth is spread EVENLY
+     * over its range, so a range four hundred times too big makes every depth
+     * value four hundred times coarser, everywhere — and two curves on
+     * opposite walls of a tube land on the same number and the drawing order
+     * decides which one you see.
+     *
+     * The assertion is on the RATIO rather than on the formula: what matters
+     * is that the range stays a small multiple of the scene, at both ends of
+     * the zoom, which is the property the depth buffer actually spends.
+     */
+    @Test
+    fun `the orthographic depth range stays proportional to the view`() {
+        val c = cam()
+        c.ortho = true
+        for (r in listOf(0.5, 2.0, 10.0, 50.0)) {
+            c.radius = r
+            c.apply()
+            val range = c.far - c.near
+            assertTrue(c.near < 0.0, "near must stay behind the pivot, was ${c.near}")
+            assertTrue(
+                range <= 200 * maxOf(r, 2.5),
+                "at radius $r the ortho depth range is $range, which is the old " +
+                    "fixed-plane behaviour: precision does not follow the zoom",
+            )
+        }
+    }
+
+    /**
+     * And the perspective half has not regressed while the ortho half was
+     * fixed — near over far is the ratio a depth buffer's precision hangs on.
+     */
+    @Test
+    fun `the perspective near plane never gets close enough to ruin precision`() {
+        val c = cam()
+        for (r in listOf(0.5, 2.0, 10.0, 50.0)) {
+            c.radius = r
+            c.apply()
+            assertTrue(c.near > 0.0)
+            assertTrue(
+                c.far / c.near <= 20_000.0,
+                "at radius $r the clip ratio is ${c.far / c.near}",
+            )
+        }
+    }
+}
 class OrthoViewTest {
 
     private fun cam(theta: Double, phi: Double) = Camera().apply {
@@ -410,4 +454,5 @@ class PivotTest {
         assertTrue(c.radius >= Tune.RADIUS_MIN, "radius fell to ${c.radius}")
         for (m in c.view.m) assertTrue(m.isFinite())
     }
+
 }

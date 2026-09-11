@@ -73,6 +73,16 @@ object Brushes {
         Brush("glow", 1.00, 0.00, 6.0, 0.10, true, 1.30, glow = true),
     ).associateBy { it.name }
 
+    /**
+     * The ellipse ratio at or below which a section has no inside worth
+     * drawing — a blade, not a tube.
+     *
+     * Read by [Stroke.decal], and a named number because the renderer decides
+     * how to sort a curve's depth by it and a table of brushes is the wrong
+     * place to bury that.
+     */
+    const val BLADE = 0.1
+
     val aliases = mapOf(
         "square" to "rectangle", "marker" to "flat", "chisel" to "flat",
         "round" to "pen", "pencil" to "sketch", "ink" to "pen", "ribbon" to "wide",
@@ -644,3 +654,28 @@ object StrokeGeometry {
         return at
     }
 }
+
+/**
+ * A DECAL: a curve that lies IN a surface rather than on top of one.
+ *
+ * Three things at once, and all three are load-bearing. The section has to be
+ * a blade, because a blade has no thickness to hold it off the surface and so
+ * shares the surface's own depth. It must not be a [Brush.rise] brush, which
+ * is defined as standing ON the surface — `wide` is a blade three millimetres
+ * proud, and three millimetres is exactly the separation a decal does not
+ * have. And it has to be painted onto something: a ribbon in free space has
+ * no surface to be coplanar with, so there is nothing for it to fight.
+ *
+ * The renderer gives decals, and only decals, a SLOPE-scaled depth offset.
+ * The reason for the narrowness is in what that offset costs: it grows with
+ * how fast depth changes across a pixel, so at a grazing angle it is not a
+ * nudge but a shove, and anything given one at a grazing angle comes through
+ * whatever is in front of it. Curves painted around a tube are seen at a
+ * grazing angle at both of its edges, every frame.
+ */
+val Stroke.decal: Boolean
+    get() = cfg.isDecal(guideId != null)
+
+/** [Stroke.decal] for a curve still being drawn, which has no id yet. */
+fun Brush.isDecal(onSurface: Boolean): Boolean =
+    onSurface && flat <= Brushes.BLADE && !rise

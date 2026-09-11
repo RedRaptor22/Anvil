@@ -252,7 +252,25 @@ class Camera {
      * leaves is 2000:1, which resolves a stroke's thickness with room to
      * spare.
      */
-    val near: Double get() = if (ortho) -4000.0 else clamp(radius * 0.02, 0.01, 1.0)
+    /*
+     * AND THE ORTHOGRAPHIC RANGE IS SIZED TO THE VIEW TOO.
+     *
+     * This half was left at a flat -4000 while the paragraph above was
+     * written, which made it the exact thing that paragraph argues against: a
+     * depth range of four thousand and something for a drawing you can hold in
+     * your hands. An orthographic projection spends its precision EVENLY, so
+     * unlike the perspective case nothing is wasted near the front — the whole
+     * range is simply four hundred times bigger than the drawing, and every
+     * depth value in it is four hundred times coarser. Two strokes a
+     * millimetre apart on opposite walls of a tube landed on the same number,
+     * and the one drawn last won, whichever side of the tube it was on.
+     *
+     * Negative it stays: geometry behind the pivot is not pushed off screen by
+     * an ortho projection, so it has to be inside the range or it is clipped.
+     * Symmetric about the pivot is the smallest range that keeps that promise,
+     * and far is already the scene's own size.
+     */
+    val near: Double get() = if (ortho) -far else clamp(radius * 0.02, 0.01, 1.0)
     val far: Double get() = max(radius * 40.0, 100.0)
 
     /** Right, up and backward, the three columns of the camera's world matrix. */

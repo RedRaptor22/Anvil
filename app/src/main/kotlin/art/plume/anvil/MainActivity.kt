@@ -212,6 +212,9 @@ class MainActivity : Activity(), Gestures.Listener {
     /** Current brush settings, the equivalent of the web build's `P.TOOL`. */
     private var brush = "pen"
     private var sizeMM = 14.0
+
+    /** The eraser's width, which is not the brush's — see [DocumentTool.eraseMM]. */
+    private var eraseMM = 14.0
     private var color = Rgba(0.106, 0.110, 0.129)
 
     private var opacity = 1.0
@@ -342,6 +345,9 @@ class MainActivity : Activity(), Gestures.Listener {
             }
         }.apply {
             setEGLContextClientVersion(3)
+            /* before setRenderer, which is where GLSurfaceView fills in a
+               chooser of its own if none has been set — see DepthConfig */
+            setEGLConfigChooser(DepthFirstConfigChooser())
             setRenderer(renderer)
             renderMode = GLSurfaceView.RENDERMODE_WHEN_DIRTY
         }
@@ -536,6 +542,7 @@ class MainActivity : Activity(), Gestures.Listener {
         }
         chrome.onAction = { a -> doAction(a) }
         chrome.onSizeMm = { mm -> sizeMM = mm }
+        chrome.onEraseSize = { mm -> eraseMM = mm; scheduleAutosave() }
         chrome.onOpacity = { o -> applyOpacityToSelectionOrBrush(o) }
         chrome.onBrush = { b -> brush = b }
         chrome.onColor = { argb -> applyColorToSelectionOrBrush(rgbaOf(argb)) }
@@ -665,6 +672,10 @@ class MainActivity : Activity(), Gestures.Listener {
         chrome.onKeypad = { which, v ->
             when (which) {
                 "size" -> { sizeMM = clamp(v, Tune.BRUSH_MIN_MM, Tune.BRUSH_MAX_MM) }
+                "erase" -> {
+                    eraseMM = clamp(v, Tune.BRUSH_MIN_MM, Tune.BRUSH_MAX_MM)
+                    chrome.setEraseSize(eraseMM)
+                }
                 "opacity" -> applyOpacityToSelectionOrBrush(clamp(v / 100.0, 0.05, 1.0))
             }
             syncBrushControls()
@@ -1206,6 +1217,7 @@ class MainActivity : Activity(), Gestures.Listener {
         chrome.setBrush(brush)
         chrome.setColor(argbOf(color))
         chrome.setPressure(pressureOn, pressureTarget)
+        chrome.setEraseSize(eraseMM)
     }
 
     /**
@@ -2949,8 +2961,50 @@ class MainActivity : Activity(), Gestures.Listener {
 
     // ---- drawing -----------------------------------------------------------
 
-    private fun beginStroke(x: Float, y: Float, pressure: Float) {
+    /**
+     * The tools whose pen-down draws a CONSTRUCTION LINE rather than ink.
+     *
+     * Guide, Flat Guide and Bend all hand their curve to the geometry and
+     * throw it away; nothing they draw is ever committed to the sketch. Draw
+     * is not one of them even when auto-guide is about to turn its first
+     * stroke into a surface, because that stroke IS ink — it stays in the
+     * drawing afterwards, and it has to be drawn with the brush you chose.
+     */
+    private fun shapingTool(t: Tool): Boolean =
+        t == Tool.GUIDE || t == Tool.FLATGUIDE || t == Tool.BEND
+
+    /**
+     * WHAT A CONSTRUCTION LINE LOOKS LIKE: orange, thin, flat and even.
+     *
+     * These strokes used to be drawn with whatever brush was loaded, so
+     * dragging out a guide with the wide marker selected painted a
+     * three-centimetre shaded ribbon across the screen and called it a
+     * profile. It is not paint — it is a line saying where a surface is going
+     * to be — and every figure in the documentation draws it in the same
+     * orange as the starting line the finished guide keeps.
+     *
+     * So: the round nib, because a blade rolls and a construction line should
+     * not; [Tune.GUIDE_LINE_MM] thick whatever the brush size is, because the
+     * brush size is about paint; no pressure target, because a line that
+     * tapers where you pressed lightly reads as a mark rather than a
+     * measurement; and Shadeless, so it keeps one colour all the way round
+     * instead of picking up the lamp and being mistaken for a tube.
+     */
+    private fun constructionStroke(): Stroke {
         val s = Stroke(
+            brush = "pen",
+            color = Tune.GUIDE_LINE,
+            baseRadius = Tune.GUIDE_LINE_MM * MM * 0.5,
+            opacity = 1.0,
+        )
+        s.pressureTarget = "none"
+        s.material = Material.SHADELESS
+        return s
+    }
+
+    private fun beginStroke(x: Float, y: Float, pressure: Float) {
+        val construction = shapingTool(tool)
+        val s = if (construction) constructionStroke() else Stroke(
             brush = brush, color = color, baseRadius = sizeMM * MM * 0.5, opacity = opacity,
         )
         /*
@@ -2959,15 +3013,17 @@ class MainActivity : Activity(), Gestures.Listener {
          * looking like that after the setting changes for the next one. Off
          * means "none" — the geometry then ignores pressure entirely.
          */
-        s.pressureTarget = if (pressureOn) pressureTarget else "none"
+        if (!construction) s.pressureTarget = if (pressureOn) pressureTarget else "none"
         /* stamped onto the curve for the same reason as the pressure target:
            it is what this mark is made of, and changing the setting for the
            next one must not reach back and change this one */
-        s.material = material
-        s.pattern = pattern
-        s.patternIntensity = patternIntensity
-        s.patternAngle = patternAngle
-        s.patternContrast = patternContrast
+        if (!construction) {
+            s.material = material
+            s.pattern = pattern
+            s.patternIntensity = patternIntensity
+            s.patternAngle = patternAngle
+            s.patternContrast = patternContrast
+        }
         s.group = sketch.ensureGroup().id
         stabilizer.reset()
         stabilizer.next(x.toDouble(), y.toDouble())
@@ -2979,6 +3035,10 @@ class MainActivity : Activity(), Gestures.Listener {
             if (appendAt(s, stabilizer.x, stabilizer.y, pressure)) liveBuffer.append(s)
         }
         liveScreen.add(Px(stabilizer.x, stabilizer.y))
+        /* the preview's material is an override held by the renderer, and it
+           outranks the one on the curve — so a construction line has to say so
+           here or it glows whenever Glow happens to be the chosen material */
+        renderer.setLiveMaterial(if (construction) Material.SHADELESS else material)
         renderer.setLive(liveBuffer)
         armShapeHold()
     }
@@ -3310,7 +3370,7 @@ class MainActivity : Activity(), Gestures.Listener {
     private fun stepDestructive(x: Double, y: Double) {
         val m = mask()
         if (tool == Tool.ERASE) {
-            Editing.eraseScreen(sketch, camera, x, y, camera.worldToPx(sizeMM * MM * 0.5), m)
+            Editing.eraseScreen(sketch, camera, x, y, camera.worldToPx(eraseMM * MM * 0.5), m)
         } else {
             Editing.vacuumAt(sketch, camera, x, y, m)
         }
@@ -3752,6 +3812,38 @@ class MainActivity : Activity(), Gestures.Listener {
 
     // ---- guides --------------------------------------------------------------
 
+    /**
+     * A construction line that failed to become a guide, as ink.
+     *
+     * Making a guide out of a scribble can decline — too few points, or a
+     * profile with no extent — and when it does the curve is kept rather than
+     * thrown away, because a stroke that vanishes reads as a crash. It has to
+     * stop being orange on the way, though: it was drawn in the construction
+     * colour and at the construction thickness, and neither of those is
+     * something the user asked for a curve to look like.
+     *
+     * The frames are frozen again afterwards because the first freeze measured
+     * the nib that was on the pen at the time, and the nib has just changed.
+     * That is safe here and nowhere else: a construction stroke never touches
+     * a guide, so it carries no surface frame for the first freeze to have
+     * spent.
+     */
+    private fun inkFromConstruction(s: Stroke): Stroke {
+        if (!shapingTool(tool)) return s
+        s.brush = brush
+        s.color = color
+        s.baseRadius = sizeMM * MM * 0.5
+        s.opacity = opacity
+        s.pressureTarget = if (pressureOn) pressureTarget else "none"
+        s.material = material
+        s.pattern = pattern
+        s.patternIntensity = patternIntensity
+        s.patternAngle = patternAngle
+        s.patternContrast = patternContrast
+        Nib.freezeFrames(s)
+        return s
+    }
+
     private fun makeGuideFrom(s: Stroke) {
         val pts = s.pts.map { it.p.copy() }
         val fwd = Vec3()
@@ -3764,7 +3856,7 @@ class MainActivity : Activity(), Gestures.Listener {
         val g = when (tool) {
             Tool.FLATGUIDE -> Guides.createFlatFromStroke(pts, fwd, right)
             else -> Guides.createFromStroke(pts, fwd, right, camera.radius)
-        } ?: run { commitStroke(s); return }
+        } ?: run { commitStroke(inkFromConstruction(s)); return }
 
         val previous = guides.active
         history.run(
@@ -4100,6 +4192,7 @@ class MainActivity : Activity(), Gestures.Listener {
         docTool.brush = brush
         docTool.color = color
         docTool.sizeMM = sizeMM
+        docTool.eraseMM = eraseMM
         docTool.opacity = opacity
         docTool.pressureOn = pressureOn
         docTool.pressureTarget = pressureTarget
@@ -4162,6 +4255,7 @@ class MainActivity : Activity(), Gestures.Listener {
         brush = r.tool.brush
         color = r.tool.color
         sizeMM = clamp(r.tool.sizeMM, Tune.BRUSH_MIN_MM, Tune.BRUSH_MAX_MM)
+        eraseMM = clamp(r.tool.eraseMM, Tune.BRUSH_MIN_MM, Tune.BRUSH_MAX_MM)
         opacity = clamp(r.tool.opacity, 0.05, 1.0)
         pressureOn = r.tool.pressureOn
         pressureTarget = r.tool.pressureTarget
@@ -5055,7 +5149,23 @@ class MainActivity : Activity(), Gestures.Listener {
      */
     private fun showHoverNib(x: Float, y: Float) {
         if (hideUi || !hoverNibOn) return
-        // only the tools that lay ink down have a nib to promise
+
+        /*
+         * THE ERASER GETS A RING TOO, and it is measured differently on
+         * purpose: [Editing.eraseScreen] takes a radius in PIXELS, worked out
+         * against the pivot, so the disc it sweeps is the same size on screen
+         * wherever the pen is pointing. A preview measured at the surface
+         * would be a truthful picture of a rule the eraser does not follow.
+         *
+         * It has one now because the eraser has a width of its own to set, and
+         * a width you can set and cannot see is a number you are guessing at.
+         */
+        if (tool == Tool.ERASE) {
+            val r = camera.worldToPx(eraseMM * MM * 0.5).toFloat()
+            chrome.setHoverNib(x, y, r, r, 0.0, ERASER_RING)
+            return
+        }
+        // otherwise only the tools that lay ink down have a nib to promise
         if (tool != Tool.DRAW && tool != Tool.SHAPE) { chrome.hideHoverNib(); return }
 
         camera.rayFrom(x.toDouble(), y.toDouble(), penRay)
@@ -5076,6 +5186,9 @@ class MainActivity : Activity(), Gestures.Listener {
     }
 
     private companion object {
+        /** The eraser's ring: neutral, because a rubber has no colour. */
+        private const val ERASER_RING = 0xFF9AA0A6.toInt()
+
         /**
          * Hold-to-shape is armed for anything drawn AS a stroke — a curve, a
          * guide profile, a bend path, a flat outline. FACT (C.9): Draw Shape

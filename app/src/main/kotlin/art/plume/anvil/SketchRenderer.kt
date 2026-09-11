@@ -19,6 +19,8 @@ import art.plume.core.MeshData
 import art.plume.core.Rgba
 import art.plume.core.ShadowFit
 import art.plume.core.Stroke
+import art.plume.core.decal
+import art.plume.core.isDecal
 import art.plume.core.StrokeGeometry
 import art.plume.core.Symmetry
 import art.plume.core.Tune
@@ -1124,12 +1126,12 @@ class SketchRenderer : GLSurfaceView.Renderer {
         /* the age bias is the stroke's place in the DRAWING, not in this pass:
            a blended curve drawn after an opaque one is still the newer one */
         GLES30.glEnable(GLES30.GL_POLYGON_OFFSET_FILL)
-        for ((i, s) in list.withIndex()) if (pass(s) == OPAQUE) drawStroke(s, l.shaded, i)
+        for ((i, s) in list.withIndex()) if (pass(s) == OPAQUE) drawStroke(s, l.shaded, i, list.size)
 
         GLES30.glEnable(GLES30.GL_BLEND)
         GLES30.glBlendFunc(GLES30.GL_SRC_ALPHA, GLES30.GL_ONE_MINUS_SRC_ALPHA)
         GLES30.glDepthMask(false)
-        for ((i, s) in list.withIndex()) if (pass(s) == BLENDED) drawStroke(s, l.shaded, i)
+        for ((i, s) in list.withIndex()) if (pass(s) == BLENDED) drawStroke(s, l.shaded, i, list.size)
 
         /*
          * FACT (C.5): "a Glow material enables glowing lines" — additive
@@ -1137,14 +1139,14 @@ class SketchRenderer : GLSurfaceView.Renderer {
          * stacking, and it is why glow is never shaded.
          */
         GLES30.glBlendFunc(GLES30.GL_SRC_ALPHA, GLES30.GL_ONE)
-        for ((i, s) in list.withIndex()) if (pass(s) == GLOWING) drawStroke(s, l.shaded, i)
+        for ((i, s) in list.withIndex()) if (pass(s) == GLOWING) drawStroke(s, l.shaded, i, list.size)
 
         /* the live stroke last, and newer than everything: it is the one you
            are drawing right now */
         GLES30.glBlendFunc(GLES30.GL_SRC_ALPHA, GLES30.GL_ONE_MINUS_SRC_ALPHA)
         GLES30.glPolygonOffset(
-            if (liveIsPaint()) -1f else 0f,
-            -(1f + min(list.size, DEPTH_ORDER_CAP)),
+            if (liveIsDecal()) -1f else 0f,
+            ageOffset(list.size, list.size),
         )
         drawLive(l.shaded)
 
@@ -1180,10 +1182,10 @@ class SketchRenderer : GLSurfaceView.Renderer {
         GLES30.glColorMask(false, false, false, false)
         GLES30.glDepthMask(true)
         GLES30.glDisable(GLES30.GL_BLEND)
-        for ((i, s) in list.withIndex()) if (pass(s) != OPAQUE) drawStroke(s, l.shaded, i)
+        for ((i, s) in list.withIndex()) if (pass(s) != OPAQUE) drawStroke(s, l.shaded, i, list.size)
         GLES30.glPolygonOffset(
-            if (liveIsPaint()) -1f else 0f,
-            -(1f + min(list.size, DEPTH_ORDER_CAP)),
+            if (liveIsDecal()) -1f else 0f,
+            ageOffset(list.size, list.size),
         )
         drawLive(l.shaded)
         GLES30.glColorMask(true, true, true, true)
@@ -1218,37 +1220,59 @@ class SketchRenderer : GLSurfaceView.Renderer {
     }
 
     /**
-     * One stroke, nudged towards the eye by where it comes in the drawing.
+     * HOW FAR TOWARDS THE EYE A CURVE'S AGE IS WORTH, IN DEPTH UNITS.
+     *
+     * One unit is the smallest depth difference the buffer can resolve, so a
+     * ramp of one unit per curve does settle a tie by age — but the ramp used
+     * to start at the FIRST curve and climb, which made the pull on the newest
+     * curve the length of the whole drawing. At forty curves that is forty
+     * units and nobody notices. At a few hundred it is a visible distance in
+     * the world, and the far wall of a shape comes through the near one.
+     *
+     * The measurement was always relative, so it is anchored at the end that
+     * matters: the newest curve is pulled [DEPTH_ORDER_CAP] units forward and
+     * every older one a unit less, down to a floor of one. The ordering
+     * between any two curves within the cap of each other is exactly what it
+     * was; what is gone is the part that grew with the size of the drawing.
+     *
+     * What that costs: two curves more than [DEPTH_ORDER_CAP] apart in the
+     * drawing both sit on the floor and tie, so a pair of OVERLAPPING,
+     * COPLANAR curves that far apart in age can show the diagonal again. The
+     * cap is generous enough that the pair would have to be separated by
+     * hundreds of other curves, and it is the old end of the drawing that
+     * gives, not the end you are working at.
+     */
+    private fun ageOffset(order: Int, count: Int): Float {
+        val age = (count - 1 - order).coerceAtLeast(0)
+        return -(1f + (DEPTH_ORDER_CAP - min(age, DEPTH_ORDER_CAP)))
+    }
+
+    /**
+     * One stroke, nudged towards the eye by how recently it was drawn.
      *
      * LEQUAL settles an exact tie, and two flat curves on one guide are rarely
      * an exact tie: they are triangulated differently, so their interpolated
      * depths differ by an ULP or two and which one shows varies ACROSS THE
      * SURFACE. That is the diagonal — it follows the diagonal of the quad.
      *
-     * The offset is in units of the smallest resolvable depth difference, so
-     * [order] steps is [order] ULPs: enough to settle a tie by age, far too
-     * little to lift a curve off the surface it was painted onto. A stroke
-     * drawn later is a stroke drawn ON TOP, which is what a pen does.
-     *
-     * The slope term is FOR THE PAINT BRUSHES ONLY, and that restriction is
-     * the point. A ribbon lying on a guide is a decal, and a decal seen
-     * edge-on needs one: depth changes fast enough across a single pixel that
-     * a constant nudge stops being a nudge. A round brush is not a decal but a
-     * tube, and its silhouette has the steepest slope in the drawing — giving
-     * that a slope term would pull the edge of every tube towards the eye and
-     * let strokes bleed through the guides they sit behind. So the tie-breaker
-     * they share is the constant one, and only the curves that lie flat on a
-     * surface get help with the surface's angle.
+     * The slope term is FOR DECALS ONLY — see [decal], which is where the
+     * three conditions and the reason for each of them are. It used to be for
+     * `paint`, a flag six of the eight brushes carry, and among those six are
+     * a cube, a three-millimetre ribbon and a pencil: solids with a silhouette
+     * whose depth slope is the steepest in the drawing. A slope-scaled offset
+     * at a grazing angle is not a nudge, and giving one to a tube pulls the
+     * whole rim of the tube towards the eye. That is most of the reported
+     * bleed-through: it showed at some angles and not others because the slope
+     * it scales by IS the angle.
      */
-    private fun drawStroke(s: Stroke, shadedNow: Boolean, order: Int) {
-        val c = s.cfg
+    private fun drawStroke(s: Stroke, shadedNow: Boolean, order: Int, count: Int) {
         GLES30.glPolygonOffset(
-            if (c.paint) -1f else 0f,
-            -(1f + min(order, DEPTH_ORDER_CAP)),
+            if (s.decal) -1f else 0f,
+            ageOffset(order, count),
         )
         setMaterial(s.materialOf, shadedNow)
         setPattern(s)
-        GLES30.glUniform1f(uGrit, if (c.grit) 1f else 0f)
+        GLES30.glUniform1f(uGrit, if (s.cfg.grit) 1f else 0f)
         GLES30.glUniform1f(uSelect, if (s.selected) 1f else 0f)
         GLES30.glUniform1f(uFade, fadeOf(s))
         draw(s)
@@ -1686,8 +1710,14 @@ class SketchRenderer : GLSurfaceView.Renderer {
         synchronized(strokes) { live = buffer }
     }
 
-    private fun liveIsPaint(): Boolean =
-        synchronized(strokes) { live }?.cfg?.paint ?: false
+    /**
+     * The same [decal] test as a committed curve gets, asked of the one under
+     * the pen: a blade painted onto a guide. `guideId` is set by the first
+     * sample that lands on a surface, so this answers true from the moment the
+     * curve is on one and the preview sorts the way the finished curve will.
+     */
+    private fun liveIsDecal(): Boolean =
+        synchronized(strokes) { live }?.let { it.cfg.isDecal(it.guided) } ?: false
 
     private fun drawLive(shadedNow: Boolean = shaded) {
         val buffer = synchronized(strokes) { live } ?: return
@@ -1823,20 +1853,30 @@ class SketchRenderer : GLSurfaceView.Renderer {
         const val SHADOW_MIN_INTERVAL_NS = 100_000_000L
 
         /**
-         * The most depth-buffer steps the age bias may add up to.
+         * The whole span of the age bias, in depth-buffer steps.
          *
-         * Each stroke asks for one more step than the one before it, and a
-         * step is the smallest difference the depth buffer can hold — so a
-         * thousand curves is a thousandth of nothing. The cap is only so that
-         * a drawing of a hundred thousand curves cannot turn a tie-breaker
-         * into a visible lift off the guide.
+         * This is the pull on the NEWEST curve, and every older one gets one
+         * step less of it — so it is the total, not a per-curve rate, and the
+         * number stopped being "a cap nothing reaches" and became a budget
+         * that is always spent.
+         *
+         * Five hundred and twelve steps is the budget because the answer has
+         * to hold at both ends of the zoom. A step is 2^-24 of the clip range;
+         * at the distance you actually draw at that is about three millionths
+         * of the orbit radius, so the whole span is about a six-hundredth of
+         * it — under a millimetre across a sketchbook, which is below the
+         * thinnest separation anything in a drawing has. Five hundred and
+         * twelve curves is also far more than can plausibly overlap on one
+         * patch of one guide, which is the tie this exists to settle.
          */
-        const val DEPTH_ORDER_CAP = 4096
+        const val DEPTH_ORDER_CAP = 512
 
-        /* the orange the documentation draws the starting line in */
-        const val ORANGE_R = 1.0f
-        const val ORANGE_G = 0.53f
-        const val ORANGE_B = 0.13f
+        /* the orange the documentation draws the starting line in, taken
+           from the one definition so the line and the curve that makes it
+           cannot drift apart */
+        val ORANGE_R = Tune.GUIDE_LINE.r.toFloat()
+        val ORANGE_G = Tune.GUIDE_LINE.g.toFloat()
+        val ORANGE_B = Tune.GUIDE_LINE.b.toFloat()
 
         /** Which of the three ordered passes a stroke belongs to. */
         const val OPAQUE = 0
