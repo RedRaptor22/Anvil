@@ -345,6 +345,9 @@ class MainActivity : Activity(), Gestures.Listener {
             }
         }.apply {
             setEGLContextClientVersion(3)
+            /* before setRenderer, which is where GLSurfaceView fills in a
+               chooser of its own if none has been set — see DepthConfig */
+            setEGLConfigChooser(DepthFirstConfigChooser())
             setRenderer(renderer)
             renderMode = GLSurfaceView.RENDERMODE_WHEN_DIRTY
         }

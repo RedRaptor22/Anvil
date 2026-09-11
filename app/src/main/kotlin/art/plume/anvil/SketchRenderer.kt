@@ -267,7 +267,33 @@ class SketchRenderer : GLSurfaceView.Renderer {
 
     // ---- lifecycle ------------------------------------------------------
 
+    /**
+     * The depth buffer's real precision, in bits, once the context exists.
+     *
+     * Zero until the first [onSurfaceCreated]. See the note there for why it
+     * is read back rather than assumed.
+     */
+    @Volatile
+    var depthBits: Int = 0
+        private set
+
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
+        /*
+         * WHAT DEPTH BUFFER WE ACTUALLY GOT.
+         *
+         * [DepthFirstConfigChooser] ASKS for twenty-four bits and falls back,
+         * so asking is not the same as having, and the difference is not
+         * visible anywhere else: a sixteen-bit buffer draws the same picture,
+         * only wrong, and only sometimes. Read back from the live context and
+         * kept, so the answer can be asserted on a device instead of inferred
+         * from the request — which is the only part of the depth work that a
+         * test can check without a photograph and an opinion.
+         */
+        val bits = IntArray(1)
+        GLES30.glGetIntegerv(GLES30.GL_DEPTH_BITS, bits, 0)
+        depthBits = bits[0]
+        android.util.Log.i("ANVILGL", "depth buffer: ${bits[0]} bits")
+
         GLES30.glClearColor(
             background.r.toFloat(), background.g.toFloat(), background.b.toFloat(), 1f,
         )
@@ -1245,8 +1271,9 @@ class SketchRenderer : GLSurfaceView.Renderer {
      * gives, not the end you are working at.
      */
     private fun ageOffset(order: Int, count: Int): Float {
-        // PLANTED: the pre-fix ramp, counted up from the oldest curve
-        return -(1f + min(order, DEPTH_ORDER_CAP))
+        val age = (count - 1 - order).coerceAtLeast(0)
+        val span = min(count - 1, DEPTH_ORDER_CAP).coerceAtLeast(0)
+        return -(1f + (span - min(age, span)))
     }
 
     /**
@@ -1269,7 +1296,7 @@ class SketchRenderer : GLSurfaceView.Renderer {
      */
     private fun drawStroke(s: Stroke, shadedNow: Boolean, order: Int, count: Int) {
         GLES30.glPolygonOffset(
-            if (s.cfg.paint) -1f else 0f,   // PLANTED
+            if (s.decal) -1f else 0f,
             ageOffset(order, count),
         )
         setMaterial(s.materialOf, shadedNow)
@@ -1719,7 +1746,7 @@ class SketchRenderer : GLSurfaceView.Renderer {
      * curve is on one and the preview sorts the way the finished curve will.
      */
     private fun liveIsDecal(): Boolean =
-        synchronized(strokes) { live }?.cfg?.paint ?: false   // PLANTED
+        synchronized(strokes) { live }?.let { it.cfg.isDecal(it.guided) } ?: false
 
     private fun drawLive(shadedNow: Boolean = shaded) {
         val buffer = synchronized(strokes) { live } ?: return

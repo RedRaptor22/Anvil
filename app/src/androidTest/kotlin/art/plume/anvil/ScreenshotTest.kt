@@ -291,12 +291,28 @@ class ScreenshotTest {
      * dexed, and D8 refuses a method name with a space in it below DEX 040.
      * The JVM suites are not dexed and can go on reading like sentences.
      *
-     * THIS IS AN ASSERTION, NOT A PHOTOGRAPH. The picture is kept too, but a
-     * picture that has to be looked at is a test nobody runs. The scene is a
-     * green wall with red bars behind it, and the question — is any red
-     * visible where the wall is — is one a few thousand pixel reads can
-     * answer. The wall is checked for first: if the green is not there the
-     * capture failed and the absence of red proves nothing.
+     * WHAT THIS PROVES, AND WHAT IT DOES NOT. Honesty first, because the
+     * first version of this comment claimed more than the test delivers.
+     *
+     * The pixel count below is a GUARD, not a proof. The three faults were
+     * put back — all of them, on this emulator, at this gap — and the run
+     * stayed green: at a hundred-and-twenty-fifth of the view, the pre-fix
+     * code did not bleed here. Either the scene is milder than the reported
+     * one or this GL implementation's depth-offset unit is finer than the
+     * arithmetic assumed. Whichever it is, a red count of zero is consistent
+     * with the fix and consistent with no fix, so it cannot be evidence for
+     * the fix. It is kept because it is a real regression guard against a
+     * gross one, and it is cheap.
+     *
+     * The DEPTH BITS assertion is the one with teeth, and it is the one the
+     * planting exercise was owed. [DepthFirstConfigChooser] only asks;
+     * [SketchRenderer.depthBits] is what the context came back with, and with
+     * the chooser removed it is sixteen. That is checked first, because a
+     * sixteen-bit buffer is the fault that made all the others visible.
+     *
+     * The two offset changes remain reasoned rather than measured: from the
+     * GL specification's definition of the offset unit, and from the code.
+     * Nothing here demonstrates them.
      */
     @Test
     fun nothingBehindTheWallShowsThroughIt() {
@@ -305,6 +321,16 @@ class ScreenshotTest {
                 grab<Chrome>(act, "chrome").onOpenWork(null)
                 call(act, "resetView")
                 call(act, "pushCamera")
+            }
+            Thread.sleep(1200)          // the GL thread has to have run once
+            scenario.onActivity { act ->
+                val bits = grab<SketchRenderer>(act, "renderer").depthBits
+                android.util.Log.i("ANVILSHOT", "depth buffer: $bits bits")
+                check(bits >= 24) {
+                    "the context came back with a $bits-bit depth buffer. " +
+                        "Sixteen is what GLSurfaceView picks when nobody asks, " +
+                        "and it is the fault everything else here was hiding behind"
+                }
             }
             scenario.onActivity { act ->
                 val cam = grab<art.plume.core.Camera>(act, "camera")
