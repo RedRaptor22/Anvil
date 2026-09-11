@@ -173,6 +173,13 @@ class FlowTest {
         m.invoke(target, arg)
     }
 
+    private fun setF(target: Any, name: String, value: Any?) {
+        val fl = generateSequence(target.javaClass as Class<*>) { it.superclass }
+            .mapNotNull { runCatching { it.getDeclaredField(name) }.getOrNull() }.first()
+        fl.isAccessible = true
+        fl.set(target, value)
+    }
+
     private fun call0(target: Any, name: String) {
         val m = generateSequence(target.javaClass as Class<*>) { it.superclass }
             .mapNotNull { runCatching { it.getDeclaredMethod(name) }.getOrNull() }.first()
@@ -217,6 +224,99 @@ class FlowTest {
             "the drawing came back after being deleted",
             0, sketch.strokes.size,
         )
+    }
+
+    /**
+     * ROTATION MUST NOT DISTURB WHICH LAYER IS UP.
+     *
+     * The activity handles configuration changes itself rather than being
+     * recreated for them, so applyMode runs over a live view tree. It sets
+     * visibilities on things that are now children of the canvas layer, and a
+     * rotation on Home must not bring any of them back.
+     */
+    @Test
+    fun `rotating on Home leaves the canvas put away`() {
+        val act = launch()
+        val chrome = f<Chrome>(act, "chrome")
+        assertEquals(View.VISIBLE, vis(chrome, "gallery"))
+
+        org.robolectric.RuntimeEnvironment.setQualifiers("+land")
+        act.onConfigurationChanged(act.resources.configuration)
+
+        assertEquals("rotating on Home hid Home", View.VISIBLE, vis(chrome, "gallery"))
+        assertEquals(
+            "rotating on Home brought the canvas controls back",
+            View.GONE, vis(chrome, "canvasLayer"),
+        )
+    }
+
+    /** And on the canvas, rotation must not throw away what is staged. */
+    @Test
+    fun `rotating mid-staging keeps the staged shape and its bar`() {
+        val act = launch()
+        val chrome = f<Chrome>(act, "chrome")
+        chrome.onOpenWork(null)
+        chrome.onTool(Tool.PRIM)
+        assertEquals(View.VISIBLE, vis(chrome, "stageBar"))
+
+        org.robolectric.RuntimeEnvironment.setQualifiers("+land")
+        act.onConfigurationChanged(act.resources.configuration)
+
+        assertEquals("a rotation threw the staging bar away", View.VISIBLE, vis(chrome, "stageBar"))
+        assertEquals(View.VISIBLE, vis(chrome, "canvasLayer"))
+    }
+
+    /** Pause writes the autosave; resume must not lose the drawing. */
+    @Test
+    fun `a pause and resume keeps the drawing`() {
+        val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
+        val act = controller.get()
+        val chrome = f<Chrome>(act, "chrome")
+        chrome.onOpenWork(null)
+        val sketch = f<art.plume.core.Sketch>(act, "sketch")
+        val st = art.plume.core.Stroke()
+        st.pts.add(art.plume.core.StrokePoint(art.plume.core.Vec3(0.0, 0.0, 0.0)))
+        st.pts.add(art.plume.core.StrokePoint(art.plume.core.Vec3(0.2, 0.1, 0.0)))
+        sketch.add(st)
+
+        controller.pause().resume()
+
+        assertEquals("the drawing did not survive a pause", 1, sketch.strokes.size)
+    }
+
+    /**
+     * A FILL IS MADE OF WHAT EVERY OTHER MARK IS MADE OF.
+     *
+     * beginStroke stamps the chosen material and pattern onto a hand-drawn
+     * curve. A fill's curves are made by a different path, which copied
+     * neither — so Glow filled a guide without glowing.
+     */
+    @Test
+    fun `a fill carries the chosen material and pattern`() {
+        val act = launch()
+        val chrome = f<Chrome>(act, "chrome")
+        chrome.onOpenWork(null)
+
+        val guides = f<art.plume.core.GuideScene>(act, "guides")
+        val g = art.plume.core.Guides.createFromStroke(
+            (0 until 20).map {
+                val a = -0.4 + it / 19.0 * 0.8
+                art.plume.core.Vec3(a, kotlin.math.sin(a * 3) * 0.2, 0.0)
+            },
+            art.plume.core.Vec3(0.0, 0.0, -1.0), art.plume.core.Vec3(1.0, 0.0, 0.0), 4.0,
+        )!!
+        guides.setActive(g)
+
+        setF(act, "material", art.plume.core.Material.GLOW)
+        setF(act, "pattern", art.plume.core.Pattern.CROSS)
+
+        call0(act, "fillActiveGuide")
+        val sketch = f<art.plume.core.Sketch>(act, "sketch")
+        assertTrue("the fill produced nothing", sketch.strokes.isNotEmpty())
+        for (st in sketch.strokes) {
+            assertEquals("a fill row lost the material", art.plume.core.Material.GLOW, st.material)
+            assertEquals("a fill row lost the pattern", art.plume.core.Pattern.CROSS, st.pattern)
+        }
     }
 
     /** A phone-width layout must still reach Home and the canvas. */

@@ -3871,6 +3871,26 @@ class MainActivity : Activity(), Gestures.Listener {
         val proto = Stroke(
             brush = brush, color = color, baseRadius = sizeMM * MM * 0.5, opacity = opacity,
         )
+        /*
+         * A FILL IS MADE OF WHAT EVERY OTHER MARK IS MADE OF.
+         *
+         * beginStroke stamps the chosen material and pattern onto every curve
+         * drawn by hand, because that is what the mark is made of and changing
+         * the setting afterwards must not reach back. A fill's curves are made
+         * here instead, by a path that skipped all of it — so choosing Glow
+         * and filling a guide gave a fill that did not glow, and a pattern set
+         * on the rail never reached a filled surface at all. Nothing decided
+         * that; the second way of making a curve simply did not copy it.
+         *
+         * The BRUSH is still deliberately not taken — see [Fill.BRUSH]. A fill
+         * owes nothing to the nib you were holding, and everything to the
+         * colour and material you chose for it.
+         */
+        proto.material = material
+        proto.pattern = pattern
+        proto.patternIntensity = patternIntensity
+        proto.patternAngle = patternAngle
+        proto.patternContrast = patternContrast
         when (val r = Fill.fillGuide(g, proto)) {
             is Fill.Result.Refused -> toast(r.reason)
             is Fill.Result.Filled -> {
