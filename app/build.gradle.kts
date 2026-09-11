@@ -19,6 +19,8 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "0.1.0"
+        /* the instrumented tests that run on an emulator and photograph it */
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
@@ -33,10 +35,29 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
+
+    /*
+     * ROBOLECTRIC RUNS THE ANDROID HALF ON THE JVM.
+     *
+     * "CI proves the code compiles. It never launches the app." That was true
+     * of every check this project had, and it is how a null field and a
+     * staging bar that never appeared both shipped. Robolectric puts the real
+     * framework and the real merged resources behind a plain JVM test, so the
+     * activity can actually be constructed and its view tree asked questions.
+     * It cannot render OpenGL — nothing here can — but the whole of Chrome is
+     * ordinary views, and that is where the crashes have been.
+     */
+    testOptions { unitTests { isIncludeAndroidResources = true } }
 }
 
 dependencies {
     implementation(project(":core"))
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.activity:activity:1.9.2")
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.13")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test:rules:1.6.1")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")
 }

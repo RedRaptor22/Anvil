@@ -27,7 +27,7 @@ someone's phone drawing differently.
 |---|---|---|
 | language | ES5 JavaScript | Kotlin |
 | renderer | Three.js r128 (WebGL) | OpenGL ES 3.0, direct |
-| tests | 584 in-browser checks | 19 JVM unit tests |
+| tests | 584 in-browser checks | 200 JVM unit tests |
 | ships as | a URL | an APK |
 
 ## Modules
@@ -69,7 +69,7 @@ echo "sdk.dir=/path/to/Android/sdk" > local.properties
 
 ## What actually works
 
-Verified by `./gradlew :core:test` — 19 tests, all passing:
+Verified by `./gradlew :core:test` — 200 tests, all passing:
 
 - **Rotation-minimising frames** by double reflection (Wang et al. 2008), the
   same algorithm as the web build. Orthonormal along a helix to 1e-9, finite and
@@ -85,16 +85,83 @@ Verified by `./gradlew :core:test` — 19 tests, all passing:
 - **Reprojection**, which puts a stroke shoved off a surface back onto it.
 - **Spur removal**, which drops a folded sample before it can reverse a tangent,
   while keeping a deliberate sharp corner.
+- **The camera and its projection.** A lens focal length in millimetres becomes a
+  field of view the way Feather expresses it; a pixel unprojected onto the draw
+  plane projects back to the same pixel to 1e-6; a pan moves the sketch by
+  exactly the pixels the fingers moved; the orthographic toggle does not shift
+  the framing. None of this was testable while the matrices lived in
+  `android.opengl.Matrix`, which is why they no longer do.
+- **The live stroke buffer.** The geometry you see while the pen is down is
+  compared float-for-float against the geometry the commit builds, for all eight
+  brushes, including after the buffer has had to grow. An append touches a
+  bounded tail rather than the whole tube — which is the difference between
+  drawing being linear and being quadratic in stroke length.
+- **Undo with a memory budget.** Steps declare what they retain in stroke points,
+  so three 200k-point strokes are evicted where two hundred dots would not be,
+  and a single step larger than the whole budget is still undoable.
+- **Stable Stroke**, which smooths the input before it is projected, and drops
+  the jitter of a pen resting on glass without swallowing a slow drift.
+- **Guide surfaces.** A stroke extruded along the view into a swept surface,
+  whose anchor row comes back out as *exactly* the stroke that made it; a flat
+  guide triangulated to the outline you drew rather than a grid clipped to it,
+  with the triangle areas summing to the polygon's own; and the five primitives
+  at the dimensions the web build gives them.
+- **Painting on a guide.** The ray query agrees with brute force over every
+  triangle across 400 probes; sampling a surface by arc length and projecting a
+  ray onto it land in the same place, so a filled row sits where a hand-drawn
+  one would; a stroke running off the edge clamps back and is lit the same way
+  a hit is; and on a flat guide the nib is trimmed against the outline you drew
+  rather than its bounding box.
+- **The editing tools.** The eraser clips its disc against the centreline as a
+  continuous polyline, so a thin eraser cuts a segment it crosses even when no
+  sample is inside the disc — there is a test that builds exactly that case.
+  Smoothing pins the ends and reprojects onto the guide, so paint stays where it
+  was painted. Liquify's pinch cannot overshoot the cursor. A fill rounds its
+  row count UP, because rounding down leaves a groove down every seam, and
+  breaks a row into separate strokes where it leaves the shape and comes back.
+  Draw Shape refuses to close an arc into the circle it happens to fit.
+- **The document format**, transcribed field for field from the web build's so a
+  sketch opens in both. A missing tangent writes nulls rather than zeros, a v1
+  file with no group list still opens, and the sections this build does not
+  model yet — the light, the post effects — travel through untouched rather than
+  being silently dropped.
+- **Export and import.** OBJ and STL in millimetres because neither format
+  declares a unit; glTF in metres because it does. The binary STL header
+  deliberately avoids starting with "solid", or a sniffing reader takes it for
+  ASCII. glTF colour is converted to linear, because `baseColorFactor` is.
+- **Bend and Loft.** A bent guide follows the stroke whichever way it was drawn
+  — four primitives are bent along three directions each and checked to lean the
+  way the pen went, because the web build's version deformed along local +X
+  regardless and was measured up to 180° out. A loft flips any curve drawn the
+  other way round, so the surface does not pinch to a waist and turn itself
+  inside out.
 
-**Compiles, but has never been run:**
+Three bugs turned up while porting this, all of which the tests now pin:
 
-- the GL ES 3.0 renderer (`app/SketchRenderer.kt`)
-- the gesture layer (`app/Gestures.kt`)
-- the activity shell (`app/MainActivity.kt`)
+- **Roll rotated the canvas backwards.** A view matrix is the camera object's
+  inverse, so rolling the camera by +a rotates the view by −a; the renderer had
+  it as +a. Invisible until two fingers twist — which had never happened,
+  because nothing had ever run.
+- **A tapered stroke's preview froze rings at the wrong radius.** Uneven sample
+  spacing lets the rewrite window step over a ring, which then keeps the taper
+  factor it had on the way past: measured at 0.758 of its radius where the
+  answer was 1.0. The web build has the same gap, hidden there because it
+  rebuilds exactly on commit.
+- **The bounded rewrite window was bounded in name only.** The cap centres live
+  at vertex 0 and move on every sample, so a single dirty range covering them
+  and the rings spanned the entire stroke — the compute stayed cheap while the
+  upload quietly went back to being the length of the stroke.
 
-CI builds a debug APK on every push, so these are known to compile against the
-real SDK. Nothing has run them on a device or an emulator — no frame has ever
-been drawn. Treat `:app` as compiling, reviewed design, not as working software.
+**Runs on a device.** The APK has been installed and used: it draws, orbits and
+undoes on real hardware. Everything in `app/` had only ever been compiled before
+that, so this is the check that mattered most and it has now been made.
+
+It is still worth being exact about what the tests do and do not cover. `core`
+decides *where a point goes*; `app/` decides *whether anything appears on
+screen*. A JVM test proves the first to 1e-9 and says nothing at all about the
+second — a mistyped uniform, a buffer bound to the wrong target or a shader
+that fails on one vendor's driver would pass every test here and still show a
+blank screen. `app/` is checked by running it, which is why that run matters.
 
 ## Installing it on a phone
 
@@ -108,21 +175,50 @@ There is nothing to build. Every push produces an APK:
    installs from this source; that is expected for an app not from the Play
    Store.
 
-**What you will see:** a near-empty pale screen. Drag one finger or a stylus to
-draw a black tube; two fingers orbit, pinch and rotate. There is no interface —
-no brush picker, no undo button, no guides. That is the current state, not a
-fault. Artifacts expire after 90 days.
+**What you will see:** a pale screen with a ground grid, and a control bar along
+the bottom. Drag one finger or a stylus to draw; two fingers orbit, pinch and
+twist, and three fingers pan. The bar carries brush size, seven ink colours,
+undo, redo, clear, and a mode button cycling Draw / Guide / Flat guide.
+
+On an empty page the first stroke becomes a **guide** — a translucent,
+grid-lined surface extruded away from you along the view. Orbit, and you are
+looking at a sheet you can draw on; the pen then paints onto that surface
+rather than onto the screen plane, clamping back to the nearest point if you
+run off the edge.
+
+The interface is Plume's, ported: the tool pill, the brush rail with its
+collapse tab, the context bar, the Scene, Curves and Import panels, the colour
+wheel, the transform gizmo and the liquify strip — on a screen under 720dp
+they become bottom sheets over a dock, which is what the web build does at the
+same width. Every gesture undoes in one step, and the sketch autosaves — close
+the app and it comes back.
+
+Artifacts expire after 90 days.
 
 ## Not yet ported
 
 Roughly in the order they matter:
 
-1. **Guides** — the guide-as-sweep surface, projection of strokes onto it, bend,
-   loft, primitives. This is the largest remaining piece and belongs in `core`.
-2. **The interface.** Deliberately not transliterated: a phone wants a bottom
-   sheet and a radial menu, not the desktop's 58px vertical rail.
-3. Document save/load, undo beyond a flat stroke list, export (OBJ/STL/glTF),
-   lighting controls, the post pass, symmetry, selection and the editing tools.
+1. **Opening an Anvil file in the browser, and a Pl file on the phone.** The
+   format is written to match and the tests round-trip it, but nothing has yet
+   carried a sketch between the two builds. That is the check the whole format
+   exists for, and it is still the largest unverified claim in the project.
+2. **Running any of it.** There is no GPU here and CI compiles the APK rather
+   than launching it, so no frame of the lighting, the shadow, the post pass
+   or the whole interface has ever been rendered. The maths under all of it is
+   tested on a JVM; the pixels are not.
+3. **Image references** — an imported photo to trace over. OBJ and STL already
+   import and become guides; a photo needs a texture sampler the guide shader
+   does not have.
+4. **A stylus hover preview of the actual nib**, and palm rejection beyond
+   "a pen outranks a finger".
+
+Everything else in Plume is ported: the tools, the guides, the document
+format, the exporters, the lighting and post pass, and the whole interface —
+both of its layouts, its 43 icons, its keyboard map, its tooltips and its
+walkthrough.
+
+[docs/ROADMAP.md](docs/ROADMAP.md) orders all of it into eight phases.
 
 ## Licence
 

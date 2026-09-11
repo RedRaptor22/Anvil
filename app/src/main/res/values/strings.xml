@@ -3,5 +3,371 @@
     <string name="app_name">Anvil</string>
     <string name="undo">Undo</string>
     <string name="redo">Redo</string>
-    <string name="clear">Clear sketch</string>
+    <string name="clear">Clear</string>
+
+    <!-- tools, in the order the row shows them -->
+    <string name="tool_draw">Draw</string>
+    <string name="tool_erase">Erase</string>
+    <string name="tool_vacuum">Vacuum</string>
+    <string name="tool_smooth">Smooth</string>
+    <string name="tool_select">Select</string>
+    <string name="tool_lasso">Lasso</string>
+    <string name="tool_liquify">Liquify</string>
+    <string name="tool_guide">Guide</string>
+    <string name="tool_flat">Flat</string>
+
+    <string name="fill">Fill</string>
+    <string name="duplicate">Duplicate</string>
+    <string name="delete">Delete</string>
+    <string name="close_guide">Close guide</string>
+    <string name="mirror">Mirror</string>
+    <string name="save">Save</string>
+    <string name="open">Open</string>
+    <string name="export_">Export</string>
+    <string name="new_sketch">New sketch</string>
+    <string name="tools">Tools</string>
+    <string name="brush">Brush</string>
+    <string name="colour">Colour</string>
+    <string name="settings">Settings</string>
+    <string name="stage">Stage</string>
+    <string name="guide_bend">Bend</string>
+
+    <!-- #viewInfo, the top-strip readout -->
+    <string name="persp">Persp</string>
+    <string name="ortho">Ortho</string>
+    <string name="pivot_auto">auto</string>
+    <string name="pivot_pinned_short">pinned</string>
+
+    <!-- #ctxHint. The first is what Plume shows with nothing active, and it
+         states the premise the whole tool rests on (spec C.1): with autoGuide
+         on, your first stroke IS the guide. -->
+    <string name="hint_draw_a_stroke">Draw a stroke — it extrudes into a 3D guide.</string>
+    <string name="hint_guide_active">Draw on the guide.</string>
+
+    <!-- tools whose behaviour is not ported yet: the button exists and says
+         so rather than doing nothing. -->
+    <string name="tip_fingerpen">Finger-Pen — a finger draws instead of orbiting</string>
+    <string name="finger_on">Finger-Pen on — a finger now draws</string>
+    <string name="finger_off">Finger-Pen off — a finger now orbits</string>
+    <string name="guide_selected">Guide selected — use the joystick</string>
+    <string name="guide_deselected">Guide released</string>
+    <string name="pen_detected">Pen detected — one finger now orbits</string>
+    <string name="opt_hovernib">Nib preview</string>
+    <string name="opt_actionpill">Action pill</string>
+    <string name="brush_pen">Pen — a round tube, even all the way</string>
+    <string name="brush_sketch">Pencil — builds up, and a light press is fainter</string>
+    <string name="brush_taper">Taper — a pen that narrows to a point at each end</string>
+    <string name="brush_rectangle">Rectangle — a square section at a fixed 22mm</string>
+    <string name="brush_cube">Cube — an extrusion standing on the surface</string>
+    <string name="brush_flat">Marker — a blade, held flat against the guide</string>
+    <string name="brush_wide">Ribbon — a 3mm sheet lying on the guide</string>
+    <string name="brush_glow">Glow — additive, and never shaded</string>
+    <string name="gallery_empty">Nothing here yet. Tap + to start a note.</string>
+    <string name="gallery_curves">%1$d curves</string>
+    <string name="gallery_open_now">open</string>
+    <string name="work_new">New sketch</string>
+    <string name="work_opened">Opened</string>
+    <string name="work_deleted">Deleted</string>
+    <string name="work_is_open">That one is open — switch away from it first</string>
+    <string name="did_undo">Undo · %1$s</string>
+    <string name="did_redo">Redo · %1$s</string>
+    <string name="guide_from_selection">Guide made from %1$d curves</string>
+    <string name="guide_from_selection_failed">These curves do not make a surface</string>
+    <string name="palette_new">New group</string>
+    <string name="palette_name_hint">Name this group</string>
+    <string name="tip_wheel">Mix a colour</string>
+    <string name="tip_palettes">Palettes</string>
+    <string name="colour_ink">BRUSH COLOUR</string>
+    <string name="colour_background">BACKGROUND</string>
+    <string name="colour_light">LIGHT COLOUR</string>
+    <string name="colour_guide">GUIDE COLOUR</string>
+    <string name="isolation_on">Isolated %1$s</string>
+    <string name="isolation_off">Isolation off</string>
+    <string name="tip_presets">Brush presets</string>
+    <string name="tip_preset">%1$s, %2$dmm — tap to use, hold to pick</string>
+    <string name="tip_preset_add">Save this brush</string>
+    <string name="tip_preset_delete">Delete the picked presets</string>
+    <string name="preset_saved">Brush saved</string>
+    <string name="preset_full">That is as many presets as a note holds</string>
+    <string name="lq_undo_all">Undo all — back to before liquify</string>
+    <string name="lq_compare">Hold to compare with the before</string>
+    <string name="lq_apply">Apply</string>
+    <string name="lq_reverted">Back to before liquify</string>
+    <string name="group_hidden_draw">That group is hidden — show it to draw in it</string>
+
+    <!-- #stagePanel -->
+    <string name="tab_curves">Curves</string>
+    <string name="tab_import">Import</string>
+    <string name="tab_scene">Scene</string>
+    <string name="background">Background</string>
+    <string name="lighting">Lighting</string>
+    <string name="intensity">Intensity</string>
+    <string name="ambient">Ambient</string>
+    <string name="effects">Effects</string>
+    <string name="fstop">F-stop</string>
+    <string name="grain_level">Grain level</string>
+    <string name="block_size">Block size</string>
+    <string name="opt_grid">Grid</string>
+    <string name="opt_axis">Axis</string>
+    <string name="opt_fog">Fog</string>
+    <string name="opt_shade">Shade</string>
+    <string name="opt_render">Render</string>
+    <string name="opt_shadow">Shadow</string>
+    <string name="opt_toon">Toon</string>
+    <string name="opt_dof">DOF</string>
+    <string name="opt_grain">Grain</string>
+    <string name="opt_pixel">Pixel</string>
+
+    <!-- the staging bar -->
+    <string name="done">Done</string>
+    <string name="cancel">Cancel</string>
+    <string name="tension">Tension</string>
+    <string name="taper">Taper</string>
+    <string name="segments">Segments</string>
+    <string name="prim_cube">Cube</string>
+    <string name="prim_pyramid">Pyr</string>
+    <string name="prim_sphere">Sph</string>
+    <string name="prim_torus">Torus</string>
+    <string name="prim_tube">Tube</string>
+
+    <!-- the four tools -->
+    <string name="bend_needs_guide">Bend needs an active guide</string>
+    <string name="bend_hint">Orbit, then draw the new sweep path</string>
+    <string name="loft_needs_two">Select two or more curves to loft</string>
+    <string name="loft_made">Loft guide created</string>
+    <string name="prim_made">Primitive guide created</string>
+    <string name="shape_profile"> profile</string>
+    <string name="shape_sweep"> sweep</string>
+    <string name="shape_circle">Circle%1$s — drag to size it</string>
+    <string name="shape_line">Straight%1$s — drag the end</string>
+    <string name="shape_curve">Smoothed%1$s — drag to bend it</string>
+
+    <!-- the Curves tab -->
+    <string name="select_all">Select all</string>
+    <string name="group_hint">Tap a row to draw into it, its name to rename · hold to pick it for merge or delete · tap the count to select its curves · the arrow moves the selection in</string>
+    <string name="group_new">Group %1$d</string>
+
+    <string name="nothing_selected">Nothing selected</string>
+    <string name="moved_to_group">Moved %1$d into %2$s</string>
+    <string name="group_duplicated">Duplicated %1$d curves</string>
+    <string name="group_hidden_cannot_draw">%1$s is hidden — show it to draw in it</string>
+    <string name="group_is_hidden">%1$s is hidden</string>
+    <string name="group_is_empty">%1$s is empty</string>
+    <string name="group_selected">%1$d selected in %2$s</string>
+    <string name="group_deleted">Group deleted with %1$d curves — undo puts both back</string>
+    <string name="last_group">The last group cannot be deleted</string>
+
+    <!-- the liquify strip -->
+    <string name="liquify">Liquify</string>
+    <string name="lq_size">Size</string>
+    <string name="lq_range">Range</string>
+    <string name="lq_strength">Strength</string>
+    <string name="apply">Apply</string>
+    <string name="liquify_done">Liquify finished</string>
+
+    <!-- the eraser strip -->
+    <string name="eraser">Eraser</string>
+    <string name="erase_size">Eraser size</string>
+    <string name="erase_guard">Protect curves behind the guide</string>
+
+    <!-- the settings modal -->
+    <string name="input">Input</string>
+    <string name="view">View</string>
+    <string name="file">File</string>
+    <string name="stable_stroke">Stable stroke</string>
+    <string name="radial">Radial</string>
+    <string name="radial_off">Off</string>
+    <string name="mirror_on">Mirror %1$s</string>
+    <string name="mirror_off">Mirror off</string>
+    <string name="lens">Lens</string>
+    <string name="opt_finger">Finger</string>
+    <string name="opt_autoguide">Auto guide</string>
+    <string name="opt_isolate">Isolate</string>
+    <string name="opt_clamp">Clamp</string>
+    <string name="opt_holdshape">Hold shape</string>
+    <string name="opt_stable">Stabiliser</string>
+    <string name="opt_ortho">Ortho</string>
+    <string name="opt_theme">Theme</string>
+    <string name="opt_hideui">Hide UI</string>
+    <string name="opt_guide">Guide</string>
+    <string name="opt_diag">Input</string>
+    <string name="view_front">Front</string>
+    <string name="view_back">Back</string>
+    <string name="view_right">Right</string>
+    <string name="view_left">Left</string>
+    <string name="view_top">Top</string>
+    <string name="view_bottom">Btm</string>
+    <string name="autosaves_here">Autosaves to this device.</string>
+    <string name="view_snapped">%1$s view</string>
+    <string name="projection_persp">Perspective</string>
+    <string name="projection_ortho">Orthographic</string>
+    <string name="hideui_hint">Double-tap the canvas to bring it back</string>
+
+    <!-- #pressSeg -->
+    <string name="press_size">Size</string>
+    <string name="press_opacity">Opac</string>
+    <string name="press_both">Both</string>
+    <string name="press_colour">Col</string>
+    <string name="pressure_on">Pressure on</string>
+    <string name="pressure_off">Pressure off</string>
+
+    <string name="pivot_pinned">Orbit point pinned</string>
+    <string name="pivot_released">Orbit point released</string>
+    <string name="view_reset">View reset</string>
+
+    <!-- #joy, the transform gizmo -->
+    <string name="joy_move">Move</string>
+    <string name="joy_turn">Turn</string>
+    <string name="joy_size">Size</string>
+    <string name="joy_nothing">Nothing selected</string>
+    <string name="joy_axis">%1$s along %2$s</string>
+    <string name="joy_count">%1$d selected</string>
+
+    <!-- the Import tab -->
+    <string name="import_reference">Import reference…</string>
+    <string name="no_resources">Saved guides and imported references live here. Draw straight onto any of them.</string>
+    <string name="res_active">active</string>
+    <string name="res_deleted">Deleted %1$s</string>
+    <string name="guide_activated">Guide activated</string>
+    <string name="imported">Imported %1$s</string>
+    <string name="import_failed">Could not read that file</string>
+
+    <!-- the six-step walkthrough -->
+    <string name="walk_step">Step %1$d of %2$d</string>
+    <string name="walk_next">Next</string>
+    <string name="walk_done">Start sketching</string>
+    <string name="walk_skip">Skip</string>
+    <string name="walk_t1">Draw one stroke</string>
+    <string name="walk_b1">With no guide active, your first stroke is not a curve — it is extruded along the direction you are looking in and becomes a translucent 3D guide. Draw one now.</string>
+    <string name="walk_t2">Orbit and look at it</string>
+    <string name="walk_b2">Drag with two fingers to orbit — one finger is busy drawing. Pinch to zoom, three fingers to pan. The guide has depth: the orange edge marks where your first stroke was.</string>
+    <string name="walk_b2_pen">Drag with one finger to orbit. The guide has depth: the orange edge marks where your first stroke was.</string>
+    <string name="walk_t3">Draw on the guide</string>
+    <string name="walk_b3">Every stroke from here projects onto that surface, so it picks up real 3D coordinates. That is the whole trick.</string>
+    <string name="walk_t4">Bend it</string>
+    <string name="walk_b4">Orbit to a new viewpoint, hit Bend, and draw a path. The first stroke keeps its shape and gets swept along what you just drew — a circle plus a big top-view circle gives you a doughnut.</string>
+    <string name="walk_t5">Navigate</string>
+    <string name="walk_b5">Double-tap snaps to the nearest of the six straight-on views, and a three-finger double-tap flips to orthographic. Press and hold to pin the orbit point; hold on empty space to reset. Change the lens from the menu.</string>
+    <string name="walk_t6">The guide is also a mask</string>
+    <string name="walk_b6">Anything hidden behind the guide cannot be erased or selected — cover what you want to protect, then erase freely. Toggle it under Isolate.</string>
+
+    <!-- data-tip, in the web build's own words -->
+    <string name="tip_home">Reset view — F, or press and hold empty space</string>
+    <string name="tip_export">Export — PNG, glTF/OBJ/STL or a .plume file</string>
+    <string name="tip_menu">Settings</string>
+    <string name="tip_help">Walkthrough</string>
+    <string name="tip_undo">Undo — Ctrl+Z</string>
+    <string name="tip_redo">Redo — Ctrl+Shift+Z</string>
+    <string name="tip_mirror">Mirror — X, then Z</string>
+    <string name="tip_stage">Stage — curves, resources, scene</string>
+    <string name="tip_dup">Duplicate</string>
+    <string name="tip_dupmir">Duplicate symmetrically</string>
+    <string name="tip_delete">Delete</string>
+    <string name="tip_guide_save">Save to the Import tab</string>
+    <string name="tip_guide_close">Close the guide</string>
+    <string name="tip_pressure">Pressure sensitivity</string>
+    <string name="tip_draw">Draw — tap again for Draw Shape · D</string>
+    <string name="tip_shape">Draw Shape — snaps to lines, curves and circles · R</string>
+    <string name="tip_select">Select — tap again for Lasso · S</string>
+    <string name="tip_lasso">Lasso — drag a loop · L</string>
+    <string name="tip_smooth">Smooth — drag over a shaky curve · M</string>
+    <string name="tip_fill">Fill — coats the whole guide in the current brush and colour · K</string>
+    <string name="tip_erase">Eraser — tap again for Vacuum · E</string>
+    <string name="tip_vacuum">Vacuum — deletes whole curves · V</string>
+    <string name="tip_guide">Draw 3D Guide — extrudes along the view direction · G</string>
+    <string name="tip_flatguide">Flat Shape Guide — draw a closed outline and it fills in facing you</string>
+    <string name="tip_bend">Bend — redraw the sweep from another viewpoint · B</string>
+    <string name="tip_loft">Loft — connect two or more curves</string>
+    <string name="tip_prim">Primitives — cube, pyramid, sphere, torus, tube</string>
+    <string name="tip_liquify">Liquify — press and drag to deform the selection</string>
+    <string name="tip_inject">Injector — samples the whole brush</string>
+
+    <string name="opacity">Opacity</string>
+
+    <string name="nothing_under_that">Nothing under that</string>
+    <string name="bad_hex">Not a colour — six hex digits, or three</string>
+    <string name="eyedrop_hint">Tap a curve to sample its colour</string>
+    <string name="sampled_colour">Picked up the colour</string>
+    <string name="nothing_to_export">Nothing to export</string>
+    <string name="snapshot_saved">Snapshot saved</string>
+    <string name="snapshot_failed">Could not read the frame</string>
+    <string name="could_not_write">Could not write the file</string>
+    <string name="sampled">Picked up the %1$s brush</string>
+    <string name="no_guide">No guide to save</string>
+    <string name="guide_saved">Guide saved</string>
+    <string name="tip_group_new">New group, and draw in it</string>
+    <string name="tip_find_group">Find group — tap a curve to work in its group</string>
+    <string name="tip_recall_guide">Bring back the guide you just closed</string>
+    <string name="tip_select_all">Select everything visible</string>
+    <string name="tip_stamp">Stamp — drag to lay down copies</string>
+    <string name="find_armed">Tap a curve to open its group</string>
+    <string name="find_none">No curve there</string>
+    <string name="find_found">Working in %1$s</string>
+    <string name="guide_recalled">Guide back</string>
+    <string name="stamp">Stamp</string>
+    <string name="stamp_hint">Drag to lay down a copy</string>
+    <string name="stamp_on">Stamp: drag to copy. Done when you are finished.</string>
+    <string name="stamp_off">Stamped %1$d</string>
+    <string name="material">Material</string>
+    <string name="mat_shaded">Shaded</string>
+    <string name="mat_shadeless">Flat</string>
+    <string name="mat_glow">Glow</string>
+    <string name="mat_cutout">Cutout</string>
+    <string name="pattern">Pattern</string>
+    <string name="pat_none">None</string>
+    <string name="pat_dot">Dot</string>
+    <string name="pat_line">Line</string>
+    <string name="pat_cross">Cross</string>
+    <string name="pat_terrazzo">Chips</string>
+    <string name="pat_stipple">Stipple</string>
+    <string name="pat_intensity">Intensity</string>
+    <string name="pat_angle">Angle</string>
+    <string name="pat_contrast">Contrast</string>
+    <string name="tip_materials">Material and pattern</string>
+    <string name="tip_render_mode">Render mode — lights, shadows, materials</string>
+    <string name="render_on">Rendering</string>
+    <string name="render_off">Flat</string>
+    <string name="home_recents">Recents</string>
+    <string name="home_folders">Folders</string>
+    <string name="home_settings">Settings</string>
+    <string name="home_support">Help</string>
+    <string name="home_all">All</string>
+    <string name="home_refresh">Refresh</string>
+    <string name="home_new_folder">New folder</string>
+    <string name="home_new_note">New note</string>
+    <string name="home_sort">Sort</string>
+    <string name="home_rename">Rename</string>
+    <string name="home_duplicate">Duplicate</string>
+    <string name="home_export">Export</string>
+    <string name="home_lighten">Lighten</string>
+    <string name="home_delete">Delete</string>
+    <string name="home_picked">%1$d selected</string>
+    <string name="home_notes">%1$d notes</string>
+    <string name="sort_modified">Last modified</string>
+    <string name="sort_created">Last created</string>
+    <string name="sort_name">Name</string>
+    <string name="folder_new">New folder</string>
+    <string name="home_lightened">Lightened: %1$d points saved</string>
+    <string name="home_folder_open">Open a note to export it</string>
+    <string name="home_duplicated">%1$d duplicated</string>
+    <string name="home_deleted">%1$d deleted</string>
+    <string name="home_moved">%1$d moved</string>
+    <string name="home_cannot_move">A folder cannot go inside itself</string>
+    <string name="joy_lock">Lock</string>
+    <string name="joy_2d">2D</string>
+    <string name="joy_3d">3D</string>
+    <string name="tip_joy_lock">Lock: straight moves, uniform scale, 15° turns</string>
+    <string name="tip_joy_switch">Switch between the view joystick and the axis one</string>
+    <string name="joy_locked">Joystick locked</string>
+    <string name="joy_unlocked">Joystick free</string>
+    <string name="tip_group_merge">Merge the groups you picked</string>
+    <string name="tip_group_curves">Select the curves in this group</string>
+    <string name="group_merged">Merged %1$d groups</string>
+    <string name="group_merge_needs_two">Pick two groups to merge</string>
+    <string name="group_pick_first">Hold a group to pick it</string>
+    <string name="opt_orbit_show">Orbit dot</string>
+    <string name="opt_orbit_pin">Pin orbit</string>
+    <string name="guide_replaced">New guide — the old one is in the quick menu</string>
+    <string name="home_notes_heading">Notes</string>
+    <string name="nav_aimed">%1$s view</string>
 </resources>

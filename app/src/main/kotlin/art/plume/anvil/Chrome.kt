@@ -1,0 +1,5626 @@
+package art.plume.anvil
+
+import android.app.Activity
+import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
+import android.view.Gravity
+import android.view.MotionEvent
+import android.view.View
+import android.view.ViewGroup
+import android.widget.FrameLayout
+import android.widget.GridLayout
+import android.widget.ImageView
+import android.widget.LinearLayout
+import android.widget.TextView
+import android.widget.EditText
+import art.plume.core.Grid
+import art.plume.core.Material
+import art.plume.core.Pattern
+import art.plume.core.Mirror
+import art.plume.core.ColorSpace
+import art.plume.core.DocumentEnv
+import art.plume.core.Rgba
+import art.plume.core.Transform
+import art.plume.core.Tune
+
+/**
+ * Plume's tool set, keyed by the `data-tool` value the web build uses, so a
+ * button here and a button there can be compared by name.
+ *
+ * Six of these are *partners*: Draw/Shape, Select/Lasso and Erase/Vacuum share
+ * one slot in the tool pill and swap on a repeat tap (spec D.1). The partner
+ * stays addressable — on a phone the pill is a three-across grid with room for
+ * all of them.
+ */
+enum class Tool(val key: String, val icon: String) {
+    DRAW("draw", "draw"),
+    SHAPE("shape", "shape"),
+    SELECT("select", "select"),
+    LASSO("lasso", "lasso"),
+    SMOOTH("smooth", "smooth"),
+    FILL("fill", "fill"),
+    ERASE("erase", "erase"),
+    VACUUM("vacuum", "vacuum"),
+    GUIDE("guide", "guide"),
+    FLATGUIDE("flatguide", "flatguide"),
+    BEND("bend", "bend"),
+    LOFT("loft", "loft"),
+    PRIM("prim", "solid"),
+    LIQUIFY("liquify", "liquify"),
+    INJECT("inject", "inject"),
+    EYEDROP("eyedrop", "pick"),
+}
+
+/**
+ * The Scene tab's switches.
+ *
+ * Separate from [Action] because these are STATE the chrome renders back,
+ * not one-shot commands: each one has an on and an off that the panel has to
+ * show, and folding them into Action would mean Action carried both meanings.
+ */
+enum class EnvToggle {
+    GRID, AXIS, FOG, SHADED, RENDER, SHADOW, TOON, DOF, GRAIN, PIXEL,
+
+    /** Both halves of the rendered look at once — Feather's Render Mode. */
+    RENDER_MODE,
+}
+
+/** Which of the three colour wells the one colour card is pointed at. */
+enum class ColorTarget { INK, BACKGROUND, LIGHT, GUIDE }
+
+/** The settings modal's switches — input behaviour and the view. */
+enum class InputToggle {
+    FINGER, AUTO_GUIDE, ISOLATE, CLAMP, HOLD_SHAPE, STABLE, ORTHO, THEME, HIDE_UI, DIAG,
+    HOVER_NIB, ACTION_PILL,
+
+    /** FACT: "Toggle the Orbit Point on or off… Pin… Show orbit point." */
+    ORBIT_SHOW, ORBIT_PIN,
+}
+
+/** Everything a chrome button asks for that is not a change of tool. */
+enum class Action {
+    HOME, EXPORT, MENU, HELP,
+    UNDO, REDO,
+    MIRROR, STAGE,
+    GUIDE_BEND, GUIDE_SAVE, GUIDE_CLOSE,
+    DUPLICATE, DUPLICATE_MIRROR, LIQUIFY, DELETE, SELECTION_TO_GUIDE,
+    FIND_GROUP, RECALL_GUIDE, STAMP,
+    PRESSURE,
+    NEW, SAVE, OPEN, CLEAR,
+}
+
+/**
+ * Plume's interface, rebuilt in Android views.
+ *
+ * This is a port, not an interpretation. Every panel below is one of the web
+ * build's `.panel` divs, in the same corner, at the same offset, holding the
+ * same buttons in the same order. Where a number appears it came out of the
+ * stylesheet; where a behaviour appears it came out of ui.js.
+ *
+ * The one thing that *looks* like a departure and is not: on a screen narrower
+ * than 720dp the rails become bottom sheets over a permanent dock. That is not
+ * an Android concession — it is `body.compact`, which Plume itself switches to
+ * at the same width, for the reason its stylesheet gives: "phones. Rails become
+ * bottom sheets; the dock is the only permanent chrome."
+ *
+ * Chrome knows nothing about strokes, guides or the camera. It raises [onTool]
+ * and [onAction] and it renders whatever state is pushed back into it, so the
+ * whole of the interface can be read in this one file and the whole of the
+ * behaviour in MainActivity.
+ */
+class Chrome(private val act: Activity, val t: Tokens) {
+
+    // ---- what the activity listens to ------------------------------------
+
+    var onTool: (Tool) -> Unit = {}
+    var onAction: (Action) -> Unit = {}
+    var onSizeMm: (Double) -> Unit = {}
+    var onOpacity: (Double) -> Unit = {}
+    var onGuideOpacity: (Double) -> Unit = {}
+    var onBrush: (String) -> Unit = {}
+    var onColor: (Int) -> Unit = {}
+
+    /** The Scene tab. Each hands back what changed; the chrome renders the rest. */
+    var onEnv: (EnvToggle) -> Unit = {}
+    var onLight: (az: Double, alt: Double) -> Unit = { _, _ -> }
+    var onLightLevels: () -> Unit = {}
+    var onFx: () -> Unit = {}
+    /** The background colour changed, so the fog, the grid and the theme move. */
+    var onBackground: (Int) -> Unit = {}
+
+    /** The active guide's own colour, or null to follow the page again. */
+    var onGuideColor: (Int?) -> Unit = {}
+
+    /** The key light's colour changed. */
+    var onLightColour: (Int) -> Unit = {}
+
+    /** The colour card. [onHex] gets raw text; a bad one leaves the colour alone. */
+    var onHex: (String) -> Unit = {}
+    var onWheel: (Rgba) -> Unit = {}
+    var onEyedrop: () -> Unit = {}
+
+    /** The Curves tab. */
+    var onGroupPick: (Int) -> Unit = {}
+    var onGroupRename: (id: Int, name: String) -> Unit = { _, _ -> }
+    var onGroupSelect: (Int) -> Unit = {}
+    var onGroupAssign: (Int) -> Unit = {}
+    var onGroupVisible: (id: Int, visible: Boolean) -> Unit = { _, _ -> }
+
+    /** How strongly a whole group draws. Live while the slider moves. */
+    var onGroupOpacity: (id: Int, value: Double) -> Unit = { _, _ -> }
+
+    /** Look at this group alone, or stop doing so. */
+    var onGroupIsolate: (id: Int) -> Unit = {}
+
+    /** Liquify's other two verdicts: throw it all away, or peek at the before. */
+    var onLiquifyUndoAll: () -> Unit = {}
+    var onLiquifyCompare: (down: Boolean) -> Unit = {}
+
+    /** One of the three mirror planes was tapped. */
+    var onMirrorAxis: (axis: String) -> Unit = {}
+
+    /** The Mirror icon itself: put every plane away. */
+    var onMirrorOff: () -> Unit = {}
+    var onGroupNew: () -> Unit = {}
+
+    /** FACT: merge, and drag to reorder — both act on the picked groups. */
+    var onGroupMerge: (List<Int>) -> Unit = {}
+    var onGroupReorder: (id: Int, by: Int) -> Unit = { _, _ -> }
+    var onGroupDuplicate: () -> Unit = {}
+    var onGroupDelete: () -> Unit = {}
+    var onSelectAll: () -> Unit = {}
+
+    /** The Import tab: saved guides and references. */
+    var onResourceActivate: (Int) -> Unit = {}
+    var onResourceVisible: (id: Int, visible: Boolean) -> Unit = { _, _ -> }
+
+    /** The cube: active, then visible, then hidden, then round again. */
+    var onResourceCycle: (Int) -> Unit = {}
+    var onResourceDelete: (Int) -> Unit = {}
+    var onImportReference: () -> Unit = {}
+
+    /** The walkthrough. */
+    var onWalkNext: () -> Unit = {}
+    var onWalkSkip: () -> Unit = {}
+
+    /** The numeric keypad: a value typed rather than dragged. */
+    var onKeypad: (which: String, value: Double) -> Unit = { _, _ -> }
+
+    /** The liquify strip. Its three numbers are dragged, like everything else. */
+    /** The eraser's own width, in millimetres — not the brush's. */
+    var onEraseSize: (Double) -> Unit = {}
+
+    var onLiquifyMode: (String) -> Unit = {}
+    var onLiquifyValue: (which: String, value: Double) -> Unit = { _, _ -> }
+    var onLiquifyApply: () -> Unit = {}
+    var onLiquifyClose: () -> Unit = {}
+
+    /** The settings modal. */
+    var onInput: (InputToggle) -> Unit = {}
+    var onStable: (Double) -> Unit = {}
+    var onRadial: (Int) -> Unit = {}
+    var onFocal: (Double) -> Unit = {}
+    var onView: (Int) -> Unit = {}
+
+    /** `#pressSeg` — the brush rail's pressure toggle and its target. */
+    var onPressure: () -> Unit = {}
+    var onPressureTarget: (String) -> Unit = {}
+
+    /** `#joy` — the transform gizmo. */
+    var onTransformMode: (Transform.Mode) -> Unit = {}
+    var onTransformGrab: (Int?) -> Unit = {}
+    var onTransformDrag: (axis: Int?, dx: Float, dy: Float, sweep: Double, strip: Boolean) -> Unit =
+        { _, _, _, _, _ -> }
+    var onTransformEnd: () -> Unit = {}
+
+    /** The staging bar: Loft's tension, a primitive's segments and taper. */
+    var onStageValue: (which: Int, value: Double) -> Unit = { _, _ -> }
+    var onPrimKind: (String) -> Unit = {}
+    var onStageDone: () -> Unit = {}
+
+    /** Finished stamping. */
+    var onStampDone: () -> Unit = {}
+
+    /** The 2D joystick: its lock, the switch to the 3D one, and its handles. */
+    var onJoyLock: () -> Unit = {}
+    var onJoyKind: (Boolean) -> Unit = {}
+    var onJoy2DGrab: (Int) -> Unit = {}
+    var onJoy2D: (kind: Int, dx: Float, dy: Float, sweep: Double) -> Unit =
+        { _, _, _, _ -> }
+
+    /** A material was chosen: it applies to the selection, or to the brush. */
+    var onMaterial: (String) -> Unit = {}
+    var onPattern: (Int) -> Unit = {}
+    var onPatternValue: (which: Int, value: Double) -> Unit = { _, _ -> }
+    var onStageCancel: () -> Unit = {}
+
+    val root = FrameLayout(act)
+
+    /**
+     * EVERY CANVAS CONTROL, IN ONE LAYER THAT HOME CAN TURN OFF.
+     *
+     * Home is a place the app can be, not a card laid over the drawing — so
+     * while it is up, the rail, the pill, the dock, the joystick and the rest
+     * have no business being on screen, laid out, or in the way of a tap.
+     * They were only ever HIDDEN BY THE GALLERY SITTING ON TOP OF THEM, which
+     * covers them on a plain rectangular screen and does not on a device with
+     * a display cutout: the root is inset by the cutout, so the gallery is
+     * inset with it and the controls underneath show around its edge.
+     *
+     * One parent for the lot of them answers it properly. Home hides the
+     * layer rather than covering it, which is also what stops a control that
+     * is merely out of sight from still being hit.
+     */
+    private val canvasLayer = FrameLayout(act)
+
+    // ---- state the chrome renders ----------------------------------------
+
+    private var tool = Tool.DRAW
+    private var sizeMm = 14.0
+    private var opacity = 1.0
+    private var brush = "pen"
+    private var inkColor = Color.rgb(27, 28, 33)
+
+    /**
+     * WHICH COLOUR THE CARD IS EDITING.
+     *
+     * The web build has three separate `input[type=color]` wells — the brush
+     * swatch on the rail, Background and Light in the Scene tab. Android's
+     * platform picker is the one piece of chrome that would look borrowed, so
+     * this build has ONE card and points it at whichever well was tapped.
+     * Background and Light were left as a "not built yet" toast when the card
+     * was written, which is why the background could not be changed at all.
+     */
+    private var colorTarget = ColorTarget.INK
+
+    /** What the guide swatch shows: the active guide's tint, or the derived one. */
+    private var guideColor = 0xFF5B9DFF.toInt()
+    private var guideName = ""
+    private var guideActive = false
+    private var guideOpacity = 0.42
+    private var selectionCount = 0
+
+    /** A guide is held by the joystick, which is a target the count cannot see. */
+    private var guideSelected = false
+    private var compact = false
+
+    /** What the staging bar is showing, if anything. */
+    private var staging: Staging? = null
+
+    /*
+     * The Scene tab's model. Held here and pushed back by setEnvironment so a
+     * drag on a readout can update the number under the finger without waiting
+     * for the round trip through the document.
+     */
+    private var envGrid = true
+    private var envAxis = false
+    private var envFog = false
+    private var optOrbitShow = true
+    private var optOrbitPin = false
+
+    /**
+     * THE NAVIGATION GLOBE's two answers: a drag orbits, a tap on a ball aims.
+     *
+     * Orbit deltas are in dp so they arrive in the same units the canvas's own
+     * two-finger orbit uses, and the activity can hand both to the same place
+     * rather than keeping a second sensitivity in step with the first.
+     */
+    var onNavOrbit: (dxDp: Double, dyDp: Double) -> Unit = { _, _ -> }
+    var onNavAim: (art.plume.core.Camera.OrthoView) -> Unit = {}
+
+    private val navGlobe = NavGlobe(
+        act, t,
+        onOrbit = { dx, dy -> onNavOrbit(dx, dy) },
+        onAim = { v -> onNavAim(v) },
+    )
+
+    /** Where the camera is pointing, for the globe to project its axes with. */
+    fun setNavBasis(
+        right: art.plume.core.Vec3,
+        up: art.plume.core.Vec3,
+        back: art.plume.core.Vec3,
+    ) = navGlobe.setBasis(right, up, back)
+
+    /** The orbit point, drawn where the view is built around. */
+    private val orbitMark = OrbitMark(act, t)
+
+    private var envShaded = true
+    private var envRender = false
+    private lateinit var renderMode: IcoButton
+    private var envShadow = true
+    private var envToon = false
+    private var envDof = false
+    private var envGrain = false
+    private var envPixel = false
+    private var lightIntensity = 1.0
+    private var lightAmbient = 0.66
+    private var fstop = 5.6
+    private var grainLevel = 35.0
+    private var pixelSize = 4.0
+    private var backgroundColor = Color.rgb(236, 234, 243)
+    private var lightColor = Color.WHITE
+    private lateinit var cardTitle: TextView
+    private lateinit var eyedropButton: IcoButton
+
+    /** Draw/Shape, Select/Lasso, Erase/Vacuum — which side of each pair shows. */
+    private val partner = mapOf(
+        Tool.DRAW to Tool.SHAPE, Tool.SHAPE to Tool.DRAW,
+        Tool.SELECT to Tool.LASSO, Tool.LASSO to Tool.SELECT,
+        Tool.ERASE to Tool.VACUUM, Tool.VACUUM to Tool.ERASE,
+    )
+    private val shownSide = HashMap<Tool, Tool>()
+
+    // ---- the panels ------------------------------------------------------
+
+    private val topLeft = panel(act, t)
+    private val helpPanel = panel(act, t)
+    private val viewInfo = panel(act, t)
+    private val toolPill = panel(act, t)
+    private val railTab = panel(
+        act, t, corners = floatArrayOf(0f, 0f, t.rIco, t.rIco, t.rIco, t.rIco, 0f, 0f),
+    )
+    private val brushRail = panel(act, t)
+    private val undoPill = panel(act, t)
+
+    /**
+     * `#fingerPen` — NOT from the web build, which has no such control.
+     *
+     * Feather puts a Finger-Pen button at the bottom of the screen: tap it to
+     * make the next touch draw, tap it again to hand the fingers back to
+     * navigation. It is a MODE you flip, not a preference you set, and that is
+     * the whole difference — the same switch buried in a settings menu costs
+     * four taps and a hunt every time you want to orbit what you just drew,
+     * which is what made finger navigation here so tiring.
+     *
+     * Feather keeps the settings-menu copy of it as well, and so does this: an
+     * always-visible button for the flipping, the Input list for discovering
+     * it exists.
+     */
+    private val penPill = panel(act, t)
+    private val ctxBar = panel(act, t)
+    private val selBar = panel(act, t)
+    private val liquifyPanel = panel(act, t)
+    private val erasePanel = panel(act, t)
+    private val joyPanel = panel(act, t)
+    private val walkPanel = panel(act, t, large = true)
+    private val keypad = panel(act, t, large = true)
+    private val diag = panel(act, t)
+    private val stagePanel = panel(act, t, large = true)
+    private val brushGrid = panel(act, t, large = true)
+    private val slidePop = panel(act, t, large = true)
+    private val colorCard = panel(act, t, large = true)
+    private val sysMenu = panel(act, t, large = true)
+    private val dock = panel(act, t, radius = 0f)
+    private val scrim = View(act)
+    /**
+     * `#gallery` — the works you have, over everything else.
+     *
+     * A full page rather than a card, because it is not something you do WHILE
+     * drawing: it is the other place the app can be. Until this there was one
+     * autosave, which made "your sketch" a thing the app had exactly one of —
+     * starting something new meant losing what was there, and a sketchbook
+     * with one page in it is a sheet of paper.
+     */
+    private val gallery = LinearLayout(act)
+    /** One sidebar row: the whole thing highlights, the label goes bold. */
+    private class NavRow(val row: LinearLayout, val label: TextView)
+
+    private lateinit var homeBody: LinearLayout
+    private lateinit var homeSidebar: LinearLayout
+    private lateinit var homePath: LinearLayout
+    private lateinit var homeSortButton: TextButton
+    private lateinit var homeBottom: LinearLayout
+    private lateinit var homeCount: TextView
+    private lateinit var homeAdd: TextButton
+    private val homeViews = LinkedHashMap<Int, NavRow>()
+    private val askCard = LinearLayout(act)
+    private lateinit var askTitle: TextView
+    private lateinit var askField: EditText
+    private var askDone: ((String) -> Unit)? = null
+    private val homePicked = LinkedHashSet<String>()
+    private var homeItems: List<HomeItem> = emptyList()
+    private var homePath2: List<Pair<String, String>> = emptyList()
+    private var homeSort = 0
+    private var homeView = HOME_RECENTS
+    private var homeCurrent: String? = null
+
+    /** Open a work, or start a fresh one when the id is null. */
+    var onOpenWork: (String?) -> Unit = {}
+
+    /** Home's own buttons. Ids are folder ids, or note ids for the actions. */
+    var onHomeEnter: (String?) -> Unit = {}
+    var onHomeView: (Int) -> Unit = {}
+    var onHomeSort: (Int) -> Unit = {}
+    var onHomeRefresh: () -> Unit = {}
+    var onHomeNewFolder: () -> Unit = {}
+    var onHomeRename: (List<String>) -> Unit = {}
+    var onHomeDuplicate: (List<String>) -> Unit = {}
+    var onHomeExport: (List<String>) -> Unit = {}
+    var onHomeLighten: (List<String>) -> Unit = {}
+    var onHomeDelete: (List<String>) -> Unit = {}
+
+    /** Dropped onto a folder, or onto a crumb to come back out. */
+    var onHomeMove: (ids: List<String>, into: String?) -> Unit = { _, _ -> }
+
+    private val toastCard = ToastCard(act, t)
+
+    /**
+     * `#actionPill` — what you just did, at the top of the screen.
+     *
+     * Separate from the toast, and the difference is the point. A toast
+     * explains something you might not know; this only ever names an action
+     * you just asked for. So it is small, it sits where the eye already is
+     * when you reach for undo, and it never says anything you HAVE to read.
+     * It is a receipt rather than a message, which is why it can be switched
+     * off without losing anything.
+     */
+    private val actionPill = TextView(act).apply {
+        setTextColor(t.onActive)
+        textSize = 11.5f
+        letterSpacing = 0.04f
+        setTypeface(typeface, android.graphics.Typeface.BOLD)
+        gravity = Gravity.CENTER
+        background = GradientDrawable().apply {
+            setColor(t.active)
+            cornerRadius = t.dpf(13f)
+        }
+        setPadding(t.dp(14f), t.dp(6f), t.dp(14f), t.dp(6f))
+        /* over the panels too: naming what just happened is no use behind
+           the card you did it from */
+        elevation = t.dpf(24f)
+        alpha = 0f
+        visibility = View.GONE
+    }
+
+    private val pillHide = Runnable {
+        actionPill.animate().alpha(0f).translationY(-t.dpf(6f)).setDuration(150)
+            .withEndAction { actionPill.visibility = View.GONE }.start()
+    }
+    private val tipCard = TipCard(act, t)
+
+    /** The nib silhouette that follows a hovering stylus. */
+    private val hoverNib = HoverNib(act, t)
+
+    private var optHoverNib = true
+    private var optActionPill = true
+
+    /**
+     * The palette group you are working out of, or null for none.
+     *
+     * Held rather than guessed. It used to be inferred from whichever group
+     * contained the current colour, which is wrong twice over: a colour in two
+     * groups belongs to whichever was searched first, and a colour you nudged
+     * off a swatch belongs to none, so the set you had chosen quietly stopped
+     * being the set you were stepping through.
+     */
+    private var pickedPalette: String? = null
+
+    /** Which brush the rail button is currently drawn as. */
+    private var brushIconShown = ""
+
+    /** `#mirrorBar` — the three global planes, revealed by the Mirror icon. */
+    private val mirrorBar = LinearLayout(act)
+    private val mirrorChips = LinkedHashMap<String, TextButton>()
+    private var mirrorOn: Set<String> = emptySet()
+
+    private val wheelPage = LinearLayout(act)
+    private val palettePage = LinearLayout(act)
+    private lateinit var wheelTab: IcoButton
+    private lateinit var paletteTab: IcoButton
+    /** Which of the colour card's three pages is showing. */
+    private var colorPage = PAGE_WHEEL
+
+
+    /** The groups you made, name to colours, in the order you made them. */
+    private val userPalettes = LinkedHashMap<String, ArrayList<Int>>()
+
+    /** A group of your own changed, so somebody should write it down. */
+    var onPalettes: (Map<String, List<Int>>) -> Unit = {}
+
+    private val toolButtons = HashMap<Tool, IcoButton>()
+    private val brushTiles = HashMap<String, IcoButton>()
+    private val icons = HashMap<String, IcoButton>()
+    private val dockButtons = HashMap<String, TextButton>()
+    private val primButtons = HashMap<String, TextButton>()
+    private val pressButtons = HashMap<String, TextButton>()
+
+    /* Declared up here, not beside sliderRow: init{} builds the popover, and a
+       property initialiser that runs after init{} would still be null then. */
+    private val sliders = ArrayList<Pair<HSlider, () -> Double>>()
+
+    private lateinit var ctxHint: TextView
+    private lateinit var guideBar: LinearLayout
+    private lateinit var guideNameLabel: TextView
+    private lateinit var guideOpacityBar: HSlider
+    private lateinit var guideSwatch: View
+    private lateinit var sizeVal: DragValue
+    private lateinit var opacityVal: DragValue
+    private lateinit var colorDot: View
+    private lateinit var vFocal: TextView
+    private lateinit var vProj: TextView
+    private lateinit var vPivot: TextView
+    private lateinit var vCount: TextView
+    private lateinit var sizePopVal: TextView
+    private lateinit var opacityPopVal: TextView
+    private lateinit var stageTabs: Tabs
+    private lateinit var sceneOptions: OptionGrid
+    private lateinit var fxOptions: OptionGrid
+    private lateinit var toonButton: TextButton
+    private lateinit var lightPad: LightPad
+    private lateinit var intensityVal: DragValue
+    private lateinit var ambientVal: DragValue
+    private lateinit var fstopVal: DragValue
+    private lateinit var grainVal: DragValue
+    private lateinit var pixelVal: DragValue
+    private lateinit var bgSwatch: View
+    private lateinit var lightSwatch: View
+    private lateinit var hexField: EditText
+    private lateinit var colorWheel: ColorWheel
+    private lateinit var groupList: LinearLayout
+    private lateinit var resourceList: LinearLayout
+    private lateinit var resourceEmpty: View
+    private lateinit var lqSize: DragValue
+    private lateinit var lqRange: DragValue
+    private lateinit var lqStrength: DragValue
+    private val lqModes = HashMap<String, IcoButton>()
+    private var lqMode = "push"
+    private var lqSizeV = 120.0
+    private var lqRangeV = 60.0
+    private var lqStrengthV = 55.0
+
+    /* the eraser panel's model */
+    private lateinit var eraseSize: DragValue
+    private lateinit var eraseSizeIcon: IcoButton
+    private lateinit var eraseGuard: IcoButton
+    private val eraseModes = HashMap<Tool, IcoButton>()
+    private var eraseMm = 14.0
+
+    /* the settings modal's model */
+    private var optFinger = true
+    private var optAutoGuide = true
+    private var optIsolate = true
+    private var optClamp = true
+    private var optHoldShape = true
+    private var optStable = true
+    private var optOrtho = false
+    private var optHideUi = false
+    private var optDiag = false
+    private var stableAmt = Tune.STABLE_DEFAULT
+    private var radialAmt = 1
+    private var focalMm = 50.0
+    private var saveText = ""
+    private var symmetryOn = false
+    private var saveDotState = 0
+
+    /** The group being renamed, so a refresh cannot yank the field away. */
+    private var renaming: Int? = null
+    private lateinit var inputGrid: OptionGrid
+    private lateinit var viewGrid: OptionGrid
+    private lateinit var stableBar: HSlider
+    private lateinit var radialBar: HSlider
+    private lateinit var focalBar: HSlider
+    private lateinit var stableValue: TextView
+    private lateinit var radialValue: TextView
+    private lateinit var focalValue: TextView
+    private lateinit var saveState: TextView
+    private lateinit var saveDot: View
+    private lateinit var pressRow: LinearLayout
+    private lateinit var joyPad: JoyPad
+    private lateinit var joyStrip: JoyStrip
+    private lateinit var joy2d: Joy2D
+    private lateinit var joyLockButton: TextButton
+    private lateinit var joySwitch: TextButton
+    private lateinit var joyModeRow: LinearLayout
+    private var joy3d = false
+    private var joyLocked = false
+    private lateinit var joyTarget: TextView
+    private lateinit var walkStep: TextView
+    private lateinit var walkTitle: TextView
+    private lateinit var walkBody: TextView
+    private lateinit var walkNext: TextButton
+    private lateinit var keypadLabel: TextView
+    private lateinit var keypadValue: TextView
+    private lateinit var keypadUnit: TextView
+    private val diagValues = HashMap<String, TextView>()
+    private var keypadFor = ""
+    private var keypadText = ""
+    private var keypadFresh = true
+    private val joyModes = HashMap<Transform.Mode, TextButton>()
+    private var joyMode = Transform.Mode.MOVE
+    private var joyLabel = ""
+    private var pressureOn = true
+    private var pressureTarget = "size"
+    private lateinit var stageBar: LinearLayout
+    private lateinit var stageRow2: LinearLayout
+    private lateinit var primKinds: LinearLayout
+    private lateinit var stageLabel: TextView
+    private lateinit var stageLabel2: TextView
+    private lateinit var stageSlider: HSlider
+    private lateinit var stageSlider2: HSlider
+    private lateinit var stageValue: TextView
+    private lateinit var stageValue2: TextView
+
+    /** `POPOVERS` in ui.js: only one of these is ever open. */
+    /**
+     * The cards that a touch on the sketch puts away.
+     *
+     * Registered through [popover] rather than added directly, because each
+     * one has to SWALLOW the touches that land on it: a panel is not clickable
+     * by default, so a tap on a blank part of the colour card fell straight
+     * through to the GL surface underneath and closed the card the user was
+     * reaching into. The web build makes the same exception by hand, skipping
+     * its dismiss handler for anything inside a popover.
+     */
+    private val popovers = ArrayList<View>()
+
+    private fun popover(v: View) {
+        v.isClickable = true
+        popovers.add(v)
+    }
+    private var railHidden = false
+
+    /*
+     * Which sheet is open, tracked rather than read back off translationY: a
+     * sheet that has not been laid out yet also sits at 0, so measuring it
+     * would call every sheet open on the first frame.
+     */
+    private var openSheet: LinearLayout? = null
+
+    /*
+     * NOTHING REFRESHES UNTIL EVERYTHING EXISTS.
+     *
+     * refresh() reads every control on the screen, and the controls are made
+     * by nineteen builders in a row — so a builder that refreshes reads the
+     * controls of every builder after it, which have not been assigned yet.
+     * buildColorCard does exactly that: it opens on the wheel through
+     * showColorPage, which refreshes, and the settings grids it then reads
+     * are built two steps later. The result was an
+     * UninitializedPropertyAccessException thrown out of this constructor,
+     * out of onCreate, and an app that would not open at all.
+     *
+     * The guard sits here rather than at that one call site because the fault
+     * is the shape of construction and not one builder: any of them can reach
+     * refresh() through a helper, and none of them needs the screen synced
+     * before the screen exists. The last line of init syncs it once, when
+     * there is something to sync.
+     */
+    private var built = false
+
+    /*
+     * AND THE INIT BLOCK IS AT THE VERY BOTTOM OF THIS FILE, on purpose.
+     *
+     * Kotlin runs property initialisers and init blocks in SOURCE ORDER, so
+     * a `val` declared below init is still null while init runs — and a
+     * builder that touches one gets a NullPointerException out of the
+     * constructor, out of onCreate, and an app that will not open. That is
+     * the same crash the `built` guard above fixed, arriving by a second
+     * door: not "assigned by a later builder" but "not declared yet at all".
+     *
+     * It happened. Five hundred lines of new panels were added at the end of
+     * this class with their fields beside them, which is the tidy place to
+     * put them, and every one of those fields was null by the time the
+     * builders ran. Guarding each site would be a list to keep; putting init
+     * last means every field in the class, wherever it is written, exists
+     * before a single builder runs. tools/initorder.py holds it there.
+     */
+
+
+    // ======================================================================
+    // construction
+    // ======================================================================
+
+    /** An `.ico` button that reports one Action. */
+    private fun ico(name: String, act1: Action, small: Boolean = false): IcoButton =
+        IcoButton(act, t, if (small) IcoButton.SIZE_SMALL else IcoButton.SIZE_NORMAL)
+            .icon(name)
+            .also {
+                it.setOnClickListener { _ -> onAction(act1) }
+                icons[name] = it
+                TIPS[name]?.let { r -> Tip.attach(it, tipCard, act.getString(r)) }
+            }
+
+    /** An `.ico` button that selects a tool, with D.1's repeat-tap partner swap. */
+    private fun toolIco(which: Tool): IcoButton =
+        IcoButton(act, t).icon(which.icon).also { b ->
+            b.dot = partner.containsKey(which)
+            TOOL_TIPS[which]?.let { r -> Tip.attach(b, tipCard, act.getString(r)) }
+            b.setOnClickListener {
+                /*
+                 * D.1: a repeat tap on an active tool swaps it for its partner.
+                 *
+                 * This used to be switched off on a phone, on the reading that
+                 * the compact grid gave every partner a slot of its own so a
+                 * repeat tap would swap a visible button for another visible
+                 * button. Both halves of that were wrong. The pairs stay
+                 * merged at every width — "three across, because the pairs
+                 * stay merged here too, one Erase icon on the phone as well as
+                 * on the desktop" — and switching the swap off on a phone is
+                 * what made the dotted icons do nothing at all, since a phone
+                 * is where the app is actually used.
+                 */
+                val alt = partner[which]
+                if (alt != null && tool == which) select(alt) else select(which)
+            }
+            toolButtons[which] = b
+        }
+
+    private fun buildTopLeft() {
+        topLeft.addView(ico("grid", Action.HOME))
+        topLeft.addView(ico("export", Action.EXPORT))
+        topLeft.addView(ico("menu", Action.MENU))
+        helpPanel.addView(ico("help", Action.HELP))
+    }
+
+    /**
+     * `#viewInfo` — lens, projection, pivot and curve count. The stylesheet
+     * explains why it is on the top strip and not along the bottom: "the
+     * bottom bar is centred and grows when a guide is active, which walked it
+     * straight over a bottom-left readout."
+     */
+    private fun buildViewInfo() {
+        fun lab(s: String) = TextView(act).apply {
+            text = s; setTextColor(t.dim); textSize = 11f
+        }
+        fun value(s: String) = TextView(act).apply {
+            text = s; setTextColor(t.ink); textSize = 11f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+        }
+        vFocal = value("50")
+        vProj = value("Persp")
+        vPivot = value("auto")
+        vCount = value("0")
+        val pad = t.dp(13f)
+        viewInfo.setPadding(pad, t.dp(7f), pad, t.dp(7f))
+        viewInfo.addView(lab("lens "))
+        viewInfo.addView(vFocal)
+        viewInfo.addView(lab("mm   "))
+        viewInfo.addView(vProj)
+        viewInfo.addView(lab("   pivot "))
+        viewInfo.addView(vPivot)
+        viewInfo.addView(lab("   "))
+        viewInfo.addView(vCount)
+        viewInfo.addView(lab(" curves"))
+    }
+
+    private fun buildToolPill() {
+        for (pair in listOf(Tool.DRAW to Tool.SHAPE, Tool.SELECT to Tool.LASSO)) {
+            toolPill.addView(toolIco(pair.first))
+            toolPill.addView(toolIco(pair.second))
+            shownSide[pair.first] = pair.first
+        }
+        toolPill.addView(toolIco(Tool.SMOOTH))
+        toolPill.addView(toolIco(Tool.FILL))
+        toolPill.addView(toolIco(Tool.ERASE))
+        toolPill.addView(toolIco(Tool.VACUUM))
+        shownSide[Tool.ERASE] = Tool.ERASE
+        toolPill.addView(divider(act, t))
+        toolPill.addView(ico("mirror", Action.MIRROR))
+        toolPill.addView(ico("stage", Action.STAGE))
+    }
+
+    /**
+     * `#mirrorBar` — the three planes, under the icon that reveals them.
+     *
+     * FACT: "tap the Mirror icon, which will reveal three axes below it — red
+     * for the X-axis, green for the Y-axis, and blue for the Z-axis... You can
+     * activate multiple axes at the same time."
+     *
+     * The colours are Feather's own, and they are what tells the three chips
+     * apart at a glance — X is not "the first one", it is the red one. The
+     * fold drawn in the scene is still one colour for all three planes, which
+     * is a difference from Feather worth closing once the fold pass can carry
+     * a colour per plane.
+     */
+    private fun buildMirrorBar() {
+        mirrorBar.orientation = LinearLayout.HORIZONTAL
+        mirrorBar.gravity = Gravity.CENTER_VERTICAL
+        mirrorBar.background = GradientDrawable().apply {
+            setColor(t.panel)
+            cornerRadius = t.dpf(14f)
+        }
+        mirrorBar.elevation = t.dpf(10f)
+        mirrorBar.setPadding(t.dp(5f), t.dp(4f), t.dp(5f), t.dp(4f))
+        mirrorBar.visibility = View.GONE
+
+        for (axis in Mirror.AXES) {
+            val chip = TextButton(act, t, small = true).apply {
+                text = axis.uppercase()
+                minWidth = t.dp(34f)
+                setOnClickListener { onMirrorAxis(axis) }
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { leftMargin = t.dp(2f); rightMargin = t.dp(2f) }
+            }
+            mirrorChips[axis] = chip
+            mirrorBar.addView(chip)
+        }
+        popover(mirrorBar)
+    }
+
+    // ---- the quick menu ---------------------------------------------------
+
+    /**
+     * What the quick menu should offer this time.
+     *
+     * The activity decides, because every one of these is a question about the
+     * drawing — is there anything to undo, is anything selected, was a guide
+     * closed — and the chrome is not allowed to know about the drawing.
+     */
+    class QuickMenu(
+        val canUndo: Boolean,
+        val canRedo: Boolean,
+        val drawing: Boolean,
+        val selecting: Boolean,
+        val hasSelection: Boolean,
+        val canRecallGuide: Boolean,
+    )
+
+    /**
+     * FEATHER'S SQUEEZE MENU, UNFOLDED WHERE YOUR HAND IS.
+     *
+     * FACT: "A magical palette that appears wherever you are… It unfolds in
+     * the area you last interacted with." And it is contextual: FACT: "A smart
+     * Squeeze Menu that automatically appears based on your current action" —
+     * Add New Group and Recall Recent Guide "available when Draw is active",
+     * Select All and Stamp "available when Select is active".
+     *
+     * The point of it is distance. Undo lives in a corner, New Group lives
+     * three taps into a panel, and both of them are things you want in the
+     * middle of a line without moving your drawing hand across the glass. So
+     * the menu comes to the hand rather than the other way round, and it holds
+     * only what makes sense for what you are doing — a menu with everything on
+     * it would be the panels again, in a worse place.
+     */
+    private fun buildQuickMenu() {
+        quickCard.orientation = LinearLayout.VERTICAL
+        quickCard.gravity = Gravity.CENTER_HORIZONTAL
+        quickCard.background = GradientDrawable().apply {
+            setColor(t.panel)
+            cornerRadius = t.dpf(16f)
+            setStroke(t.dp(1f), t.line)
+        }
+        quickCard.elevation = t.dpf(16f)
+        quickCard.setPadding(t.dp(6f), t.dp(6f), t.dp(6f), t.dp(6f))
+        quickCard.isClickable = true          // taps on the card are not taps past it
+
+        quickLayer.visibility = View.GONE
+        quickLayer.isClickable = true
+        /* anywhere off the card puts it away: a menu you have to aim at to
+           dismiss is a menu you dismiss by accident and then fight */
+        quickLayer.setOnClickListener { closeQuickMenu() }
+        quickLayer.addView(
+            quickCard,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { gravity = Gravity.TOP or Gravity.START },
+        )
+    }
+
+    private fun quickButton(icon: String, tip: Int, enabled: Boolean = true, go: () -> Unit) =
+        IcoButton(act, t, IcoButton.SIZE_SMALL).icon(icon).apply {
+            isEnabled = enabled
+            alpha = if (enabled) 1f else 0.35f
+            Tip.attach(this, tipCard, act.getString(tip))
+            setOnClickListener {
+                /* CLOSE FIRST. Every one of these changes the drawing, and a
+                   menu still sitting over the change it made is a menu you
+                   then have to dismiss to see what you did. */
+                closeQuickMenu()
+                go()
+            }
+        }
+
+    private fun quickRow() = LinearLayout(act).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        layoutParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+        ).apply { topMargin = t.dp(3f) }
+    }
+
+    fun showQuickMenu(x: Float, y: Float, m: QuickMenu) {
+        quickCard.removeAllViews()
+
+        /* the row that is always there: what the corner buttons do, without
+           the journey to the corner */
+        val always = quickRow()
+        always.addView(quickButton("undo", R.string.tip_undo, m.canUndo) { onAction(Action.UNDO) })
+        always.addView(quickButton("redo", R.string.tip_redo, m.canRedo) { onAction(Action.REDO) })
+        always.addView(quickButton("find", R.string.tip_find_group) { onAction(Action.FIND_GROUP) })
+        quickCard.addView(always)
+
+        /* and the row that depends on what you are doing */
+        val ctx = quickRow()
+        if (m.drawing) {
+            ctx.addView(quickButton("plus", R.string.tip_group_new) { onGroupNew() })
+            if (m.canRecallGuide) {
+                ctx.addView(quickButton("guide", R.string.tip_recall_guide) { onAction(Action.RECALL_GUIDE) })
+            }
+        }
+        if (m.selecting) {
+            ctx.addView(quickButton("select", R.string.tip_select_all) { onSelectAll() })
+            if (m.hasSelection) {
+                ctx.addView(quickButton("stamp", R.string.tip_stamp) { onAction(Action.STAMP) })
+            }
+        }
+        if (ctx.childCount > 0) quickCard.addView(ctx)
+
+        quickLayer.visibility = View.VISIBLE
+        placeQuickCard(x, y)
+    }
+
+    /**
+     * Centred on the hand, and never off the edge.
+     *
+     * Measured before it is placed rather than after: a card positioned on the
+     * frame it appears is a card that jumps, and this one appears under the
+     * fingers that asked for it.
+     */
+    private fun placeQuickCard(x: Float, y: Float) {
+        quickCard.measure(
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
+        )
+        val w = quickCard.measuredWidth
+        val h = quickCard.measuredHeight
+        val pad = t.dp(12f)
+        val maxX = (root.width - w - pad).coerceAtLeast(pad)
+        val maxY = (root.height - h - pad).coerceAtLeast(pad)
+        /* ABOVE the fingers, not under them: two fingers rest on the glass
+           through this and a card beneath them is a card you cannot see */
+        val left = (x - w / 2f).toInt().coerceIn(pad, maxX)
+        val top = (y - h - t.dp(24f)).toInt().coerceIn(pad, maxY)
+        quickCard.layoutParams = (quickCard.layoutParams as FrameLayout.LayoutParams).apply {
+            setMargins(left, top, 0, 0)
+        }
+        quickCard.requestLayout()
+    }
+
+    fun quickMenuOpen(): Boolean = quickLayer.visibility == View.VISIBLE
+
+    fun closeQuickMenu(): Boolean {
+        if (!quickMenuOpen()) return false
+        quickLayer.visibility = View.GONE
+        return true
+    }
+
+    /** The colour Feather gives each axis, and the fold is drawn to match. */
+    private fun axisColor(axis: String): Int = when (axis) {
+        "x" -> t.red
+        "y" -> t.green
+        else -> t.blue
+    }
+
+    /** Show the strip, and mark which planes are live. */
+    fun setMirrorAxes(axes: Set<String>) {
+        mirrorOn = axes.toSet()
+        for ((axis, chip) in mirrorChips) {
+            val on = axis in mirrorOn
+            chip.on = on
+            chip.setTextColor(if (on) t.onActive else axisColor(axis))
+            chip.background = GradientDrawable().apply {
+                setColor(if (on) axisColor(axis) else t.panel2)
+                cornerRadius = t.dpf(9f)
+            }
+        }
+        icons["mirror"]?.on = mirrorOn.isNotEmpty()
+    }
+
+    fun mirrorBarOpen(): Boolean = mirrorBar.visibility == View.VISIBLE
+
+    fun setMirrorBar(open: Boolean) {
+        mirrorBar.visibility = if (open) View.VISIBLE else View.GONE
+    }
+
+    /**
+     * `#brush` — deliberately one column wide. The stylesheet's note: "colour,
+     * size, opacity, pressure, sampler. Brush TYPE is a popover, the way
+     * Feather keeps the rail to one column."
+     */
+    private fun buildBrushRail() {
+        brushRail.orientation = LinearLayout.VERTICAL
+        brushRail.gravity = Gravity.CENTER_HORIZONTAL
+        val p = t.px(R.dimen.padRail)
+        brushRail.setPadding(p, p, p, p)
+
+        /*
+         * `#presets` — the brushes this note was made with, above the panel.
+         *
+         * FACT: "Tap the small arrow icon above the Brush Panel on the left
+         * side of the screen to open the brush preset menu. Tap the arrow
+         * again to close the preset menu. Even when closed, added brush
+         * presets remain saved."
+         *
+         * At the top of the rail rather than floating over it: the rail is
+         * already the column your thumb lives in, and a second panel that has
+         * to be positioned against it is a panel that will be in the wrong
+         * place on some screen.
+         */
+        presetToggle = IcoButton(act, t, IcoButton.SIZE_SMALL).icon("chev").apply {
+            setOnClickListener { setPresetsOpen(!presetsOpen) }
+            Tip.attach(this, tipCard, act.getString(R.string.tip_presets))
+        }
+        brushRail.addView(presetToggle)
+
+        presetStrip.orientation = LinearLayout.VERTICAL
+        presetStrip.gravity = Gravity.CENTER_HORIZONTAL
+        presetStrip.visibility = View.GONE
+        brushRail.addView(
+            presetStrip,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { bottomMargin = t.dp(4f) },
+        )
+
+        val typeBtn = IcoButton(act, t).icon("brush")
+        typeBtn.setOnClickListener { togglePopover(brushGrid) }
+        /* swipe it to walk the eight without opening anything */
+        StepSwipe(typeBtn, t.dpf(SWIPE_STEP_DP)) { dir -> stepBrush(dir) }
+        brushRail.addView(typeBtn)
+        icons["brushType"] = typeBtn
+
+        colorDot = View(act).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                t.px(R.dimen.brushDot), t.px(R.dimen.brushDot),
+            ).apply { topMargin = t.px(R.dimen.gapRail) }
+            /* the tap is ColorDrag's to report, so the listener is only here
+               to make the view clickable for accessibility */
+            setOnClickListener { }
+        }
+        /*
+         * FACT: "Tap and hold the active color icon in the brush panel, then
+         * drag up, down, left, or right… Drag left or right to adjust
+         * saturation and up or down to adjust brightness."
+         *
+         * Continuous, and measured from the colour the drag STARTED on, so a
+         * long wander does not accumulate rounding and coming back to where
+         * you began gives back the colour you began with. A group picked on
+         * the palettes page keeps its stepping: there the list is the point,
+         * and sliding off the swatches you chose is the one thing that must
+         * not happen.
+         */
+        ColorDrag(
+            colorDot,
+            slopPx = Gestures.TAP_SLOP,
+            onStart = { dragFromColor = cardColor(); dragSteps = 0 },
+            onDrag = { dx, dy -> dragColorBy(dx, dy) },
+            onTap = { openColorCard(ColorTarget.INK) },
+        )
+        brushRail.addView(colorDot)
+        brushRail.addView(separator(act, t))
+
+        val sizeBtn = IcoButton(act, t).icon("size")
+        sizeBtn.setOnClickListener { togglePopover(slidePop) }
+        brushRail.addView(sizeBtn)
+        /*
+         * SIZE_PER_PX = 0.011 and the multiply, not an add: the same travel is
+         * the same PROPORTION whether the brush is 2mm or 200mm, which is the
+         * only way one gesture can cover a 1..300 range.
+         */
+        sizeVal = DragValue(
+            act, t, logarithmic = true, rate = 0.011,
+            get = { sizeMm },
+            set = { v -> sizeMm = v.coerceIn(Tune.BRUSH_MIN_MM, Tune.BRUSH_MAX_MM); onSizeMm(sizeMm); refresh() },
+        )
+        sizeVal.setOnClickListener {
+            openKeypad("size", act.getString(R.string.press_size), sizeMm, "mm", sizeVal)
+        }
+        brushRail.addView(sizeVal, railValueParams())
+
+        val opacityBtn = IcoButton(act, t).icon("opacity")
+        opacityBtn.setOnClickListener { togglePopover(slidePop) }
+        brushRail.addView(opacityBtn)
+        opacityVal = DragValue(
+            act, t, logarithmic = false, rate = 0.004,
+            get = { opacity },
+            set = { v -> opacity = v.coerceIn(0.05, 1.0); onOpacity(opacity); refresh() },
+        )
+        opacityVal.setOnClickListener {
+            openKeypad("opacity", act.getString(R.string.opacity), opacity * 100, "%", opacityVal)
+        }
+        brushRail.addView(opacityVal, railValueParams())
+
+        brushRail.addView(separator(act, t))
+        val press = IcoButton(act, t, IcoButton.SIZE_SMALL).icon("brush").apply {
+            setOnClickListener { onPressure() }
+        }
+        icons["pressure"] = press
+        brushRail.addView(press)
+        val inject = IcoButton(act, t, IcoButton.SIZE_SMALL).icon("inject")
+        inject.setOnClickListener { select(Tool.INJECT) }
+        brushRail.addView(inject)
+        toolButtons[Tool.INJECT] = inject
+
+        /* `#railTab` — the edge tab that slides the rail out of the way. */
+        railTab.addView(
+            IcoButton(act, t, IcoButton.SIZE_TAB).icon("chev").apply {
+                imageTintList = android.content.res.ColorStateList.valueOf(t.dim)
+            },
+        )
+        railTab.setPadding(0, 0, 0, 0)
+        railTab.setOnClickListener { setRailHidden(!railHidden) }
+    }
+
+    private fun railValueParams() = LinearLayout.LayoutParams(
+        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+    ).apply { topMargin = t.dp(2f) }
+
+    private fun buildUndoPill() {
+        undoPill.addView(ico("undo", Action.UNDO))
+        undoPill.addView(ico("redo", Action.REDO))
+
+        penPill.addView(
+            IcoButton(act, t).icon("fingerpen").also { b ->
+                b.setOnClickListener { onInput(InputToggle.FINGER) }
+                icons["fingerpen"] = b
+                Tip.attach(b, tipCard, act.getString(R.string.tip_fingerpen))
+            },
+        )
+    }
+
+    /**
+     * `#ctx` — the bottom context menu. FACT (D.1): the guide tools live here,
+     * not in the tool pill.
+     */
+    private fun buildCtxBar() {
+        for (g in listOf(Tool.GUIDE, Tool.FLATGUIDE, Tool.BEND, Tool.LOFT, Tool.PRIM)) {
+            ctxBar.addView(toolIco(g))
+        }
+        ctxHint = TextView(act).apply {
+            setTextColor(t.dim)
+            textSize = 12f
+            setPadding(t.dp(12f), 0, t.dp(12f), 0)
+        }
+        ctxBar.addView(ctxHint)
+
+        guideBar = LinearLayout(act).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            visibility = View.GONE
+        }
+        guideBar.addView(divider(act, t))
+        guideNameLabel = TextView(act).apply {
+            setTextColor(t.dim2); textSize = 10f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            letterSpacing = 0.08f
+            setPadding(0, 0, t.dp(6f), 0)
+        }
+        guideBar.addView(guideNameLabel)
+        guideBar.addView(
+            TextButton(act, t, filled = true, small = true).apply {
+                text = act.getString(R.string.guide_bend)
+                setOnClickListener { onAction(Action.GUIDE_BEND) }
+            },
+        )
+        /*
+         * The web build's guide opacity is a horizontal range capped at 92%:
+         * a guide you cannot see past is a guide you cannot draw on.
+         */
+        guideOpacityBar = HSlider(act, t, 0.0, 0.92) { v ->
+            guideOpacity = v; onGuideOpacity(v); refresh()
+        }
+        guideOpacityBar.layoutParams = LinearLayout.LayoutParams(
+            t.dp(76f), t.dp(22f),                 // style="width:76px" on #guideOpacity
+        ).apply { marginStart = t.dp(6f) }
+        guideBar.addView(guideOpacityBar)
+        /*
+         * THE GUIDE'S OWN COLOUR, beside its own opacity.
+         *
+         * Both are answers to "how does this piece of scaffolding sit against
+         * the drawing", so they belong on the same bar — and putting the
+         * colour here rather than in a settings page means it applies to THIS
+         * guide, which is the whole use of it when two of them cross.
+         */
+        guideSwatch = View(act).apply {
+            layoutParams = LinearLayout.LayoutParams(t.dp(18f), t.dp(18f)).apply {
+                leftMargin = t.dp(6f); rightMargin = t.dp(2f)
+            }
+            setOnClickListener { openColorCard(ColorTarget.GUIDE) }
+        }
+        guideBar.addView(guideSwatch)
+        guideBar.addView(ico("eye", Action.GUIDE_SAVE, small = true))
+        guideBar.addView(ico("close", Action.GUIDE_CLOSE, small = true))
+        ctxBar.addView(guideBar)
+
+        /*
+         * `#ctxSlider` — the staging strip. Loft and Primitives both build a
+         * guide you are still adjusting, so the bar grows a slider or two and a
+         * Done/Cancel pair rather than committing on the first tap. The guide
+         * bar and this are mutually exclusive: you are either editing a live
+         * guide or staging a new one.
+         */
+        stageBar = LinearLayout(act).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            visibility = View.GONE
+        }
+        stageBar.addView(divider(act, t))
+        stageLabel = lab("")
+        stageBar.addView(stageLabel)
+        stageSlider = HSlider(act, t, 0.0, 1.0) { v -> onStageValue(0, v); refresh() }
+        stageSlider.layoutParams = LinearLayout.LayoutParams(t.dp(90f), t.dp(22f))
+            .apply { marginStart = t.dp(6f) }
+        stageBar.addView(stageSlider)
+        stageValue = valueText()
+        stageBar.addView(stageValue)
+
+        stageRow2 = LinearLayout(act).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            visibility = View.GONE
+        }
+        stageLabel2 = lab(act.getString(R.string.taper))
+        stageRow2.addView(stageLabel2)
+        stageSlider2 = HSlider(act, t, 0.0, 1.0) { v -> onStageValue(1, v); refresh() }
+        stageSlider2.layoutParams = LinearLayout.LayoutParams(t.dp(70f), t.dp(22f))
+            .apply { marginStart = t.dp(6f) }
+        stageRow2.addView(stageSlider2)
+        stageValue2 = valueText()
+        stageRow2.addView(stageValue2)
+        stageBar.addView(stageRow2)
+
+        primKinds = LinearLayout(act).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            visibility = View.GONE
+        }
+        for ((key, label) in listOf(
+            "cube" to R.string.prim_cube, "pyramid" to R.string.prim_pyramid,
+            "sphere" to R.string.prim_sphere, "torus" to R.string.prim_torus,
+            "tube" to R.string.prim_tube,
+        )) {
+            val b = TextButton(act, t, filled = true, small = true).apply {
+                text = act.getString(label)
+                setOnClickListener { onPrimKind(key) }
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { marginStart = t.dp(2f) }
+            }
+            primButtons[key] = b
+            primKinds.addView(b)
+        }
+        stageBar.addView(primKinds)
+
+        stageBar.addView(
+            TextButton(act, t, small = true).apply {
+                text = act.getString(R.string.done)
+                on = true
+                setOnClickListener { onStageDone() }
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { marginStart = t.dp(6f) }
+            },
+        )
+        stageBar.addView(
+            TextButton(act, t, filled = true, small = true).apply {
+                text = act.getString(R.string.cancel)
+                setOnClickListener { onStageCancel() }
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { marginStart = t.dp(2f) }
+            },
+        )
+        ctxBar.addView(stageBar)
+
+        /*
+         * STAMPING IS A MODE, so it says so and offers the way out.
+         *
+         * FACT: "Tap 'Done' or select another tool to finish stamping." A mode
+         * you can be in without knowing it is the worst kind, and this one
+         * takes over the pen — so it gets a line of its own under the drawing
+         * rather than a toast that has already faded by the second copy.
+         */
+        stampBar.orientation = LinearLayout.HORIZONTAL
+        stampBar.gravity = Gravity.CENTER_VERTICAL
+        stampBar.visibility = View.GONE
+        stampBar.addView(lab(act.getString(R.string.stamp)))
+        stampBar.addView(
+            TextView(act).apply {
+                text = act.getString(R.string.stamp_hint)
+                setTextColor(t.dim)
+                textSize = 11f
+                setPadding(t.dp(8f), 0, t.dp(8f), 0)
+            },
+        )
+        stampBar.addView(
+            TextButton(act, t, small = true).apply {
+                text = act.getString(R.string.done)
+                on = true
+                setOnClickListener { onStampDone() }
+            },
+        )
+        ctxBar.addView(stampBar)
+    }
+
+    /** `label.lab` — the small uppercase caption the bars use. */
+    private fun lab(text: String) = TextView(act).apply {
+        this.text = text
+        setTextColor(t.dim2)
+        textSize = 10f
+        letterSpacing = 0.08f
+        setTypeface(typeface, android.graphics.Typeface.BOLD)
+        setPadding(t.dp(6f), 0, 0, 0)
+    }
+
+    private fun valueText() = TextView(act).apply {
+        setTextColor(t.dim)
+        textSize = 11f
+        minWidth = t.dp(34f)
+        gravity = Gravity.END
+        setPadding(t.dp(4f), 0, 0, 0)
+    }
+
+    /**
+     * `#selBar` — duplicate, duplicate symmetrically, liquify, delete.
+     *
+     * "Delete is the one red thing in the whole interface, which is exactly
+     * how the reference uses colour."
+     */
+    private fun buildSelBar() {
+        /* the selection becomes scaffolding — the curve you drew is often
+           exactly the surface you want to draw the next one on */
+        selBar.addView(ico("guide", Action.SELECTION_TO_GUIDE))
+        selBar.addView(ico("dup", Action.DUPLICATE))
+        selBar.addView(ico("dupmir", Action.DUPLICATE_MIRROR))
+        selBar.addView(
+            IcoButton(act, t).icon("liquify").also {
+                it.setOnClickListener { _ -> select(Tool.LIQUIFY) }
+                toolButtons[Tool.LIQUIFY] = it
+            },
+        )
+        selBar.addView(ico("trash", Action.DELETE).apply { danger = true })
+        selBar.visibility = View.GONE
+    }
+
+    /**
+     * `#stagePanel` — Curves, Import and Scene.
+     *
+     * Scene is complete: it is what Phase 5 exists for. The other two tabs say
+     * what is missing rather than showing an empty list, because a Curves tab
+     * with nothing in it looks like a sketch with no curves in it.
+     */
+    /**
+     * `#liquifyPanel` — a strip above the context bar rather than a card at
+     * the right, and the stylesheet says why: liquify always has a selection,
+     * and a selection always has the transform panel, which lives on the right.
+     */
+    /**
+     * `#joy` — Move, Turn, Size, a pad and a depth strip.
+     *
+     * The pad's centre drags freely in the screen plane and its three arcs
+     * constrain the drag to one world axis. The strip below it is the depth
+     * axis: it is the one direction a flat circle cannot show, so it gets a
+     * control of its own rather than being folded into the pad.
+     */
+    /**
+     * `#walk` — the six-step first run.
+     *
+     * It is a card at the bottom rather than a modal, because every step asks
+     * you to DO something: a scrim over the canvas would hide the thing the
+     * step is describing.
+     */
+    /**
+     * `#keypad` — for typing a value instead of dragging for it.
+     *
+     * The drag-a-readout control is quick and imprecise by design; sometimes
+     * you want exactly 14mm. Tapping the readout opens this.
+     */
+    private fun buildKeypad() {
+        val grid = GridLayout(act).apply { columnCount = 3 }
+        keypad.orientation = LinearLayout.VERTICAL
+        keypad.setPadding(t.dp(10f), t.dp(10f), t.dp(10f), t.dp(10f))
+
+        val head = LinearLayout(act).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { bottomMargin = t.dp(4f) }
+        }
+        keypadLabel = TextView(act).apply {
+            setTextColor(t.dim2)
+            textSize = 10f
+            letterSpacing = 0.08f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            layoutParams = LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f,
+            )
+        }
+        keypadValue = TextView(act).apply {
+            setTextColor(t.ink)
+            textSize = 15f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+        }
+        keypadUnit = TextView(act).apply {
+            setTextColor(t.dim2)
+            textSize = 11f
+            setPadding(t.dp(2f), 0, 0, 0)
+        }
+        head.addView(keypadLabel); head.addView(keypadValue); head.addView(keypadUnit)
+        keypad.addView(head)
+
+        for (k in listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "back", "0", "ok")) {
+            val b = TextButton(act, t, filled = true).apply {
+                text = when (k) {
+                    "back" -> "\u232B"
+                    "ok" -> "\u2713"
+                    else -> k
+                }
+                textSize = 16f
+                if (k == "back") setTextColor(t.red)
+                setOnClickListener { keypadKey(k) }
+                layoutParams = GridLayout.LayoutParams().apply {
+                    width = t.dp(58f); height = t.dp(44f)
+                    setMargins(t.dp(3f), t.dp(3f), t.dp(3f), t.dp(3f))
+                }
+            }
+            if (k == "ok") {
+                b.background = GradientDrawable().apply {
+                    setColor(t.green); cornerRadius = t.rBtn
+                }
+            }
+            grid.addView(b)
+        }
+        keypad.addView(grid)
+        keypad.visibility = View.GONE
+        popover(keypad)
+    }
+
+    /**
+     * Typing REPLACES rather than appends on the first key, because the field
+     * opens showing the current value: appending to it would turn 14 into 145
+     * when you meant 5.
+     */
+    private fun keypadKey(k: String) {
+        when (k) {
+            "back" -> keypadText = keypadText.dropLast(1)
+            "ok" -> {
+                keypadText.toDoubleOrNull()?.let { onKeypad(keypadFor, it) }
+                closePopovers()
+                return
+            }
+            else -> {
+                if (keypadFresh) { keypadText = ""; keypadFresh = false }
+                if (keypadText.length < 6) keypadText += k
+            }
+        }
+        keypadValue.text = if (keypadText.isEmpty()) "0" else keypadText
+    }
+
+    /**
+     * Open the pad on [which], showing [value] with [unit], beside [anchor].
+     *
+     * `anchorTo($('keypad'), which === 'size' ? $('btnSize') : $('btnOpacity'))`
+     * — the pad belongs to the readout you pressed. It was going up centred on
+     * the screen instead, which put it over the sketch, a long way from the
+     * number it was editing and with nothing to say which number that was.
+     */
+    fun openKeypad(which: String, label: String, value: Double, unit: String, anchor: View?) {
+        keypadFor = which
+        keypadText = if (value == value.toInt().toDouble()) {
+            value.toInt().toString()
+        } else {
+            value.toString()
+        }
+        keypadFresh = true
+        keypadLabel.text = label
+        keypadValue.text = keypadText
+        keypadUnit.text = unit
+        closePopovers()
+        keypad.visibility = View.VISIBLE
+        anchorTo(keypad, anchor)
+        refresh()
+    }
+
+    /**
+     * PUT A CARD BESIDE THE CONTROL THAT OPENED IT.
+     *
+     * `card.style.left = clamp(r.right + 10, 8, vw - w - 8)` and
+     * `card.style.top = clamp(r.top + r.height/2 - h/2, 8, vh - h - 8)`: ten
+     * pixels to the right of the control, vertically centred on it, and kept
+     * eight pixels clear of every edge of the screen.
+     *
+     * The card has not been measured yet at the moment it is asked for, so the
+     * placing waits one layout pass. On a phone, where the rails are bottom
+     * sheets and there is no room beside anything, it stays centred.
+     */
+    private fun anchorTo(card: View, anchor: View?) {
+        val lpc = card.layoutParams as FrameLayout.LayoutParams
+        if (anchor == null || compact) {
+            lpc.gravity = Gravity.CENTER
+            lpc.setMargins(0, 0, 0, 0)
+            card.layoutParams = lpc
+            return
+        }
+        card.post {
+            val a = IntArray(2); val r = IntArray(2)
+            anchor.getLocationInWindow(a)
+            /* the box the card is actually laid out in, which is the layer and
+               not the root: a margin is measured from its own parent, and the
+               root is the one carrying the display cutout's padding */
+            canvasLayer.getLocationInWindow(r)
+            val gap = t.dp(10f); val edge = t.dp(8f)
+            val left = (a[0] - r[0]) + anchor.width + gap
+            val top = (a[1] - r[1]) + anchor.height / 2 - card.height / 2
+            val p = card.layoutParams as FrameLayout.LayoutParams
+            p.gravity = Gravity.TOP or Gravity.START
+            p.leftMargin =
+                left.coerceIn(edge, maxOf(edge, canvasLayer.width - card.width - edge))
+            p.topMargin =
+                top.coerceIn(edge, maxOf(edge, canvasLayer.height - card.height - edge))
+            card.layoutParams = p
+        }
+    }
+
+    /**
+     * `#diag` — what the pointer is reporting.
+     *
+     * Not decoration: a stylus that reports no pressure, or reports it on an
+     * axis nothing reads, looks exactly like a bug in the brush. This says
+     * which it is.
+     */
+    private fun buildDiag() {
+        diag.orientation = LinearLayout.VERTICAL
+        diag.setPadding(t.dp(12f), t.dp(10f), t.dp(12f), t.dp(10f))
+        for (label in listOf("type", "pressure", "tilt", "hover", "curves")) {
+            val row = LinearLayout(act).apply { orientation = LinearLayout.HORIZONTAL }
+            row.addView(
+                TextView(act).apply {
+                    text = label
+                    setTextColor(t.dim2)
+                    textSize = 11f
+                    typeface = android.graphics.Typeface.MONOSPACE
+                    width = t.dp(58f)
+                },
+            )
+            val v = TextView(act).apply {
+                text = "—"
+                setTextColor(t.ink)
+                textSize = 11f
+                typeface = android.graphics.Typeface.MONOSPACE
+            }
+            diagValues[label] = v
+            row.addView(v)
+            diag.addView(row)
+        }
+        diag.visibility = View.GONE
+    }
+
+    fun setDiag(visible: Boolean, values: Map<String, String>) {
+        diag.visibility = if (visible) View.VISIBLE else View.GONE
+        if (!visible) return
+        for ((k, v) in values) diagValues[k]?.text = v
+    }
+
+    private fun buildWalk() {
+        walkPanel.orientation = LinearLayout.VERTICAL
+        val p = t.dp(18f)
+        walkPanel.setPadding(p, p, p, p)
+        walkStep = TextView(act).apply {
+            setTextColor(t.dim2)
+            textSize = 10f
+            letterSpacing = 0.11f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+        }
+        walkTitle = TextView(act).apply {
+            setTextColor(t.ink)
+            textSize = 15f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            setPadding(0, t.dp(4f), 0, 0)
+        }
+        walkBody = TextView(act).apply {
+            setTextColor(t.dim)
+            textSize = 12.5f
+            setLineSpacing(0f, 1.6f)
+            setPadding(0, t.dp(6f), 0, t.dp(10f))
+        }
+        walkPanel.addView(walkStep)
+        walkPanel.addView(walkTitle)
+        walkPanel.addView(walkBody)
+
+        val row = LinearLayout(act).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        row.addView(
+            TextButton(act, t, small = true).apply {
+                text = act.getString(R.string.walk_skip)
+                setOnClickListener { onWalkSkip() }
+                layoutParams = LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f,
+                )
+            },
+        )
+        walkNext = TextButton(act, t, filled = true, small = true).apply {
+            text = act.getString(R.string.walk_next)
+            on = true
+            setOnClickListener { onWalkNext() }
+        }
+        row.addView(walkNext)
+        walkPanel.addView(
+            row,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ),
+        )
+        walkPanel.visibility = View.GONE
+    }
+
+    /** Show step [i] of [total], or hide the card when [i] is null. */
+    fun setWalk(i: Int?, total: Int, title: String, body: String, last: Boolean) {
+        if (i == null) { walkPanel.visibility = View.GONE; return }
+        walkPanel.visibility = View.VISIBLE
+        walkStep.text = act.getString(R.string.walk_step, i + 1, total)
+        walkTitle.text = title
+        walkBody.text = body
+        walkNext.text = act.getString(if (last) R.string.walk_done else R.string.walk_next)
+    }
+
+    fun walkShowing(): Boolean = walkPanel.visibility == View.VISIBLE
+
+    private fun buildJoyPanel() {
+        joyPanel.orientation = LinearLayout.VERTICAL
+        joyPanel.gravity = Gravity.CENTER_HORIZONTAL
+        val p = t.dp(10f)
+        joyPanel.setPadding(p, p, p, p)
+
+        /*
+         * TWO JOYSTICKS, AND A SWITCH BETWEEN THEM.
+         *
+         * FACT: "6. Lock 2D Joystick… 7. Switch to 3D Joystick." The 2D one
+         * works in the picture — "it transforms as it appears" — and the 3D
+         * one works in global XYZ. They are not two skins on one control:
+         * "move it left" and "move it along X" are different requests, and
+         * which one you want depends entirely on whether you are composing or
+         * building.
+         *
+         * This build had only the second, which is the one you reach for less
+         * often.
+         */
+        val head = LinearLayout(act).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { bottomMargin = t.dp(6f) }
+        }
+        joyLockButton = TextButton(act, t, filled = true, small = true).apply {
+            text = act.getString(R.string.joy_lock)
+            maxLines = 1
+            setOnClickListener { onJoyLock() }
+            Tip.attach(this, tipCard, act.getString(R.string.tip_joy_lock))
+        }
+        head.addView(joyLockButton)
+        joySwitch = TextButton(act, t, filled = true, small = true).apply {
+            text = act.getString(R.string.joy_3d)
+            maxLines = 1
+            setOnClickListener { onJoyKind(!joy3d) }
+            Tip.attach(this, tipCard, act.getString(R.string.tip_joy_switch))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { marginStart = t.dp(4f) }
+        }
+        head.addView(joySwitch)
+        joyPanel.addView(head)
+
+        joy2d = Joy2D(
+            act, t,
+            onGrab = { kind -> onJoy2DGrab(kind) },
+            onDrag = { kind, dx, dy, sweep -> onJoy2D(kind, dx, dy, sweep) },
+            onRelease = { onTransformEnd() },
+        )
+        joyPanel.addView(joy2d)
+
+        val modes = LinearLayout(act).apply { orientation = LinearLayout.HORIZONTAL }
+        for ((mode, label) in listOf(
+            Transform.Mode.MOVE to R.string.joy_move,
+            Transform.Mode.ROTATE to R.string.joy_turn,
+            Transform.Mode.SCALE to R.string.joy_size,
+        )) {
+            val b = TextButton(act, t, filled = true, small = true).apply {
+                text = act.getString(label)
+                setOnClickListener { onTransformMode(mode) }
+                /* NEVER WRAP AND NEVER ELLIPSIZE. "Move", "Turn" and "Size"
+                   are the whole label; half of one is not a control. */
+                maxLines = 1
+                ellipsize = null
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { marginEnd = t.dp(2f) }
+            }
+            joyModes[mode] = b
+            modes.addView(b)
+        }
+        /*
+         * THE ROW IS AS WIDE AS ITS WORDS, AND THE PANEL FOLLOWS IT.
+         *
+         * The web build's `#joy` is 132px wide with `#joyMode{width:100%}`,
+         * and this port copied the 112px of content that leaves — but a CSS
+         * pixel of Plume's 11px UI font is not a dp of Android's system font,
+         * and three labels that fit there do not fit here. They came out
+         * stacked two lines high.
+         *
+         * So the number is not copied any more. The row wraps its content, the
+         * panel wraps the row, and the pad and strip stay the size they
+         * actually are (108dp, the real geometry of the control) centred
+         * underneath. Whichever is wider sets the panel, which is what the
+         * CSS was doing too — just from the other direction.
+         */
+        joyModeRow = modes
+        joyPanel.addView(
+            modes,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { bottomMargin = t.dp(8f); gravity = Gravity.CENTER_HORIZONTAL },
+        )
+
+        joyPad = JoyPad(
+            act, t,
+            onGrab = { axis -> onTransformGrab(axis) },
+            onDrag = { axis, dx, dy, sweep -> onTransformDrag(axis, dx, dy, sweep, false) },
+            onRelease = { onTransformEnd() },
+        )
+        joyPanel.addView(joyPad)
+
+        joyStrip = JoyStrip(
+            act, t,
+            onDrag = { dy -> onTransformDrag(null, 0f, dy, 0.0, true) },
+            onRelease = { onTransformEnd() },
+        )
+        joyPanel.addView(
+            joyStrip,
+            LinearLayout.LayoutParams(t.px(R.dimen.joyPad), t.dp(26f))
+                .apply { topMargin = t.dp(8f) },
+        )
+
+        joyTarget = TextView(act).apply {
+            setTextColor(t.dim)
+            textSize = 10.5f
+            gravity = Gravity.CENTER
+            setPadding(0, t.dp(6f), 0, 0)
+            /* "Move along X" and a guide's name are both longer than the pad
+               is wide, and this is the one label that may take a second line
+               rather than force the panel wider than the control it labels */
+            maxLines = 2
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            )
+        }
+        joyPanel.addView(joyTarget)
+        joyPanel.visibility = View.GONE
+    }
+
+    /**
+     * `#erasePanel` — the eraser's own settings, in the same strip liquify
+     * uses and for the same reason: it belongs under the drawing, where your
+     * hand already is, not in a card on the far side of the screen.
+     *
+     * WHAT BELONGS ON IT. The eraser has exactly three things you can change
+     * about it, and all three used to be somewhere else or nowhere at all.
+     *
+     *  - WHICH ERASER. FACT (C.6): the Eraser "removes points from the center
+     *    of the curve" and Vacuum "erases entire curves it touches". They are
+     *    one slot in the tool pill and swap on a repeat tap, which is fine
+     *    when you know the rule and invisible when you do not. Two buttons say
+     *    which one is running.
+     *  - HOW WIDE. It had no width of its own — it read the brush's, so there
+     *    was nothing to put here until there was. See [DocumentTool.eraseMM].
+     *    Vacuum takes whole curves and has no radius, so the control goes dim
+     *    rather than away: a control that disappears reads as a bug, and one
+     *    that is dim reads as "not for this".
+     *  - WHAT IT IS ALLOWED TO TOUCH. FACT (C.6) again: curves behind the
+     *    active guide are protected from the eraser. That rule was reachable
+     *    only from the settings modal, three taps from the tool it governs,
+     *    and it is the one that decides whether an erase takes the far side of
+     *    the shape with it. It is the same switch, shown where it matters.
+     */
+    private fun buildErasePanel() {
+        erasePanel.setPadding(t.dp(10f), t.dp(8f), t.dp(10f), t.dp(8f))
+        erasePanel.addView(
+            TextView(act).apply {
+                text = act.getString(R.string.eraser)
+                setTextColor(t.dim2)
+                textSize = 10f
+                letterSpacing = 0.1f
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+                setPadding(0, 0, t.dp(6f), 0)
+            },
+        )
+        for (which in listOf(Tool.ERASE, Tool.VACUUM)) {
+            val b = IcoButton(act, t).icon(which.icon).apply {
+                setOnClickListener { select(which) }
+                TOOL_TIPS[which]?.let { r -> Tip.attach(this, tipCard, act.getString(r)) }
+                layoutParams = LinearLayout.LayoutParams(t.dp(40f), t.dp(34f))
+                    .apply { marginEnd = t.dp(4f) }
+            }
+            eraseModes[which] = b
+            erasePanel.addView(b)
+        }
+
+        erasePanel.addView(divider(act, t))
+        eraseSizeIcon = IcoButton(act, t).icon("size").apply {
+            /* the readout beside it is the control; this opens the same
+               keypad the brush size uses, for when you want a number */
+            setOnClickListener {
+                openKeypad(
+                    "erase", act.getString(R.string.erase_size), eraseMm, "mm", this,
+                )
+            }
+            Tip.attach(this, tipCard, act.getString(R.string.erase_size))
+        }
+        erasePanel.addView(eraseSizeIcon)
+        /* millimetres of world, like the brush, so it moves geometrically:
+           the same drag is the same proportion at 2 mm and at 200 */
+        eraseSize = DragValue(
+            act, t, logarithmic = true, rate = 0.011,
+            get = { eraseMm },
+            set = { v -> pushErase(v) },
+        ).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                t.dp(44f), ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { marginStart = t.dp(2f) }
+        }
+        erasePanel.addView(eraseSize)
+
+        erasePanel.addView(divider(act, t))
+        eraseGuard = IcoButton(act, t).icon("guide").apply {
+            setOnClickListener { onInput(InputToggle.ISOLATE) }
+            Tip.attach(this, tipCard, act.getString(R.string.erase_guard))
+        }
+        erasePanel.addView(eraseGuard)
+        erasePanel.visibility = View.GONE
+    }
+
+    private fun pushErase(mm: Double) {
+        eraseMm = mm.coerceIn(Tune.BRUSH_MIN_MM, Tune.BRUSH_MAX_MM)
+        onEraseSize(eraseMm)
+        refresh()
+    }
+
+    /** The eraser's width, pushed back by whoever owns it. */
+    fun setEraseSize(mm: Double) { eraseMm = mm; refresh() }
+
+    private fun buildLiquifyPanel() {
+        liquifyPanel.setPadding(t.dp(10f), t.dp(8f), t.dp(10f), t.dp(8f))
+        liquifyPanel.addView(
+            TextView(act).apply {
+                text = act.getString(R.string.liquify)
+                setTextColor(t.dim2)
+                textSize = 10f
+                letterSpacing = 0.1f
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+                setPadding(0, 0, t.dp(6f), 0)
+            },
+        )
+        for ((key, icon) in listOf(
+            "push" to "lq_push", "pinch" to "lq_pinch", "comb" to "lq_comb",
+        )) {
+            val b = IcoButton(act, t).icon(icon).apply {
+                setOnClickListener { onLiquifyMode(key) }
+                layoutParams = LinearLayout.LayoutParams(t.dp(40f), t.dp(34f))
+                    .apply { marginEnd = t.dp(4f) }
+            }
+            lqModes[key] = b
+            liquifyPanel.addView(b)
+        }
+        /*
+         * FACT: size, range and strength are each "adjusted by sliding up or
+         * down". Size is a screen radius so it moves geometrically like the
+         * brush; the other two are percentages and move linearly.
+         */
+        lqSize = DragValue(
+            act, t, logarithmic = true, rate = 0.011,
+            get = { lqSizeV },
+            set = { v -> lqSizeV = v.coerceIn(8.0, 600.0); onLiquifyValue("size", lqSizeV); refresh() },
+        )
+        lqRange = DragValue(
+            act, t, logarithmic = false, rate = 0.4,
+            get = { lqRangeV },
+            set = { v -> lqRangeV = v.coerceIn(0.0, 100.0); onLiquifyValue("range", lqRangeV); refresh() },
+        )
+        lqStrength = DragValue(
+            act, t, logarithmic = false, rate = 0.4,
+            get = { lqStrengthV },
+            set = { v ->
+                lqStrengthV = v.coerceIn(1.0, 100.0)
+                onLiquifyValue("strength", lqStrengthV); refresh()
+            },
+        )
+        /*
+         * UNDO ALL, COMPARE, APPLY — the bottom context menu Feather gives
+         * liquify, and the reason it gives it one.
+         *
+         * FACT: "Comparing before and after changes is crucial to
+         * understanding the overall impact. Always compare before applying
+         * liquify." — "Undo All… to revert to the state before liquify",
+         * "Tap and HOLD 'Compare'… to view the curves before liquify", and a
+         * checkbox to apply. Distorting a drawing is the one edit where you
+         * cannot see what you have done while you are doing it, so being able
+         * to flick back to the before is the tool, not a convenience.
+         */
+        liquifyPanel.addView(divider(act, t))
+        liquifyPanel.addView(
+            IcoButton(act, t).icon("reset").apply {
+                setOnClickListener { onLiquifyUndoAll() }
+                Tip.attach(this, tipCard, act.getString(R.string.lq_undo_all))
+            },
+        )
+        liquifyPanel.addView(
+            IcoButton(act, t).icon("eye").apply {
+                Tip.attach(this, tipCard, act.getString(R.string.lq_compare))
+                /* held, not tapped: the before is a thing you look at with
+                   your thumb down and leave the moment you lift it */
+                setOnTouchListener { v, e ->
+                    when (e.actionMasked) {
+                        MotionEvent.ACTION_DOWN -> { on = true; onLiquifyCompare(true) }
+                        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                            on = false; onLiquifyCompare(false); v.performClick()
+                        }
+                    }
+                    true
+                }
+            },
+        )
+        for ((label, value) in listOf(
+            R.string.lq_size to lqSize, R.string.lq_range to lqRange,
+            R.string.lq_strength to lqStrength,
+        )) {
+            liquifyPanel.addView(
+                TextView(act).apply {
+                    text = act.getString(label)
+                    setTextColor(t.dim)
+                    textSize = 11f
+                    setPadding(t.dp(6f), 0, t.dp(4f), 0)
+                },
+            )
+            value.layoutParams = LinearLayout.LayoutParams(
+                t.dp(38f), ViewGroup.LayoutParams.WRAP_CONTENT,
+            )
+            liquifyPanel.addView(value)
+        }
+        liquifyPanel.addView(
+            TextButton(act, t, filled = true, small = true).apply {
+                text = act.getString(R.string.apply)
+                setOnClickListener { onLiquifyApply() }
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { marginStart = t.dp(8f) }
+            },
+        )
+        liquifyPanel.addView(
+            IcoButton(act, t, IcoButton.SIZE_SMALL).icon("close").apply {
+                setOnClickListener { onLiquifyClose() }
+            },
+        )
+        for ((m, b) in joyModes) b.on = m == joyMode
+        joyTarget.text = joyLabel
+        /* the gizmo needs something to transform, and liquify owns the
+           selection while it is running */
+        joyPanel.visibility =
+            if ((selectionCount > 0 || guideSelected) && tool != Tool.LIQUIFY) {
+                View.VISIBLE
+            } else {
+                View.GONE
+            }
+        liquifyPanel.visibility = View.GONE
+    }
+
+    private fun buildStagePanel() {
+        stagePanel.orientation = LinearLayout.VERTICAL
+        val p = t.px(R.dimen.padCard)
+        stagePanel.setPadding(p, p, p, p)
+        /*
+         * RENDER MODE, AT THE TOP OF THE PANEL WHERE FEATHER PUTS IT.
+         *
+         * FACT: "2. Render Mode — Tap to toggle the render mode. In rendering
+         * mode, lights and shadows are cast, and various effects can be
+         * configured. Patterns and materials are also applied."
+         *
+         * This build had the two halves of that as separate switches in the
+         * Scene tab — Shade for the lighting, Render for the post pass — which
+         * is finer control than anybody wants for the question "show me what
+         * this actually looks like". They stay there for when you do want the
+         * halves separately; this is the one tap that turns the whole rendered
+         * look on, and it is the tap materials and patterns need, since FACT:
+         * "Materials are displayed accurately only in rendering mode."
+         */
+        renderMode = IcoButton(act, t, IcoButton.SIZE_SMALL).icon("solid").apply {
+            setOnClickListener { onEnv(EnvToggle.RENDER_MODE) }
+            Tip.attach(this, tipCard, act.getString(R.string.tip_render_mode))
+        }
+        stagePanel.addView(head(act.getString(R.string.stage), renderMode) { toggleStage() })
+
+        val bodies = ArrayList<View>()
+        stageTabs = Tabs(
+            act, t,
+            listOf(
+                act.getString(R.string.tab_curves),
+                act.getString(R.string.tab_import),
+                act.getString(R.string.tab_scene),
+            ),
+        ) { i -> for ((j, b) in bodies.withIndex()) b.visibility = if (i == j) View.VISIBLE else View.GONE }
+        stagePanel.addView(
+            stageTabs,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { bottomMargin = t.dp(10f) },
+        )
+
+        bodies.add(buildCurvesTab())
+        bodies.add(buildImportTab())
+        bodies.add(buildSceneTab())
+        for ((i, b) in bodies.withIndex()) {
+            b.visibility = if (i == 2) View.VISIBLE else View.GONE
+            stagePanel.addView(b)
+        }
+        stageTabs.selected = 2
+        stagePanel.visibility = View.GONE
+    }
+
+    /** `.empty` — the note that stands in for a list nothing has filled yet. */
+    private fun gap(res: Int): View = TextView(act).apply {
+        text = act.getString(res)
+        setTextColor(t.dim2)
+        textSize = 11f
+        setLineSpacing(0f, 1.55f)
+        setPadding(t.dp(1f), t.dp(3f), t.dp(1f), t.dp(3f))
+        layoutParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+        )
+    }
+
+    /**
+     * `#bodyGroup` — one row per group: the name, how many curves are in it,
+     * the arrow that moves the selection in, and the eye.
+     */
+    private fun buildCurvesTab(): View {
+        val col = LinearLayout(act).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            )
+        }
+        val head = LinearLayout(act).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        head.addView(
+            IcoButton(act, t, IcoButton.SIZE_SMALL).icon("trash").apply {
+                danger = true
+                setOnClickListener { onGroupDelete() }
+            },
+        )
+        head.addView(
+            IcoButton(act, t, IcoButton.SIZE_SMALL).icon("dup").apply {
+                setOnClickListener { onGroupDuplicate() }
+            },
+        )
+        /* FACT: "Tap the merge icon, which is right next to the duplicate
+           icon, while multiple groups are selected to merge the groups." */
+        head.addView(
+            IcoButton(act, t, IcoButton.SIZE_SMALL).icon("merge").apply {
+                setOnClickListener { onGroupMerge(groupPicked.toList()) }
+                Tip.attach(this, tipCard, act.getString(R.string.tip_group_merge))
+            },
+        )
+        head.addView(
+            View(act),
+            LinearLayout.LayoutParams(0, 1, 1f),
+        )
+        head.addView(
+            IcoButton(act, t, IcoButton.SIZE_SMALL).icon("plus").apply {
+                setOnClickListener { onGroupNew() }
+            },
+        )
+        col.addView(head, matchWrap(0))
+
+        groupList = LinearLayout(act).apply { orientation = LinearLayout.VERTICAL }
+        col.addView(groupList, matchWrap(t.dp(6f)))
+
+        col.addView(gap(R.string.group_hint))
+
+        val row = LinearLayout(act).apply { orientation = LinearLayout.HORIZONTAL }
+        for ((label, click) in listOf<Pair<Int, () -> Unit>>(
+            R.string.select_all to { onSelectAll() },
+            R.string.duplicate to { onAction(Action.DUPLICATE) },
+            R.string.delete to { onAction(Action.DELETE) },
+        )) {
+            row.addView(
+                TextButton(act, t, filled = true, small = true).apply {
+                    text = act.getString(label)
+                    setOnClickListener { click() }
+                    layoutParams = LinearLayout.LayoutParams(
+                        0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f,
+                    ).apply { marginEnd = t.dp(4f) }
+                },
+            )
+        }
+        col.addView(row, matchWrap(t.dp(6f)))
+        return col
+    }
+
+    /**
+     * `#bodyRes` — saved guides and imported references.
+     *
+     * The row itself activates the guide; the dot toggles whether it shows as
+     * a reference; the bin throws it away. Deleting takes the PICTURE only —
+     * anything traced onto it keeps its own curves — which is why it is one
+     * tap and undoable rather than a dialog.
+     */
+    private fun buildImportTab(): View {
+        val col = LinearLayout(act).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            )
+        }
+        col.addView(
+            TextButton(act, t, filled = true, small = true).apply {
+                text = act.getString(R.string.import_reference)
+                setOnClickListener { onImportReference() }
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                )
+            },
+        )
+        resourceList = LinearLayout(act).apply { orientation = LinearLayout.VERTICAL }
+        col.addView(resourceList, matchWrap(t.dp(6f)))
+        resourceEmpty = gap(R.string.no_resources)
+        col.addView(resourceEmpty)
+        return col
+    }
+
+    /** One saved guide, as the Import tab shows it. */
+    class ResourceRow(
+        val id: Int,
+        val name: String,
+        val kind: String,
+        val visible: Boolean,
+        val active: Boolean,
+    )
+
+    fun setResources(rows: List<ResourceRow>) {
+        resourceList.removeAllViews()
+        resourceEmpty.visibility = if (rows.isEmpty()) View.VISIBLE else View.GONE
+        for (r in rows) resourceList.addView(resourceRow(r))
+    }
+
+    /** `.listItem` — the active one inverts, and its buttons come with it. */
+    private fun resourceRow(g: Chrome.ResourceRow): View {
+        val row = LinearLayout(act).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = GradientDrawable().apply {
+                setColor(if (g.active) t.active else t.panel2)
+                cornerRadius = t.dpf(12f)
+            }
+            setPadding(t.dp(9f), t.dp(5f), t.dp(5f), t.dp(5f))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { topMargin = t.dp(4f) }
+            setOnClickListener { onResourceActivate(g.id) }
+        }
+        val fg = if (g.active) t.onActive else t.ink
+        /*
+         * ONE CONTROL, THREE STATES.
+         *
+         * FACT: "Tap the small cube to the right of the imported resource to
+         * toggle its visibility or active state. When the top of the cube is
+         * filled in black, you can draw curves on that resource… Tap the
+         * active resource's cube again to change it to an unfilled cube. The
+         * resource is visible but inactive… Tap the cube again when the
+         * resource is visible to change it to a dashed outline. The resource
+         * is neither visible nor drawable."
+         *
+         * It was two controls here — a dot that showed it and a row tap that
+         * activated it — which is the same three states reached by two
+         * different gestures, so you had to know which one you wanted before
+         * you could ask for it. One control cycling in a fixed order is a
+         * control you can use without knowing: tap until it looks right.
+         */
+        row.addView(
+            TextView(act).apply {
+                text = when {
+                    g.active -> "\u25E9"        // half filled: you can draw on it
+                    g.visible -> "\u25A1"       // hollow: there, but not drawable
+                    else -> "\u2337"            // dashed: neither
+                }
+                setTextColor(fg)
+                alpha = if (g.visible || g.active) 1f else 0.5f
+                textSize = 13f
+                setPadding(0, 0, t.dp(6f), 0)
+                setOnClickListener { onResourceCycle(g.id) }
+            },
+        )
+        row.addView(
+            TextView(act).apply {
+                text = g.name
+                setTextColor(fg)
+                textSize = 12f
+                isSingleLine = true
+                ellipsize = android.text.TextUtils.TruncateAt.END
+                layoutParams = LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f,
+                )
+            },
+        )
+        row.addView(
+            TextView(act).apply {
+                text = if (g.active) act.getString(R.string.res_active) else g.kind
+                setTextColor(fg)
+                alpha = if (g.active) 0.7f else 1f
+                textSize = 10f
+                setPadding(t.dp(4f), 0, t.dp(2f), 0)
+            },
+        )
+        row.addView(
+            IcoButton(act, t, IcoButton.SIZE_TINY).icon("trash").apply {
+                danger = true
+                setOnClickListener { onResourceDelete(g.id) }
+            },
+        )
+        return row
+    }
+
+    /** What the Curves tab is showing. */
+    class GroupRow(
+        val id: Int,
+        val name: String,
+        val count: Int,
+        val visible: Boolean,
+        val active: Boolean,
+        val opacity: Double = 1.0,
+        val isolated: Boolean = false,
+        /** How many of the group's curves are in the selection. */
+        val selected: Int = 0,
+    )
+
+    /** Which groups are picked for deleting, duplicating, merging, reordering. */
+    private val groupPicked = LinkedHashSet<Int>()
+
+    private var groupRows: List<GroupRow> = emptyList()
+
+    fun setGroups(rows: List<GroupRow>) {
+        if (renaming != null) return          // never yank the box out mid-rename
+        groupRows = rows
+        groupPicked.retainAll(rows.map { it.id }.toSet())
+        groupList.removeAllViews()
+        for (g in rows) groupList.addView(groupRow(g))
+    }
+
+    /** Which groups are picked, for the activity's own buttons. */
+    fun pickedGroups(): List<Int> = groupPicked.toList()
+
+    private fun onGroupRepaint() {
+        val rows = groupRows
+        groupList.removeAllViews()
+        for (g in rows) groupList.addView(groupRow(g))
+    }
+
+    /** The same colour, thinned to [a] — a tint you can put behind text. */
+    private fun wash(argb: Int, a: Float): Int =
+        (argb and 0x00FFFFFF) or (((a * 255).toInt().coerceIn(0, 255)) shl 24)
+
+    /**
+     * `.grpRow` — the active one is outlined, a hidden one is dimmed, and one
+     * holding part of the selection says so.
+     *
+     * FACT: "Groups containing selected curves or objects are highlighted in
+     * green. If only part of the group is selected, it appears in a lighter
+     * green."
+     *
+     * Which is worth more than it sounds. The selection lives in the canvas
+     * and the groups live in a panel, so without this the only way to find out
+     * which groups a lasso had caught was to hide them one at a time. Two
+     * strengths, because "some of this group" and "all of it" are different
+     * answers to the question you are asking the panel.
+     */
+    private fun groupRow(g: Chrome.GroupRow): View {
+        val whole = g.selected > 0 && g.selected >= g.count
+        val part = g.selected > 0 && !whole
+        val picked = g.id in groupPicked
+        val row = LinearLayout(act).apply {
+            orientation = LinearLayout.VERTICAL
+            background = GradientDrawable().apply {
+                setColor(
+                    when {
+                        picked -> wash(t.ink, 0.10f)
+                        g.selected > 0 -> wash(t.green, if (whole) 0.20f else 0.10f)
+                        g.active -> t.panel3
+                        else -> t.panel2
+                    },
+                )
+                cornerRadius = t.dpf(12f)
+                setStroke(
+                    t.dp(if (picked) 2f else 1.5f),
+                    when {
+                        /* the group itself picked, for deleting or merging —
+                           a different question from which of its curves are
+                           selected, so a different mark */
+                        picked -> t.ink
+                        whole -> t.green
+                        part -> wash(t.green, 0.45f)
+                        g.active -> t.ink
+                        else -> 0x00000000
+                    },
+                )
+            }
+            setPadding(t.dp(8f), t.dp(5f), t.dp(4f), t.dp(5f))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { topMargin = t.dp(4f) }
+        }
+
+        /* the name, the count and the switches: one line, as it always was */
+        val line = LinearLayout(act).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            )
+        }
+
+        val name = TextView(act).apply {
+            text = g.name
+            setTextColor(t.ink)
+            textSize = 13f
+            alpha = if (g.visible) 1f else 0.45f
+            isSingleLine = true
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            setPadding(t.dp(2f), t.dp(3f), t.dp(2f), t.dp(3f))
+            layoutParams = LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f,
+            )
+            /*
+             * Tap the name of the group you are IN to rename it. On any other
+             * row a tap selects that row first — the same slow double-tap
+             * every file list uses, and it leaves the whole row as a target
+             * for switching groups rather than a sliver beside the name.
+             */
+            setOnClickListener {
+                if (g.active) beginRename(line, this, g) else onGroupPick(g.id)
+            }
+        }
+        line.addView(name)
+
+        line.addView(
+            TextView(act).apply {
+                text = if (g.count > 0) g.count.toString() else ""
+                setTextColor(if (g.selected > 0) t.green else t.dim2)
+                textSize = 10f
+                alpha = if (g.visible) 1f else 0.45f
+                setPadding(t.dp(6f), t.dp(3f), t.dp(6f), t.dp(3f))
+                /* the number is about what is INSIDE the group, so it is the
+                   part of the row that selects it */
+                setOnClickListener { onGroupSelect(g.id) }
+                Tip.attach(this, tipCard, act.getString(R.string.tip_group_curves))
+            },
+        )
+        line.addView(
+            IcoButton(act, t, IcoButton.SIZE_TINY).icon("enter").apply {
+                setOnClickListener { onGroupAssign(g.id) }
+            },
+        )
+        line.addView(
+            IcoButton(act, t, IcoButton.SIZE_TINY)
+                .icon(if (g.visible) "eye" else "eye_off").apply {
+                    if (!g.visible) {
+                        imageTintList = android.content.res.ColorStateList.valueOf(t.dim2)
+                    }
+                    setOnClickListener { onGroupVisible(g.id, !g.visible) }
+                    /* FACT: "Tap and hold the eyeball icon on the far right to
+                       isolate the group… Tap and hold the eyeball icon again
+                       to exit isolation." */
+                    setOnLongClickListener { onGroupIsolate(g.id); true }
+                    if (g.isolated) {
+                        imageTintList = android.content.res.ColorStateList.valueOf(t.active)
+                    }
+                },
+        )
+        row.addView(line)
+
+        /*
+         * HOW STRONGLY THE GROUP DRAWS, under its own name.
+         *
+         * Not the same control as the eye. Hiding takes a group out of the
+         * drawing; fading leaves it there to be worked against, which is what
+         * anyone means by a reference layer — the sketch underneath held back
+         * to a whisper while the line over it is drawn at full strength.
+         *
+         * On every row rather than only the active one: the group you want to
+         * hold back is by definition the one you are NOT drawing into, and
+         * making you select it first would fade the wrong thing on the way.
+         */
+        row.addView(
+            HSlider(act, t, 0.0, 1.0) { v -> onGroupOpacity(g.id, v) }.apply {
+                value = g.opacity
+                alpha = if (g.visible) 1f else 0.4f
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, t.dp(13f),
+                ).apply { topMargin = t.dp(4f); rightMargin = t.dp(4f) }
+            },
+        )
+
+        /*
+         * FACT: "Tap and hold a group to select it. You can select multiple
+         * groups by tapping another group while one is already selected. Tap a
+         * selected group again to deselect it."
+         *
+         * Which is the same shape the home screen's tiles take, and for the
+         * same reason: once anything is picked a plain tap means "and this
+         * one", because a multi-select that needs a long press per item is a
+         * multi-select nobody uses twice.
+         *
+         * A held tap used to select every CURVE in the group. That is a
+         * useful thing and it is not this thing — Feather's group selection is
+         * of the GROUP, for deleting, duplicating, merging and reordering it —
+         * so the curve-picking moved onto the count, which is the part of the
+         * row that is about what is inside.
+         */
+        row.setOnClickListener {
+            if (groupPicked.isEmpty()) onGroupPick(g.id)
+            else { if (!groupPicked.remove(g.id)) groupPicked.add(g.id); onGroupRepaint() }
+        }
+        row.setOnLongClickListener {
+            if (!groupPicked.remove(g.id)) groupPicked.add(g.id)
+            onGroupRepaint()
+            true
+        }
+        /* FACT: "Tap and drag a selected group to change the order of groups."
+           Measured against the row height, because the rows are all one
+           height and the list is short enough that a drag is a count of rows
+           rather than a hit test. */
+        if (picked) {
+            var fromY = 0f
+            var moved = 0
+            row.setOnTouchListener { v, e ->
+                when (e.actionMasked) {
+                    android.view.MotionEvent.ACTION_DOWN -> { fromY = e.rawY; moved = 0 }
+                    android.view.MotionEvent.ACTION_MOVE -> {
+                        val step = (v.height + t.dp(4f)).coerceAtLeast(1)
+                        val want = ((e.rawY - fromY) / step).toInt()
+                        if (want != moved) {
+                            v.translationY = (e.rawY - fromY)
+                            moved = want
+                        }
+                    }
+                    android.view.MotionEvent.ACTION_UP,
+                    android.view.MotionEvent.ACTION_CANCEL,
+                    -> {
+                        v.translationY = 0f
+                        if (moved != 0) { onGroupReorder(g.id, moved); return@setOnTouchListener true }
+                    }
+                }
+                false
+            }
+        }
+        return row
+    }
+
+    /** Rename in place: the label becomes a field, and Done commits it. */
+    private fun beginRename(row: LinearLayout, label: TextView, g: Chrome.GroupRow) {
+        renaming = g.id
+        val at = row.indexOfChild(label)
+        val field = EditText(act).apply {
+            setText(g.name)
+            setSelection(g.name.length)
+            setTextColor(t.ink)
+            textSize = 13f
+            isSingleLine = true
+            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_DONE
+            background = GradientDrawable().apply {
+                setColor(t.panel)
+                cornerRadius = t.dpf(7f)
+                setStroke(t.dp(1.5f), t.ink)
+            }
+            setPadding(t.dp(4f), t.dp(3f), t.dp(4f), t.dp(3f))
+            layoutParams = LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f,
+            )
+        }
+        fun finish() {
+            if (renaming == null) return
+            renaming = null
+            val text = field.text.toString().trim()
+            row.removeView(field)
+            row.addView(label, at)
+            /* an empty name is not a rename: a row you cannot read is worse
+               than the name you were trying to replace */
+            if (text.isNotEmpty() && text != g.name) onGroupRename(g.id, text)
+        }
+        field.setOnEditorActionListener { _, _, _ -> finish(); true }
+        field.setOnFocusChangeListener { _, has -> if (!has) finish() }
+        row.removeView(label)
+        row.addView(field, at)
+        field.requestFocus()
+    }
+
+    private fun buildSceneTab(): View {
+        val col = LinearLayout(act).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            )
+        }
+
+        col.addView(labelRow(R.string.background, bgDot()))
+
+        sceneOptions = OptionGrid(act, t, 3)
+            .option("grid", act.getString(R.string.opt_grid)) { onEnv(EnvToggle.GRID) }
+            .option("axis", act.getString(R.string.opt_axis)) { onEnv(EnvToggle.AXIS) }
+            .option("fog", act.getString(R.string.opt_fog)) { onEnv(EnvToggle.FOG) }
+            .option("shade", act.getString(R.string.opt_shade)) { onEnv(EnvToggle.SHADED) }
+            .option("render", act.getString(R.string.opt_render)) { onEnv(EnvToggle.RENDER) }
+            .option("shadow", act.getString(R.string.opt_shadow)) { onEnv(EnvToggle.SHADOW) }
+        col.addView(sceneOptions, matchWrap(t.dp(4f)))
+
+        /* ---- lighting ---- */
+        toonButton = TextButton(act, t, filled = true, small = true).apply {
+            text = act.getString(R.string.opt_toon)
+            setOnClickListener { onEnv(EnvToggle.TOON) }
+        }
+        col.addView(labelRow(R.string.lighting, toonButton))
+
+        val lightRow = LinearLayout(act).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        lightPad = LightPad(act, t) { az, alt -> onLight(az, alt); refresh() }
+        lightRow.addView(lightPad)
+        val lightCol = LinearLayout(act).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f,
+            ).apply { marginStart = t.dp(10f) }
+        }
+        lightCol.addView(labelRow(R.string.colour, lightDot()))
+        /*
+         * The light's two numbers ride the same drag-a-readout mechanism the
+         * brush size does, so there is one way to nudge a number in this app.
+         * Both are linear — they are already percentages — unlike the brush
+         * size, which is multiplicative because it spans 1 to 300.
+         */
+        intensityVal = DragValue(
+            act, t, logarithmic = false, rate = 0.4,
+            get = { lightIntensity * 100.0 },
+            set = { v -> lightIntensity = clampTo(v / 100.0, 0.0, 3.0); onLightLevels(); refresh() },
+        )
+        ambientVal = DragValue(
+            act, t, logarithmic = false, rate = 0.4,
+            get = { lightAmbient * 100.0 },
+            set = { v -> lightAmbient = clampTo(v / 100.0, 0.0, 1.0); onLightLevels(); refresh() },
+        )
+        lightCol.addView(labelRow(R.string.intensity, intensityVal))
+        lightCol.addView(labelRow(R.string.ambient, ambientVal))
+        lightRow.addView(lightCol)
+        col.addView(lightRow, matchWrap(t.dp(8f)))
+
+        /* ---- effects ---- */
+        col.addView(labelRow(R.string.effects, null))
+        fxOptions = OptionGrid(act, t, 3)
+            .option("dof", act.getString(R.string.opt_dof)) { onEnv(EnvToggle.DOF) }
+            .option("grain", act.getString(R.string.opt_grain)) { onEnv(EnvToggle.GRAIN) }
+            .option("pixel", act.getString(R.string.opt_pixel)) { onEnv(EnvToggle.PIXEL) }
+        col.addView(fxOptions, matchWrap(t.dp(4f)))
+
+        /* f-stop and block size are geometric: 1.4 to 22 and 1 to 40 both span
+           more than a decade, and a linear drag would spend most of its travel
+           at the end where nothing changes */
+        fstopVal = DragValue(
+            act, t, logarithmic = true, rate = 0.011,
+            get = { fstop },
+            set = { v -> fstop = clampTo(v, 1.4, 22.0); onFx(); refresh() },
+        )
+        grainVal = DragValue(
+            act, t, logarithmic = false, rate = 0.4,
+            get = { grainLevel },
+            set = { v -> grainLevel = clampTo(v, 0.0, 100.0); onFx(); refresh() },
+        )
+        pixelVal = DragValue(
+            act, t, logarithmic = true, rate = 0.011,
+            get = { pixelSize },
+            set = { v -> pixelSize = clampTo(v, 1.0, 40.0); onFx(); refresh() },
+        )
+        col.addView(labelRow(R.string.fstop, fstopVal))
+        col.addView(labelRow(R.string.grain_level, grainVal))
+        col.addView(labelRow(R.string.block_size, pixelVal))
+        return col
+    }
+
+    private fun clampTo(v: Double, lo: Double, hi: Double) = if (v < lo) lo else if (v > hi) hi else v
+
+    private fun matchWrap(top: Int) = LinearLayout.LayoutParams(
+        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+    ).apply { topMargin = top }
+
+    /** `label.lab` on the left, a control on the right. */
+    private fun labelRow(label: Int, control: View?): View = LinearLayout(act).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        addView(
+            TextView(act).apply {
+                text = act.getString(label)
+                setTextColor(t.dim2)
+                textSize = 10f
+                letterSpacing = 0.08f
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+                layoutParams = LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f,
+                )
+            },
+        )
+        if (control != null) {
+            (control.parent as? ViewGroup)?.removeView(control)
+            addView(control)
+        }
+        layoutParams = matchWrap(t.dp(8f))
+    }
+
+    private fun bgDot(): View = View(act).apply {
+        layoutParams = LinearLayout.LayoutParams(t.dp(30f), t.dp(30f))
+        setOnClickListener { openColorCard(ColorTarget.BACKGROUND) }
+    }.also { bgSwatch = it }
+
+    private fun lightDot(): View = View(act).apply {
+        layoutParams = LinearLayout.LayoutParams(t.dp(30f), t.dp(30f))
+        setOnClickListener { openColorCard(ColorTarget.LIGHT) }
+    }.also { lightSwatch = it }
+
+    /** `.mhead` — a card title with a close button on the right. */
+    private fun head(title: String, extra: View? = null, onClose: () -> Unit): View =
+        LinearLayout(act).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(
+                TextView(act).apply {
+                    text = title
+                    setTextColor(t.ink)
+                    textSize = 15f
+                    setTypeface(typeface, android.graphics.Typeface.BOLD)
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                },
+            )
+            extra?.let { addView(it) }
+            addView(
+                IcoButton(act, t, IcoButton.SIZE_SMALL).icon("close").apply {
+                    setOnClickListener { onClose() }
+                },
+            )
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { bottomMargin = t.dp(6f) }
+        }
+
+    /** `#brushGrid` — two columns of 42x38 tiles, anchored beside the rail. */
+    // ---- brush presets ---------------------------------------------------
+
+    fun setPresetsOpen(open: Boolean) {
+        presetsOpen = open
+        presetStrip.visibility = if (open) View.VISIBLE else View.GONE
+        presetToggle.on = open
+        if (!open) presetPicked.clear()
+        rebuildPresets()
+    }
+
+    /** The saved brushes, newest last, as they are in the document. */
+    fun setPresets(rows: List<PresetRow>) {
+        presetRows = rows
+        presetPicked.retainAll(rows.indices.toSet())
+        rebuildPresets()
+    }
+
+    /**
+     * The strip: a swatch per preset, a plus, and a bin when any are picked.
+     *
+     * FACT: "Tap a saved brush preset to load its settings… Tap and hold a
+     * brush preset to select it. To select multiple brush presets, tap other
+     * presets while one is already selected. To deselect, tap a selected brush
+     * preset again… While a brush preset is selected, tap the trash can icon
+     * to delete it."
+     *
+     * So a tap means two different things depending on whether anything is
+     * picked, which sounds like a trap and is not: once you are choosing what
+     * to throw away, a tap that silently changed your brush instead would be
+     * the trap.
+     */
+    private fun rebuildPresets() {
+        presetStrip.removeAllViews()
+        if (!presetsOpen) return
+
+        for ((i, row) in presetRows.withIndex()) {
+            val picked = i in presetPicked
+            presetStrip.addView(
+                View(act).apply {
+                    layoutParams = LinearLayout.LayoutParams(
+                        t.px(R.dimen.brushDot), t.px(R.dimen.brushDot),
+                    ).apply { bottomMargin = t.dp(4f) }
+                    background = GradientDrawable().apply {
+                        shape = GradientDrawable.OVAL
+                        setColor(row.color)
+                        /* the ring says picked; the size of the dot says
+                           nothing, because a 1mm brush and a 300mm one have to
+                           stay tappable */
+                        setStroke(t.dp(if (picked) 3f else 1f), if (picked) t.active else t.line)
+                    }
+                    alpha = (0.35 + 0.65 * row.opacity).toFloat()
+                    setOnClickListener {
+                        if (presetPicked.isEmpty()) {
+                            onPresetLoad(i)
+                        } else {
+                            if (!presetPicked.remove(i)) presetPicked.add(i)
+                            rebuildPresets()
+                        }
+                    }
+                    setOnLongClickListener {
+                        if (!presetPicked.remove(i)) presetPicked.add(i)
+                        rebuildPresets()
+                        true
+                    }
+                    Tip.attach(
+                        this, tipCard,
+                        act.getString(
+                            R.string.tip_preset,
+                            act.getString(BRUSH_NAMES[row.brush] ?: R.string.brush_pen)
+                                .substringBefore(" —"),
+                            row.sizeMM.toInt(),
+                        ),
+                    )
+                },
+            )
+        }
+
+        presetStrip.addView(
+            IcoButton(act, t, IcoButton.SIZE_SMALL)
+                .icon(if (presetPicked.isEmpty()) "plus" else "trash").apply {
+                    if (presetPicked.isNotEmpty()) danger = true
+                    setOnClickListener {
+                        if (presetPicked.isEmpty()) {
+                            onPresetAdd()
+                        } else {
+                            val gone = presetPicked.sortedDescending()
+                            presetPicked.clear()
+                            onPresetDelete(gone)
+                        }
+                    }
+                    Tip.attach(
+                        this, tipCard,
+                        act.getString(
+                            if (presetPicked.isEmpty()) R.string.tip_preset_add
+                            else R.string.tip_preset_delete,
+                        ),
+                    )
+                },
+        )
+    }
+
+    private fun buildBrushGrid() {
+        val grid = GridLayout(act).apply { columnCount = 2 }
+        for (name in listOf("pen", "sketch", "taper", "rectangle", "cube", "flat", "wide", "glow")) {
+            val tile = IcoButton(act, t).icon("brush_$name").tile(t.panel2, t.rTile).apply {
+                layoutParams = GridLayout.LayoutParams().apply {
+                    width = t.dp(42f); height = t.dp(38f)
+                    setMargins(t.dp(3f), t.dp(3f), t.dp(3f), t.dp(3f))
+                }
+                setOnClickListener {
+                    brush = name; onBrush(name); closePopovers(); refresh()
+                }
+            }
+            /* THE TILES ARE GLYPHS, so the name has to come from somewhere.
+               Eight cross-sections drawn at 42x38 are distinguishable but not
+               nameable — you can see that one is a blade and one is a tube
+               without knowing which is `flat` and which is `wide`, and the
+               size and pressure controls beside them talk about the brush by
+               name. Hover or hold to be told. */
+            BRUSH_NAMES[name]?.let { r -> Tip.attach(tile, tipCard, act.getString(r)) }
+            brushTiles[name] = tile
+            grid.addView(tile)
+        }
+        brushGrid.setPadding(t.dp(8f), t.dp(8f), t.dp(8f), t.dp(8f))
+        brushGrid.addView(grid)
+        brushGrid.visibility = View.GONE
+        popover(brushGrid)
+    }
+
+    /** `#slidePop` — size 1..300, opacity 5..100. */
+    private fun buildSlidePop() {
+        slidePop.orientation = LinearLayout.VERTICAL
+        val p = t.px(R.dimen.padPop)
+        slidePop.setPadding(p, p, p, p)
+        sizePopVal = TextView(act).apply { setTextColor(t.dim); textSize = 11f }
+        opacityPopVal = TextView(act).apply { setTextColor(t.dim); textSize = 11f }
+        slidePop.addView(
+            sliderRow(sizePopVal, Tune.BRUSH_MIN_MM, Tune.BRUSH_MAX_MM, { sizeMm }) { v ->
+                sizeMm = v; onSizeMm(v); refresh()
+            },
+        )
+        slidePop.addView(
+            sliderRow(opacityPopVal, 0.05, 1.0, { opacity }) { v ->
+                opacity = v; onOpacity(v); refresh()
+            },
+        )
+        /*
+         * `#pressSeg` — which of the four a harder press drives. It lives in
+         * this popover rather than on the rail because it is a setting you
+         * choose once, not a control you reach for mid-stroke.
+         */
+        pressRow = LinearLayout(act).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { topMargin = t.dp(8f) }
+        }
+        for ((key, label) in listOf(
+            "size" to R.string.press_size, "opacity" to R.string.press_opacity,
+            "both" to R.string.press_both, "color" to R.string.press_colour,
+        )) {
+            val b = TextButton(act, t, filled = true, small = true).apply {
+                text = act.getString(label)
+                setOnClickListener { onPressureTarget(key) }
+                layoutParams = LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f,
+                ).apply { marginEnd = t.dp(3f) }
+            }
+            pressButtons[key] = b
+            pressRow.addView(b)
+        }
+        slidePop.addView(pressRow)
+
+        slidePop.visibility = View.GONE
+        popover(slidePop)
+    }
+
+    private fun sliderRow(
+        readout: TextView,
+        min: Double,
+        max: Double,
+        get: () -> Double,
+        set: (Double) -> Unit,
+    ): View = LinearLayout(act).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        val bar = HSlider(act, t, min, max) { v -> set(v) }
+        bar.value = get()
+        addView(
+            bar,
+            LinearLayout.LayoutParams(0, t.dp(22f), 1f).apply { marginEnd = t.dp(8f) },
+        )
+        addView(readout)
+        layoutParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+        ).apply { topMargin = t.dp(5f) }
+        sliders.add(bar to get)
+    }
+
+    /**
+     * `#colorCard` — a hex row, the wheel, and the swatches.
+     *
+     * The wheel replaces the platform picker for the reason the web build
+     * replaces the native input: a system colour dialog cannot be styled to
+     * match, and dropping one into the middle of this interface is the single
+     * piece of chrome that would look borrowed.
+     */
+    private fun buildColorCard() {
+        colorCard.orientation = LinearLayout.VERTICAL
+        val p = t.px(R.dimen.padPop)
+        colorCard.setPadding(p, p, p, p)
+
+        /* the two pages, chosen from the header */
+        val header = LinearLayout(act).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { bottomMargin = t.dp(8f) }
+        }
+        cardTitle = TextView(act).apply {
+            setTextColor(t.dim2)
+            textSize = 10f
+            letterSpacing = 0.08f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            layoutParams = LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f,
+            )
+        }
+        header.addView(cardTitle)
+        wheelTab = IcoButton(act, t, IcoButton.SIZE_SMALL).icon("brush").apply {
+            setOnClickListener { showColorPage(page = PAGE_WHEEL) }
+            Tip.attach(this, tipCard, act.getString(R.string.tip_wheel))
+        }
+        paletteTab = IcoButton(act, t, IcoButton.SIZE_SMALL).icon("stage").apply {
+            setOnClickListener { showColorPage(page = PAGE_PALETTE) }
+            Tip.attach(this, tipCard, act.getString(R.string.tip_palettes))
+        }
+        /*
+         * THE THIRD PAGE: what the mark is MADE of.
+         *
+         * FACT: materials and patterns live in the Color Panel — "Tap Pattern
+         * in the Color Panel… select either the Shaded or Shadeless material,
+         * then tap 'Pattern' at the bottom." A page of its own rather than a
+         * strip under the wheel, for the same reason the palettes got one: the
+         * card is already as tall as it should be, and the wheel is what you
+         * opened it for.
+         */
+        materialTab = IcoButton(act, t, IcoButton.SIZE_SMALL).icon("solid").apply {
+            setOnClickListener { showColorPage(page = PAGE_MATERIAL) }
+            Tip.attach(this, tipCard, act.getString(R.string.tip_materials))
+        }
+        header.addView(wheelTab)
+        header.addView(paletteTab)
+        header.addView(materialTab)
+        colorCard.addView(header)
+
+        wheelPage.orientation = LinearLayout.VERTICAL
+        colorCard.addView(
+            wheelPage,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ),
+        )
+
+        /* `#hexRow` — the field and the sample-from-sketch button */
+        val hexRow = LinearLayout(act).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = GradientDrawable().apply {
+                setColor(t.panel2); cornerRadius = t.dpf(11f)
+            }
+            setPadding(t.dp(10f), t.dp(5f), t.dp(6f), t.dp(5f))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            )
+        }
+        hexField = EditText(act).apply {
+            setTextColor(t.ink)
+            textSize = 12f
+            letterSpacing = 0.06f
+            background = null
+            setPadding(0, 0, 0, 0)
+            isSingleLine = true
+            filters = arrayOf(android.text.InputFilter.LengthFilter(7))
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or
+                android.text.InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS
+            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_DONE
+            typeface = android.graphics.Typeface.MONOSPACE
+            layoutParams = LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f,
+            )
+            /*
+             * Committed on Done, not on every keystroke. Parsing as you type
+             * means four characters of a six-character hex is a colour, so the
+             * swatch would jump somewhere wrong on the way to somewhere right.
+             */
+            setOnEditorActionListener { v, _, _ -> onHex(v.text.toString()); true }
+        }
+        hexRow.addView(hexField)
+        eyedropButton = IcoButton(act, t, IcoButton.SIZE_SMALL).icon("pick").apply {
+            setOnClickListener { onEyedrop() }
+        }
+        hexRow.addView(eyedropButton)
+
+        wheelPage.addView(hexRow)
+
+        colorWheel = ColorWheel(act, t) { c -> onWheel(c) }
+        wheelPage.addView(
+            colorWheel,
+            LinearLayout.LayoutParams(t.dp(ColorWheel.WHEEL_DP), t.dp(ColorWheel.WHEEL_DP))
+                .apply { gravity = Gravity.CENTER_HORIZONTAL; topMargin = t.dp(10f) },
+        )
+
+        /*
+         * THE PALETTES LIVE ON THEIR OWN PAGE.
+         *
+         * They used to sit under the wheel — eight fixed swatches, then the
+         * saved ones — which made the card tall and gave the wheel, the thing
+         * you came for, the smaller half of it. Two pages instead, switched
+         * from the header: the wheel first, because mixing is what the card is
+         * FOR, and the palettes a tap away for when you want a colour you have
+         * already agreed with yourself about.
+         */
+        palettePage.orientation = LinearLayout.VERTICAL
+        colorCard.addView(
+            palettePage,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ),
+        )
+        rebuildPalettes()
+
+        materialPage.orientation = LinearLayout.VERTICAL
+        colorCard.addView(
+            materialPage,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ),
+        )
+        buildMaterialPage()
+
+        showColorPage(page = PAGE_WHEEL)
+
+        /*
+         * THE CARD ITSELF TAKES THE SWIPE.
+         *
+         * The rail dot has it because that is where you reach when the card is
+         * shut, but with the card OPEN the dot is behind it and the panel is
+         * what is under your thumb. A ViewGroup only sees a touch its children
+         * left alone, so this costs the wheel, the hex field and the swatches
+         * nothing — a swipe anywhere else on the card steps the colour.
+         */
+        StepSwipe(colorCard, t.dpf(SWIPE_STEP_DP)) { dir -> stepColor(dir) }
+
+        colorCard.visibility = View.GONE
+        popover(colorCard)
+    }
+
+    /**
+     * WHAT THE MARK IS MADE OF, and what is printed on it.
+     *
+     * FACT: four materials — Shadeless "does not respond to lighting or cast
+     * shadows", Shaded "responds to lighting and casts shadows", Glow "adds a
+     * glowing effect… patterns cannot be applied", Cutout "responds to the
+     * background, making curves appear as the background color or image" — and
+     * five patterns, "Dot, Line, Cross, Terrazzo and Stippled Dot", with
+     * sliders for "intensity, angle, and contrast".
+     *
+     * The pattern half greys out under Glow and Cutout rather than
+     * disappearing, because a control that vanishes leaves you wondering
+     * whether you imagined it; one that is visibly unavailable tells you the
+     * material is why.
+     */
+    private fun buildMaterialPage() {
+        materialPage.addView(lab(act.getString(R.string.material)))
+        val mats = LinearLayout(act).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { topMargin = t.dp(4f) }
+        }
+        for ((key, label) in listOf(
+            Material.SHADED to R.string.mat_shaded,
+            Material.SHADELESS to R.string.mat_shadeless,
+            Material.GLOW to R.string.mat_glow,
+            Material.CUTOUT to R.string.mat_cutout,
+        )) {
+            val b = TextButton(act, t, filled = true, small = true).apply {
+                text = act.getString(label)
+                setOnClickListener { onMaterial(key) }
+                layoutParams = LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f,
+                ).apply { marginStart = t.dp(2f) }
+            }
+            materialButtons[key] = b
+            mats.addView(b)
+        }
+        materialPage.addView(mats)
+
+        materialPage.addView(
+            lab(act.getString(R.string.pattern)).apply {
+                setPadding(t.dp(6f), t.dp(10f), 0, 0)
+            },
+        )
+        val pats = LinearLayout(act).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { topMargin = t.dp(4f) }
+        }
+        for ((key, label) in listOf(
+            Pattern.NONE to R.string.pat_none,
+            Pattern.DOT to R.string.pat_dot,
+            Pattern.LINE to R.string.pat_line,
+            Pattern.CROSS to R.string.pat_cross,
+            Pattern.TERRAZZO to R.string.pat_terrazzo,
+            Pattern.STIPPLE to R.string.pat_stipple,
+        )) {
+            val b = TextButton(act, t, filled = true, small = true).apply {
+                text = act.getString(label)
+                setOnClickListener { onPattern(key) }
+                layoutParams = LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f,
+                ).apply { marginStart = t.dp(2f) }
+            }
+            patternButtons[key] = b
+            pats.addView(b)
+        }
+        materialPage.addView(pats)
+
+        for ((which, label) in listOf(
+            PAT_INTENSITY to R.string.pat_intensity,
+            PAT_ANGLE to R.string.pat_angle,
+            PAT_CONTRAST to R.string.pat_contrast,
+        )) {
+            val row = LinearLayout(act).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { topMargin = t.dp(6f) }
+            }
+            row.addView(
+                TextView(act).apply {
+                    text = act.getString(label)
+                    setTextColor(t.dim)
+                    textSize = 10.5f
+                    width = t.dp(62f)
+                },
+            )
+            val bar = HSlider(act, t, 0.0, 1.0) { v -> onPatternValue(which, v) }.apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    0, t.dp(16f), 1f,
+                )
+            }
+            patternBars[which] = bar
+            row.addView(bar)
+            patternRows.add(row)
+            materialPage.addView(row)
+        }
+    }
+
+    /** Draw the page from the state the activity last pushed in. */
+    private fun refreshMaterialPage() {
+        for ((key, b) in materialButtons) b.on = key == material
+        val takes = Material.takesPattern(material)
+        for ((key, b) in patternButtons) {
+            b.on = takes && key == pattern
+            b.isEnabled = takes
+            b.alpha = if (takes) 1f else 0.35f
+        }
+        val live = takes && pattern != Pattern.NONE
+        patternBars[PAT_INTENSITY]?.value = patternIntensity
+        patternBars[PAT_ANGLE]?.value = patternAngle
+        patternBars[PAT_CONTRAST]?.value = patternContrast
+        for (row in patternRows) {
+            row.isEnabled = live
+            row.alpha = if (live) 1f else 0.35f
+            for (i in 0 until row.childCount) row.getChildAt(i).isEnabled = live
+        }
+    }
+
+    /**
+     * What the next stroke, or the selection, is made of.
+     *
+     * [angle] arrives as the slider's own 0..1 rather than as radians: the
+     * chrome renders controls and does not do arithmetic on what they mean.
+     */
+    fun setMaterial(
+        material: String,
+        pattern: Int,
+        intensity: Double,
+        angle: Double,
+        contrast: Double,
+    ) {
+        this.material = material
+        this.pattern = pattern
+        this.patternIntensity = intensity
+        this.patternAngle = angle
+        this.patternContrast = contrast
+        if (built) refreshMaterialPage()
+    }
+
+    /**
+     * Which page the card is showing. The wheel is the default, because
+     * mixing is what the card is for and a palette is a shortcut past it.
+     */
+    private fun showColorPage(page: Int) {
+        colorPage = page
+        wheelPage.visibility = if (page == PAGE_WHEEL) View.VISIBLE else View.GONE
+        palettePage.visibility = if (page == PAGE_PALETTE) View.VISIBLE else View.GONE
+        materialPage.visibility = if (page == PAGE_MATERIAL) View.VISIBLE else View.GONE
+        wheelTab.on = page == PAGE_WHEEL
+        paletteTab.on = page == PAGE_PALETTE
+        materialTab.on = page == PAGE_MATERIAL
+        refresh()
+    }
+
+    /**
+     * THE PALETTE PAGE: named groups of colours, and a group of your own.
+     *
+     * Grouped rather than one long row because a palette is a set that goes
+     * TOGETHER — the greys belong with the greys — and a flat strip of forty
+     * swatches is a strip you have to hunt through. The built-in groups are
+     * fixed; "Mine" is yours, and the empty slot on it takes whatever the
+     * wheel is currently showing.
+     */
+    private fun rebuildPalettes() {
+        palettePage.removeAllViews()
+
+        fun heading(text: String, action: (() -> Unit)? = null) {
+            val chosen = text == pickedPalette
+            val row = LinearLayout(act).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { topMargin = t.dp(8f); bottomMargin = t.dp(3f) }
+                /* THE WHOLE HEADING PICKS THE GROUP. A swipe steps through one
+                   group and there was no way to say WHICH — you got the group
+                   your current colour happened to be in, which is not a choice
+                   anyone made. */
+                setOnClickListener {
+                    pickedPalette = if (chosen) null else text
+                    rebuildPalettes()
+                }
+            }
+            row.addView(
+                TextView(act).apply {
+                    this.text = text
+                    setTextColor(if (chosen) t.active else t.dim2)
+                    textSize = 9.5f
+                    letterSpacing = 0.09f
+                    setTypeface(typeface, android.graphics.Typeface.BOLD)
+                    layoutParams = LinearLayout.LayoutParams(
+                        0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f,
+                    )
+                },
+            )
+            if (action != null) {
+                row.addView(
+                    IcoButton(act, t, IcoButton.SIZE_TINY).icon("trash").apply {
+                        danger = true
+                        setOnClickListener { action() }
+                    },
+                )
+            }
+            palettePage.addView(row)
+        }
+
+        fun swatchRow(colors: List<Int>, mine: Boolean, groupName: String) {
+            val chosen = groupName == pickedPalette
+            val grid = GridLayout(act).apply {
+                columnCount = 8
+                /* the group you are stepping through is drawn as a set rather
+                   than as eight loose dots, so "only these" is visible */
+                if (chosen) {
+                    background = GradientDrawable().apply {
+                        setColor(t.panel2)
+                        cornerRadius = t.dpf(10f)
+                        setStroke(t.dp(1f), t.active)
+                    }
+                    setPadding(t.dp(3f), t.dp(3f), t.dp(3f), t.dp(3f))
+                }
+            }
+            fun cell(build: View.() -> Unit) = View(act).apply {
+                layoutParams = GridLayout.LayoutParams().apply {
+                    width = t.dp(19f); height = t.dp(19f)
+                    setMargins(t.dp(3f), t.dp(3f), t.dp(3f), t.dp(3f))
+                }
+                build()
+            }
+            for (c in colors) {
+                grid.addView(
+                    cell {
+                        background = GradientDrawable().apply {
+                            shape = GradientDrawable.OVAL
+                            setColor(c)
+                            setStroke(t.dp(1f), t.line)
+                        }
+                        /* taking a colour out of a group is also choosing the
+                           group: it is what you were reaching for */
+                        setOnClickListener {
+                            pickedPalette = groupName
+                            applyCardColor(c)
+                            rebuildPalettes()
+                        }
+                        if (mine) {
+                            setOnLongClickListener {
+                                userPalettes[groupName]?.remove(c)
+                                onPalettes(userPalettes)
+                                rebuildPalettes()
+                                true
+                            }
+                        }
+                    },
+                )
+            }
+            if (mine && colors.size < FAVOURITE_SLOTS) {
+                grid.addView(
+                    cell {
+                        /* a dashed ring: an empty slot has to read as somewhere
+                           to PUT something rather than as a colour */
+                        background = GradientDrawable().apply {
+                            shape = GradientDrawable.OVAL
+                            setColor(0x00000000)
+                            setStroke(t.dp(1.5f), t.dim2, t.dpf(3f), t.dpf(3f))
+                        }
+                        setOnClickListener {
+                            val c = cardColor()
+                            val into = userPalettes.getOrPut(groupName) { ArrayList() }
+                            if (!into.contains(c)) {
+                                into.add(c)
+                                onPalettes(userPalettes)
+                                rebuildPalettes()
+                            }
+                        }
+                    },
+                )
+            }
+            palettePage.addView(
+                grid,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                ),
+            )
+        }
+
+        for ((name, colors) in BUILT_IN_PALETTES) {
+            heading(name)
+            swatchRow(colors.toList(), mine = false, groupName = name)
+        }
+        for ((name, colors) in userPalettes) {
+            heading(name) {
+                userPalettes.remove(name)
+                onPalettes(userPalettes)
+                rebuildPalettes()
+            }
+            swatchRow(colors, mine = true, groupName = name)
+        }
+
+        palettePage.addView(
+            TextButton(act, t, small = true).apply {
+                text = act.getString(R.string.palette_new)
+                setOnClickListener { promptNewPalette() }
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { topMargin = t.dp(10f) }
+            },
+        )
+    }
+
+    /** Name a new group of your own, in place. */
+    private fun promptNewPalette() {
+        val field = EditText(act).apply {
+            hint = act.getString(R.string.palette_name_hint)
+            setTextColor(t.ink)
+            textSize = 13f
+            isSingleLine = true
+            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_DONE
+            background = GradientDrawable().apply {
+                setColor(t.panel2); cornerRadius = t.dpf(9f)
+            }
+            setPadding(t.dp(8f), t.dp(6f), t.dp(8f), t.dp(6f))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { topMargin = t.dp(6f) }
+        }
+        field.setOnEditorActionListener { _, _, _ ->
+            val name = field.text.toString().trim()
+            /* an unnamed group is a row you cannot tell from the next one, and
+               one that already exists would silently swallow the other */
+            if (name.isNotEmpty() && !userPalettes.containsKey(name) &&
+                !BUILT_IN_PALETTES.containsKey(name)
+            ) {
+                userPalettes[name] = ArrayList()
+                onPalettes(userPalettes)
+            }
+            rebuildPalettes()
+            true
+        }
+        palettePage.addView(field)
+        field.requestFocus()
+    }
+
+    /** The groups you made, loaded by the activity and written back by it. */
+    fun setPalettes(groups: Map<String, List<Int>>) {
+        userPalettes.clear()
+        for ((k, v) in groups) userPalettes[k] = ArrayList(v)
+        if (::wheelTab.isInitialized) rebuildPalettes()
+    }
+
+    /** The colour the card is showing, which is whatever it is pointed at. */
+    private fun cardColor(): Int = when (colorTarget) {
+        ColorTarget.INK -> inkColor
+        ColorTarget.BACKGROUND -> backgroundColor
+        ColorTarget.LIGHT -> lightColor
+        ColorTarget.GUIDE -> guideColor
+    }
+
+    /**
+     * A colour came out of the card — from the wheel, the hex field, a swatch
+     * or the eyedropper. It goes wherever the card is pointed.
+     */
+    fun applyCardColor(argb: Int) {
+        when (colorTarget) {
+            ColorTarget.INK -> { inkColor = argb; onColor(argb) }
+            ColorTarget.BACKGROUND -> { backgroundColor = argb; onBackground(argb) }
+            ColorTarget.LIGHT -> { lightColor = argb; onLightColour(argb) }
+            ColorTarget.GUIDE -> { guideColor = argb; onGuideColor(argb) }
+        }
+        refresh()
+    }
+
+    /**
+     * Point the card at one of the three wells and bring it up.
+     *
+     * Opening it from a well it is already showing closes it, which is how
+     * every other popover in here behaves.
+     */
+    private fun openColorCard(target: ColorTarget) {
+        if (colorTarget == target && colorCard.visibility == View.VISIBLE) {
+            closePopovers()
+            return
+        }
+        colorTarget = target
+        refresh()               // load the well's colour before the card is seen
+        showPopover(colorCard)
+    }
+
+    /**
+     * `#sysMenu` — Input, View and File.
+     *
+     * A centred modal rather than a left-anchored popover, and the stylesheet
+     * says why: anchored to the menu button it sat exactly on top of the brush
+     * rail.
+     */
+    private fun buildSysMenu() {
+        scrim.setBackgroundColor(t.scrim)
+        /*
+         * Draw order on Android is elevation first, child order second, so a
+         * flat scrim would sit UNDER every panel it is meant to cover. One dp
+         * below the modal puts it over the chrome and under the card.
+         */
+        scrim.elevation = t.dpf(17f)
+        scrim.visibility = View.GONE
+        scrim.setOnClickListener { setMenu(false) }
+
+        sysMenu.orientation = LinearLayout.VERTICAL
+        val p = t.px(R.dimen.padModal)
+        sysMenu.setPadding(p, p, p, p)
+        sysMenu.addView(head(act.getString(R.string.settings)) { setMenu(false) })
+
+        val body = LinearLayout(act).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            )
+        }
+
+        body.addView(h4(R.string.input))
+        inputGrid = OptionGrid(act, t, 3)
+            .option("finger", act.getString(R.string.opt_finger)) { onInput(InputToggle.FINGER) }
+            .option("autoguide", act.getString(R.string.opt_autoguide)) { onInput(InputToggle.AUTO_GUIDE) }
+            .option("isolate", act.getString(R.string.opt_isolate)) { onInput(InputToggle.ISOLATE) }
+            .option("clamp", act.getString(R.string.opt_clamp)) { onInput(InputToggle.CLAMP) }
+            .option("holdshape", act.getString(R.string.opt_holdshape)) { onInput(InputToggle.HOLD_SHAPE) }
+            .option("stable", act.getString(R.string.opt_stable)) { onInput(InputToggle.STABLE) }
+        body.addView(inputGrid, matchWrap(t.dp(4f)))
+
+        stableBar = HSlider(act, t, 0.0, Tune.STABLE_MAX) { v -> onStable(v); refresh() }
+        stableValue = pairValue()
+        body.addView(pairRow(R.string.stable_stroke, stableBar, stableValue))
+
+        /*
+         * Radial runs 1..16, and 1 reads "Off" rather than "1": one copy of a
+         * stroke is no symmetry at all, and a control that says 1 invites you
+         * to wonder what it is doing.
+         */
+        radialBar = HSlider(act, t, 1.0, 16.0) { v -> onRadial(v.toInt()); refresh() }
+        radialValue = pairValue()
+        body.addView(pairRow(R.string.radial, radialBar, radialValue))
+
+        body.addView(sep())
+        body.addView(h4(R.string.view))
+        focalBar = HSlider(act, t, Tune.FOCAL_MIN, Tune.FOCAL_MAX) { v -> onFocal(v); refresh() }
+        focalValue = pairValue()
+        body.addView(pairRow(R.string.lens, focalBar, focalValue))
+
+        viewGrid = OptionGrid(act, t, 4)
+            .option("proj", act.getString(R.string.opt_ortho)) { onInput(InputToggle.ORTHO) }
+            .option("theme", act.getString(R.string.opt_theme)) { onInput(InputToggle.THEME) }
+            .option("hideui", act.getString(R.string.opt_hideui)) { onInput(InputToggle.HIDE_UI) }
+            .option("walk", act.getString(R.string.opt_guide)) { onAction(Action.HELP) }
+            .option("diag", act.getString(R.string.opt_diag)) { onInput(InputToggle.DIAG) }
+            .option("hovernib", act.getString(R.string.opt_hovernib)) {
+                onInput(InputToggle.HOVER_NIB)
+            }
+            .option("actionpill", act.getString(R.string.opt_actionpill)) {
+                onInput(InputToggle.ACTION_PILL)
+            }
+            /* FACT: "Orbit Point Options — Toggle the Orbit Point on or off.
+               Enable the Pin orbit point option to pin the orbit point. Use
+               the Show orbit point option to toggle the visibility of the
+               orbit point on or off." Two switches, and this build reached
+               both of them only through a press-and-hold on the canvas. */
+            .option("orbitshow", act.getString(R.string.opt_orbit_show)) {
+                onInput(InputToggle.ORBIT_SHOW)
+            }
+            .option("orbitpin", act.getString(R.string.opt_orbit_pin)) {
+                onInput(InputToggle.ORBIT_PIN)
+            }
+        body.addView(viewGrid, matchWrap(t.dp(4f)))
+
+        val views = OptionGrid(act, t, 6)
+        for ((i, name) in listOf(
+            R.string.view_front, R.string.view_back, R.string.view_right,
+            R.string.view_left, R.string.view_top, R.string.view_bottom,
+        ).withIndex()) {
+            views.option("v$i", act.getString(name)) { onView(i) }
+        }
+        body.addView(views, matchWrap(t.dp(4f)))
+
+        body.addView(sep())
+        body.addView(h4(R.string.file))
+        val files = OptionGrid(act, t, 3)
+        for ((label, a) in listOf(
+            R.string.new_sketch to Action.NEW,
+            R.string.save to Action.SAVE,
+            R.string.open to Action.OPEN,
+            R.string.export_ to Action.EXPORT,
+            R.string.clear to Action.CLEAR,
+        )) {
+            files.option(act.getString(label), act.getString(label)) {
+                setMenu(false); onAction(a)
+            }
+        }
+        body.addView(files, matchWrap(t.dp(4f)))
+
+        /*
+         * `#saveDot` — green when the file on disk matches what is on screen,
+         * amber while a write is still owed, red when the last one failed.
+         * A save you were told about that then quietly did not happen is the
+         * one failure a sketchbook must never have.
+         */
+        val saveRow = LinearLayout(act).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = matchWrap(t.dp(6f))
+        }
+        saveDot = View(act).apply {
+            layoutParams = LinearLayout.LayoutParams(t.dp(7f), t.dp(7f))
+                .apply { marginEnd = t.dp(6f) }
+        }
+        saveRow.addView(saveDot)
+        saveState = TextView(act).apply {
+            setTextColor(t.dim2)
+            textSize = 11f
+        }
+        saveRow.addView(saveState)
+        body.addView(saveRow)
+
+        /* the modal is taller than a phone, so it scrolls inside its card */
+        sysMenu.addView(
+            android.widget.ScrollView(act).apply {
+                isFillViewport = true
+                addView(body)
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                )
+            },
+        )
+        sysMenu.visibility = View.GONE
+    }
+
+    /** `h4` — the small uppercase section heading. */
+    private fun h4(res: Int) = TextView(act).apply {
+        text = act.getString(res)
+        setTextColor(t.dim2)
+        textSize = 10f
+        letterSpacing = 0.1f
+        setTypeface(typeface, android.graphics.Typeface.BOLD)
+        layoutParams = matchWrap(t.dp(8f))
+    }
+
+    /** `.sep` — a horizontal rule between sections. */
+    private fun sep() = View(act).apply {
+        setBackgroundColor(t.line)
+        layoutParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, t.px(R.dimen.hair),
+        ).apply { topMargin = t.dp(10f) }
+    }
+
+    /** `.pair` — a caption, a slider and a readout on one tinted row. */
+    private fun pairRow(label: Int, bar: HSlider, value: TextView): View =
+        LinearLayout(act).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = GradientDrawable().apply {
+                setColor(t.panel2); cornerRadius = t.dpf(12f)
+            }
+            setPadding(t.dp(10f), t.dp(3f), t.dp(3f), t.dp(3f))
+            addView(
+                TextView(act).apply {
+                    text = act.getString(label)
+                    setTextColor(t.ink)
+                    textSize = 12f
+                    minWidth = t.dp(78f)
+                },
+            )
+            addView(bar, LinearLayout.LayoutParams(0, t.dp(22f), 1f))
+            addView(value)
+            layoutParams = matchWrap(t.dp(6f))
+        }
+
+    private fun pairValue() = TextView(act).apply {
+        setTextColor(t.dim)
+        textSize = 11f
+        minWidth = t.dp(42f)
+        gravity = Gravity.END
+        setPadding(t.dp(4f), 0, t.dp(6f), 0)
+    }
+
+    /** `#dock` — the only permanent chrome on a phone. */
+    private fun buildDock() {
+        dock.setPadding(t.dp(8f), t.dp(7f), t.dp(8f), t.dp(7f))
+        fun slot(label: Int, key: String, click: () -> Unit) {
+            val b = TextButton(act, t, filled = true).apply {
+                text = act.getString(label)
+                textSize = 11f
+                setOnClickListener { click() }
+                layoutParams = LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f,
+                ).apply { marginEnd = t.dp(6f) }
+            }
+            dockButtons[key] = b
+            dock.addView(b)
+        }
+        slot(R.string.undo, "undo") { onAction(Action.UNDO) }
+        slot(R.string.redo, "redo") { onAction(Action.REDO) }
+        slot(R.string.tools, "tools") { toggleSheet(toolPill) }
+        slot(R.string.brush, "brush") { toggleSheet(brushRail) }
+        slot(R.string.joy_move, "joy") { toggleSheet(joyPanel) }
+        slot(R.string.stage, "stage") { toggleSheet(stagePanel) }
+        dock.visibility = View.GONE
+    }
+
+    // ======================================================================
+    // placement — one call per `position:fixed` rule in the stylesheet
+    // ======================================================================
+
+    private fun lp(
+        gravity: Int,
+        left: Int = 0,
+        top: Int = 0,
+        right: Int = 0,
+        bottom: Int = 0,
+        width: Int = ViewGroup.LayoutParams.WRAP_CONTENT,
+        height: Int = ViewGroup.LayoutParams.WRAP_CONTENT,
+    ) = FrameLayout.LayoutParams(width, height).apply {
+        this.gravity = gravity
+        setMargins(left, top, right, bottom)
+    }
+
+    private fun place() {
+        val e = t.px(R.dimen.edge)
+        /* the layer everything up to the gallery goes into, filling the root */
+        root.addView(
+            canvasLayer,
+            lp(
+                Gravity.CENTER,
+                width = ViewGroup.LayoutParams.MATCH_PARENT,
+                height = ViewGroup.LayoutParams.MATCH_PARENT,
+            ),
+        )
+        /* z order is child order in a FrameLayout, so this list IS the
+           stylesheet's z-index ladder: 5 chrome · 6 tabs · 25 dock · 26/28
+           popovers and docked cards · 29/30 modal · 31 slide · 50 toast */
+        /* FIRST, so it sits UNDER every control: the preview belongs on the
+           drawing, and one that wandered over a button would be a button you
+           could not read. */
+        canvasLayer.addView(
+            hoverNib,
+            lp(
+                Gravity.CENTER,
+                width = ViewGroup.LayoutParams.MATCH_PARENT,
+                height = ViewGroup.LayoutParams.MATCH_PARENT,
+            ),
+        )
+        /* FACT: the orbit point is "the center of the screen, marked with a
+           crosshair" — the camera looks at it, so that is exactly where it
+           projects, and no per-frame arithmetic is needed to place it */
+        canvasLayer.addView(orbitMark, lp(Gravity.CENTER, width = t.dp(34f), height = t.dp(34f)))
+        canvasLayer.addView(ctxBar, lp(Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL, bottom = t.px(R.dimen.ctxBottom)))
+        canvasLayer.addView(toolPill, lp(Gravity.TOP or Gravity.END, top = e, right = e))
+        canvasLayer.addView(topLeft, lp(Gravity.TOP or Gravity.START, top = e, left = e))
+        canvasLayer.addView(helpPanel, lp(Gravity.TOP or Gravity.START, top = e, left = t.px(R.dimen.helpLeft)))
+        canvasLayer.addView(viewInfo, lp(Gravity.TOP or Gravity.START, top = e, left = t.px(R.dimen.viewInfoLeft)))
+        canvasLayer.addView(brushRail, lp(Gravity.START or Gravity.CENTER_VERTICAL, left = e, width = t.px(R.dimen.brushRailW)))
+        canvasLayer.addView(undoPill, lp(Gravity.BOTTOM or Gravity.START, left = e, bottom = t.px(R.dimen.undoBottom)))
+        /* bottom-left, above the undo pill on a tablet and above the dock on a
+           phone — the one control that has to be one tap away at every width */
+        canvasLayer.addView(penPill, lp(Gravity.BOTTOM or Gravity.START, left = e, bottom = t.px(R.dimen.penPillBottom)))
+        canvasLayer.addView(selBar, lp(Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL, bottom = t.px(R.dimen.selBarBottom)))
+        canvasLayer.addView(
+            railTab,
+            lp(
+                Gravity.START or Gravity.CENTER_VERTICAL,
+                width = t.px(R.dimen.railTabW), height = t.px(R.dimen.railTabH),
+            ),
+        )
+        /*
+         * RIGHT EDGE, UNDER THE TOOL PILL. The left edge is the brush rail's
+         * and the middle of the right edge is the joystick's, so the globe
+         * takes the corner below the tools — near the pill it belongs with,
+         * and clear of both.
+         */
+        canvasLayer.addView(
+            navGlobe,
+            lp(
+                Gravity.TOP or Gravity.END,
+                top = t.px(R.dimen.navGlobeTop), right = t.px(R.dimen.edge),
+                width = t.px(R.dimen.navGlobe), height = t.px(R.dimen.navGlobe),
+            ),
+        )
+        canvasLayer.addView(
+            joyPanel,
+            lp(Gravity.END or Gravity.CENTER_VERTICAL, right = t.px(R.dimen.edge)),
+        )
+        canvasLayer.addView(
+            liquifyPanel,
+            lp(
+                Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL,
+                bottom = t.px(R.dimen.liquifyBottom),
+            ),
+        )
+        canvasLayer.addView(
+            erasePanel,
+            lp(
+                Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL,
+                bottom = t.px(R.dimen.liquifyBottom),
+            ),
+        )
+        canvasLayer.addView(dock, lp(Gravity.BOTTOM, width = ViewGroup.LayoutParams.MATCH_PARENT))
+        canvasLayer.addView(brushGrid, lp(Gravity.START or Gravity.CENTER_VERTICAL, left = t.px(R.dimen.brushGridLeft)))
+        canvasLayer.addView(stagePanel, lp(Gravity.TOP or Gravity.END, top = t.px(R.dimen.stageTop), right = e, width = t.px(R.dimen.stagePanelW)))
+        canvasLayer.addView(scrim, lp(Gravity.CENTER, width = ViewGroup.LayoutParams.MATCH_PARENT, height = ViewGroup.LayoutParams.MATCH_PARENT))
+        canvasLayer.addView(sysMenu, lp(Gravity.CENTER, width = t.px(R.dimen.sysMenuW)))
+        canvasLayer.addView(colorCard, lp(Gravity.START or Gravity.CENTER_VERTICAL, left = t.px(R.dimen.brushGridLeft), width = t.px(R.dimen.colorCardW)))
+        canvasLayer.addView(slidePop, lp(Gravity.START or Gravity.CENTER_VERTICAL, left = t.px(R.dimen.brushGridLeft), width = t.px(R.dimen.slidePopW)))
+        canvasLayer.addView(
+            diag,
+            lp(
+                Gravity.TOP or Gravity.END,
+                top = t.px(R.dimen.stageTop), right = t.px(R.dimen.edge), width = t.dp(184f),
+            ),
+        )
+        canvasLayer.addView(keypad, lp(Gravity.CENTER))
+        canvasLayer.addView(
+            walkPanel,
+            lp(
+                Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL,
+                left = t.px(R.dimen.edge), right = t.px(R.dimen.edge),
+                bottom = t.px(R.dimen.walkBottom), width = t.px(R.dimen.walkW),
+            ),
+        )
+        /* under the icon that reveals it, at the top-right corner */
+        canvasLayer.addView(
+            mirrorBar,
+            lp(
+                Gravity.TOP or Gravity.END,
+                top = t.px(R.dimen.mirrorBarTop), right = t.px(R.dimen.edge),
+            ),
+        )
+        /* the tip sits over everything, because it names everything */
+        canvasLayer.addView(
+            tipCard,
+            lp(Gravity.TOP or Gravity.START),
+        )
+        /* top centre, clear of the readout on the left and the tool pill on
+           the right — the one strip of the top edge nothing else uses */
+        canvasLayer.addView(
+            actionPill,
+            lp(Gravity.TOP or Gravity.CENTER_HORIZONTAL, top = t.px(R.dimen.actionPillTop)),
+        )
+        /* over everything: it is the other place the app can be, not a card
+           laid on top of the one you are in */
+        root.addView(
+            gallery,
+            lp(
+                Gravity.CENTER,
+                width = ViewGroup.LayoutParams.MATCH_PARENT,
+                height = ViewGroup.LayoutParams.MATCH_PARENT,
+            ),
+        )
+        /* over every panel, because it is summoned ONTO whatever is on screen
+           — but under the toast, which is what tells you what it just did */
+        root.addView(
+            quickLayer,
+            lp(
+                Gravity.CENTER,
+                width = ViewGroup.LayoutParams.MATCH_PARENT,
+                height = ViewGroup.LayoutParams.MATCH_PARENT,
+            ),
+        )
+        /* over the gallery, because renaming is something you do to what is
+           on it */
+        root.addView(askCard, lp(Gravity.CENTER))
+        root.addView(toastCard, lp(Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL, bottom = t.px(R.dimen.toastBottom)))
+    }
+
+    // ======================================================================
+    // desktop / compact — UI.applyMode
+    // ======================================================================
+
+    /**
+     * `UI.applyMode`. COMPACT_MAX is 720, with the web build's own note on it:
+     * "GUESS: below this the side rails stop fitting".
+     */
+    fun applyMode() {
+        val narrow = act.resources.configuration.screenWidthDp < 720
+        compact = narrow
+        val e = t.px(if (narrow) R.dimen.edgeCompact else R.dimen.edge)
+
+        topLeft.layoutParams = lp(Gravity.TOP or Gravity.START, top = e, left = e)
+        helpPanel.visibility = if (narrow) View.GONE else View.VISIBLE
+        /* opposite corner from the home cluster, since the tool pill is a
+           sheet here and no longer owns the top right */
+        viewInfo.layoutParams =
+            if (narrow) lp(Gravity.TOP or Gravity.END, top = e, right = e)
+            else lp(Gravity.TOP or Gravity.START, top = e, left = t.px(R.dimen.viewInfoLeft))
+
+        railTab.visibility = if (narrow) View.GONE else View.VISIBLE
+        undoPill.visibility = if (narrow) View.GONE else View.VISIBLE
+        /* the ONE thing that does not go away on a phone: undo and redo have
+           dock slots, and this has nowhere else to be */
+        penPill.layoutParams = lp(
+            Gravity.BOTTOM or Gravity.START,
+            left = e,
+            bottom = if (narrow) t.px(R.dimen.dockH) + e else t.px(R.dimen.penPillBottom),
+        )
+        dock.visibility = if (narrow) View.VISIBLE else View.GONE
+
+        for (sheet in listOf(toolPill, brushRail, stagePanel, joyPanel)) {
+            if (narrow) asSheet(sheet) else asRail(sheet)
+        }
+        if (narrow) {
+            ctxBar.layoutParams = lp(
+                Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL,
+                left = e, right = e, bottom = t.px(R.dimen.dockH) + e,
+            )
+            toastCard.layoutParams = lp(
+                Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL,
+                bottom = t.px(R.dimen.dockH) + t.dp(18f),
+            )
+            selBar.layoutParams = lp(
+                Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL,
+                bottom = t.px(R.dimen.dockH) + t.dp(18f),
+            )
+            liquifyPanel.layoutParams = lp(
+                Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL,
+                left = e, right = e, bottom = t.px(R.dimen.dockH) + t.dp(4f),
+            )
+            erasePanel.layoutParams = lp(
+                Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL,
+                left = e, right = e, bottom = t.px(R.dimen.dockH) + t.dp(4f),
+            )
+        } else {
+            ctxBar.layoutParams = lp(Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL, bottom = t.px(R.dimen.ctxBottom))
+            toastCard.layoutParams = lp(Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL, bottom = t.px(R.dimen.toastBottom))
+            selBar.layoutParams = lp(Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL, bottom = t.px(R.dimen.selBarBottom))
+            liquifyPanel.layoutParams = lp(
+                Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL,
+                bottom = t.px(R.dimen.liquifyBottom),
+            )
+            erasePanel.layoutParams = lp(
+                Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL,
+                bottom = t.px(R.dimen.liquifyBottom),
+            )
+        }
+        refresh()
+    }
+
+    /** The desktop shape of a panel that is a bottom sheet when compact. */
+    private fun asRail(v: LinearLayout) {
+        v.translationY = 0f
+        (v.background as? GradientDrawable)?.cornerRadius = t.rCard
+        val e = t.px(R.dimen.edge)
+        when (v) {
+            toolPill -> {
+                v.orientation = LinearLayout.HORIZONTAL
+                v.layoutParams = lp(Gravity.TOP or Gravity.END, top = e, right = e)
+                v.visibility = View.VISIBLE
+                rebuildToolPill(twoColumns = false)
+            }
+            brushRail -> {
+                v.orientation = LinearLayout.VERTICAL
+                v.layoutParams = lp(
+                    Gravity.START or Gravity.CENTER_VERTICAL,
+                    left = e, width = t.px(R.dimen.brushRailW),
+                )
+                v.visibility = if (railHidden) View.INVISIBLE else View.VISIBLE
+            }
+            stagePanel -> {
+                v.orientation = LinearLayout.VERTICAL
+                v.layoutParams = lp(
+                    Gravity.TOP or Gravity.END,
+                    top = t.px(R.dimen.stageTop), right = e, width = t.px(R.dimen.stagePanelW),
+                )
+                v.visibility = View.GONE
+            }
+            joyPanel -> {
+                v.orientation = LinearLayout.VERTICAL
+                v.layoutParams = lp(Gravity.END or Gravity.CENTER_VERTICAL, right = e)
+            }
+        }
+        val p = t.px(if (v === toolPill) R.dimen.padPill else R.dimen.padRail)
+        v.setPadding(p, p, p, p)
+    }
+
+    /**
+     * The compact shape: full width, pinned above the dock, and translated
+     * off the bottom until it is opened. The transform hides it rather than
+     * `display:none`, because `display:none` would kill the slide.
+     */
+    private fun asSheet(v: LinearLayout) {
+        (v.background as? GradientDrawable)?.cornerRadii = floatArrayOf(
+            t.rSheet, t.rSheet, t.rSheet, t.rSheet, 0f, 0f, 0f, 0f,
+        )
+        v.layoutParams = lp(
+            Gravity.BOTTOM, bottom = t.px(R.dimen.dockH),
+            width = ViewGroup.LayoutParams.MATCH_PARENT,
+        )
+        val p = t.px(R.dimen.sheetPad)
+        v.setPadding(p, p, p, p)
+        v.visibility = View.VISIBLE
+        v.post { if (!isSheetOpen(v)) v.translationY = offscreen(v) }
+        if (v === toolPill) { v.orientation = LinearLayout.VERTICAL; rebuildToolPill(twoColumns = true) }
+        if (v === brushRail) v.orientation = LinearLayout.VERTICAL
+    }
+
+    /**
+     * On a phone the pill is a three-across grid, and the pairs stay merged in
+     * it: "three across, because the pairs stay merged here too — one Erase
+     * icon on the phone as well as on the desktop". Six tools behind six
+     * icons, plus Mirror and Stage, is eight tiles in three columns.
+     */
+    private fun rebuildToolPill(twoColumns: Boolean) {
+        toolPill.removeAllViews()
+        val order = listOf(
+            Tool.DRAW, Tool.SHAPE, Tool.SELECT, Tool.LASSO, Tool.SMOOTH,
+            Tool.FILL, Tool.ERASE, Tool.VACUUM,
+        )
+        if (!twoColumns) {
+            /*
+             * A button coming back from the compact grid still carries the
+             * grid's params — width 0 and a column weight — and a LinearLayout
+             * would honour the zero. Every one of them gets its own square back.
+             */
+            for (tl in order) toolPill.addView(unGrid(toolButtons.getValue(tl)))
+            toolPill.addView(divider(act, t))
+            toolPill.addView(unGrid(icons.getValue("mirror")))
+            toolPill.addView(unGrid(icons.getValue("stage")))
+            showLiveHalves()
+        } else {
+            /*
+             * ONE CELL PER SLOT, NOT ONE PER TOOL.
+             *
+             * A pair shares a slot here exactly as it does on the desktop, so
+             * the grid holds six tools plus Mirror and Stage: eight tiles in
+             * three columns. The two halves of a pair go into the SAME cell,
+             * stacked, because a GridLayout child that is GONE still reserves
+             * the cell it was given — laying both out as siblings would leave
+             * a hole in the grid wherever a partner was hidden.
+             */
+            val grid = GridLayout(act).apply { columnCount = 3 }
+            fun cellParams() = GridLayout.LayoutParams().apply {
+                width = 0
+                height = t.px(R.dimen.toolTileCompact)
+                columnSpec = GridLayout.spec(GridLayout.UNDEFINED, 1f)
+                setMargins(t.dp(4f), t.dp(4f), t.dp(4f), t.dp(4f))
+            }
+            fun fill() = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT,
+            )
+            fun tile(v: View) = FrameLayout(act).apply { addView(reparent(v), fill()) }
+            for (tl in order) {
+                val alt = partner[tl]
+                // the second half of a pair rides in the first half's cell
+                if (alt != null && alt < tl) continue
+                val cell = tile(toolButtons.getValue(tl))
+                if (alt != null) cell.addView(reparent(toolButtons.getValue(alt)), fill())
+                grid.addView(cell, cellParams())
+            }
+            for (extra in listOf("mirror", "stage")) {
+                grid.addView(tile(icons.getValue(extra)), cellParams())
+            }
+            toolPill.addView(
+                grid,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                ),
+            )
+            showLiveHalves()
+        }
+    }
+
+    /**
+     * ONE HALF OF EACH PAIR IS ON SCREEN, AND IT IS THE LIVE ONE.
+     *
+     * Draw/Shape, Select/Lasso and Erase/Vacuum share a slot at every width,
+     * so the button showing has to be whichever of the two the tool actually
+     * is — otherwise a repeat tap swaps the tool and leaves the pill showing
+     * the icon you just swapped away from, with nothing lit.
+     *
+     * Called from [refresh] as well as from a rebuild, because the tool
+     * changes far more often than the layout does.
+     */
+    private fun showLiveHalves() {
+        for ((tl, b) in toolButtons) {
+            val alt = partner[tl] ?: continue
+            b.visibility = if (shownSide[minOf(tl, alt)] == tl) View.VISIBLE else View.GONE
+        }
+    }
+
+    private fun reparent(v: View): View {
+        (v.parent as? ViewGroup)?.removeView(v)
+        return v
+    }
+
+    private fun unGrid(b: IcoButton): View {
+        reparent(b)
+        b.layoutParams = LinearLayout.LayoutParams(b.box, b.box)
+        return b
+    }
+
+    // ======================================================================
+    // open / close
+    // ======================================================================
+
+    private fun isSheetOpen(v: View) = openSheet === v
+
+    /** Far enough down to clear the sheet AND its shadow. */
+    private fun offscreen(v: View) = (v.height + t.dp(90f)).toFloat()
+
+    fun toggleSheet(v: LinearLayout) {
+        if (!compact) {
+            if (v === stagePanel) {
+                v.visibility = if (v.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+                refresh()
+            }
+            return
+        }
+        val open = isSheetOpen(v)
+        for (other in listOf(toolPill, brushRail, stagePanel, joyPanel)) {
+            if (other !== v) other.animate().translationY(offscreen(other)).setDuration(220).start()
+        }
+        openSheet = if (open) null else v
+        v.animate().translationY(if (open) offscreen(v) else 0f).setDuration(220).start()
+        refresh()
+    }
+
+    private fun togglePopover(v: View) {
+        val wasOpen = v.visibility == View.VISIBLE
+        closePopovers()
+        v.visibility = if (wasOpen) View.GONE else View.VISIBLE
+        refresh()
+    }
+
+    private fun showPopover(v: View) {
+        closePopovers()
+        v.visibility = View.VISIBLE
+        refresh()
+    }
+
+    /**
+     * Show the nib silhouette under a hovering stylus, or hide it.
+     *
+     * The chrome does not know what a brush is, so the activity hands over the
+     * measured shape: how wide and how thick the section is IN PIXELS at the
+     * distance the pen is pointing, how square it is, and the ink.
+     */
+    fun setHoverNib(
+        x: Float, y: Float,
+        halfWidthPx: Float, halfThickPx: Float, squareness: Double, color: Int,
+    ) = hoverNib.showAt(x, y, halfWidthPx, halfThickPx, squareness, color)
+
+    fun hideHoverNib() = hoverNib.hideNib()
+
+    fun closePopovers() {
+        for (p in popovers) p.visibility = View.GONE
+    }
+
+    /**
+     * Put away any open popover, and say whether there was one.
+     *
+     * [closePopovers] on its own does not refresh, so the button that opened
+     * the card would go on looking lit after the card had gone. Callers
+     * outside the chrome want the refresh; the guard keeps a touch on an empty
+     * canvas from rebuilding every control for nothing.
+     */
+    fun dismissPopovers(): Boolean {
+        if (popovers.none { it.visibility == View.VISIBLE }) return false
+        closePopovers()
+        refresh()
+        return true
+    }
+
+    fun setMenu(open: Boolean) {
+        sysMenu.visibility = if (open) View.VISIBLE else View.GONE
+        scrim.visibility = if (open) View.VISIBLE else View.GONE
+    }
+
+    fun menuOpen() = sysMenu.visibility == View.VISIBLE
+
+    fun toggleStage() = toggleSheet(stagePanel)
+
+    private fun setRailHidden(hidden: Boolean) {
+        railHidden = hidden
+        val off = -(brushRail.width + t.px(R.dimen.edge)) * 1.35f
+        brushRail.animate().translationX(if (hidden) off else 0f).alpha(if (hidden) 0f else 1f)
+            .setDuration(200).start()
+        penPill.animate().translationX(if (hidden) off else 0f).alpha(if (hidden) 0f else 1f)
+            .setDuration(200).start()
+        undoPill.animate().translationX(if (hidden) off else 0f).alpha(if (hidden) 0f else 1f)
+            .setDuration(200).start()
+        railTab.getChildAt(0).animate().rotation(if (hidden) 180f else 0f).setDuration(180).start()
+        if (hidden) closePopovers()
+    }
+
+    /** `UI.closeTopSheet` — what Android's Back steps out of, in order. */
+    fun closeTop(): Boolean {
+        if (closeQuickMenu()) return true
+        if (menuOpen()) { setMenu(false); return true }
+        for (p in popovers) if (p.visibility == View.VISIBLE) { closePopovers(); return true }
+        if (compact) {
+            for (s in listOf(toolPill, brushRail, stagePanel, joyPanel)) {
+                if (isSheetOpen(s)) { toggleSheet(s); return true }
+            }
+        } else if (stagePanel.visibility == View.VISIBLE) {
+            stagePanel.visibility = View.GONE
+            return true
+        }
+        return false
+    }
+
+    // ======================================================================
+    // state in
+    // ======================================================================
+
+    private fun select(which: Tool) {
+        tool = which
+        partner[which]?.let { alt -> shownSide[minOf(which, alt)] = which }
+        if (compact) closeTop()          // picking a tool on a phone gets out of the way
+        onTool(which)
+        refresh()
+    }
+
+    fun setTool(which: Tool) {
+        tool = which
+        partner[which]?.let { alt -> shownSide[minOf(which, alt)] = which }
+        refresh()
+    }
+
+    fun setBrush(name: String) { brush = name; refresh() }
+    fun setSize(mm: Double) { sizeMm = mm; refresh() }
+    fun setOpacityValue(o: Double) { opacity = o; refresh() }
+    fun setColor(argb: Int) { inkColor = argb; refresh() }
+
+    fun setHistory(canUndo: Boolean, canRedo: Boolean) {
+        icons["undo"]?.isEnabled = canUndo
+        icons["redo"]?.isEnabled = canRedo
+        dockButtons["undo"]?.isEnabled = canUndo
+        dockButtons["redo"]?.isEnabled = canRedo
+    }
+
+    fun setGuide(active: Boolean, name: String, opacityValue: Double, tint: Int? = null) {
+        guideActive = active
+        guideName = name
+        guideOpacity = opacityValue
+        /* no tint of its own means the swatch shows the colour the page gives
+           it, so the button is never a lie about what is on screen */
+        guideColor = tint ?: derivedGuideColor()
+        refresh()
+    }
+
+    /** What a guide with no colour of its own is drawn in, for the swatch. */
+    private fun derivedGuideColor(): Int {
+        val bg = Rgba(
+            Color.red(backgroundColor) / 255.0,
+            Color.green(backgroundColor) / 255.0,
+            Color.blue(backgroundColor) / 255.0,
+        )
+        val (fill, _) = Grid.guideColors(bg)
+        return Color.rgb(
+            (fill.r * 255).toInt().coerceIn(0, 255),
+            (fill.g * 255).toInt().coerceIn(0, 255),
+            (fill.b * 255).toInt().coerceIn(0, 255),
+        )
+    }
+
+    fun setSelection(count: Int) { selectionCount = count; refresh() }
+
+    /**
+     * A guide picked by holding on it with Select is a joystick target too.
+     *
+     * The panel was shown on `selectionCount > 0` alone, so picking a guide
+     * put up a toast saying "use the joystick" and no joystick — the one
+     * control the whole gesture exists to reach.
+     */
+    fun setGuideSelected(on: Boolean) { guideSelected = on; refresh() }
+
+    /**
+     * What the staging bar shows while Loft or Primitives is building a guide.
+     *
+     * `value` and `value2` are 0..1 fractions of each slider's own range, so
+     * this class does not have to know that a primitive has 3..48 segments and
+     * a loft has a tension. The caller maps them and supplies the readouts.
+     */
+    class Staging(
+        val label: String,
+        val value: Double,
+        val readout: String,
+        val secondLabel: String? = null,
+        val value2: Double = 0.0,
+        val readout2: String = "",
+        val kind: String? = null,
+    )
+
+    fun setStaging(s: Staging?) { staging = s; refresh() }
+
+    /** Which joystick is showing, and whether the 2D one is locked. */
+    fun setJoystick(threeD: Boolean, locked: Boolean) {
+        joy3d = threeD
+        joyLocked = locked
+        refresh()
+    }
+
+    private var stamping = false
+
+    fun setStamping(on: Boolean) { stamping = on; refresh() }
+
+    /** Everything the settings modal shows, from the tool and the camera. */
+    fun setSettings(
+        finger: Boolean, autoGuide: Boolean, isolate: Boolean, clamp: Boolean,
+        holdShape: Boolean, stableOn: Boolean, stable: Double, radial: Int,
+        focal: Double, ortho: Boolean, hideUi: Boolean, diag: Boolean, save: String,
+        hoverNib: Boolean = true,
+        actionPillOn: Boolean = true,
+        orbitShow: Boolean = true,
+        orbitPin: Boolean = false,
+    ) {
+        optHoverNib = hoverNib
+        optActionPill = actionPillOn
+        optOrbitShow = orbitShow
+        optOrbitPin = orbitPin
+        optDiag = diag
+        optFinger = finger; optAutoGuide = autoGuide; optIsolate = isolate
+        optClamp = clamp; optHoldShape = holdShape; optStable = stableOn
+        stableAmt = stable; radialAmt = radial; focalMm = focal
+        optOrtho = ortho; optHideUi = hideUi; saveText = save
+        refresh()
+    }
+
+    /** The tool pill's Mirror button lights for either kind of symmetry. */
+    /** 0 saved, 1 a write still owed, 2 the last one failed. */
+    fun setSaveState(state: Int) { saveDotState = state; refresh() }
+
+    fun setSymmetry(on: Boolean) { symmetryOn = on; refresh() }
+
+    /** [usable] dims the axes that are end-on and cannot be dragged along. */
+    fun setTransform(mode: Transform.Mode, label: String, usable: List<Boolean>) {
+        joyMode = mode
+        joyLabel = label
+        joyPad.usable = usable
+        refresh()
+    }
+
+    fun setPressure(on: Boolean, target: String) {
+        pressureOn = on; pressureTarget = target; refresh()
+    }
+
+    fun setLiquify(mode: String, size: Double, range: Double, strength: Double) {
+        lqMode = mode; lqSizeV = size; lqRangeV = range; lqStrengthV = strength
+        refresh()
+    }
+
+    /** The whole Scene tab, from the document. */
+    fun setEnvironment(env: DocumentEnv) {
+        envGrid = env.grid
+        envAxis = env.axis
+        envFog = env.fog
+        envShaded = env.shaded
+        envRender = env.render
+        envShadow = env.groundShadow
+        envToon = env.light.toon
+        envDof = env.fx.dofOn
+        envGrain = env.fx.grainOn
+        envPixel = env.fx.pixelOn
+        lightIntensity = env.light.intensity
+        lightAmbient = env.light.ambient
+        fstop = env.fx.fstop
+        grainLevel = env.fx.grain
+        pixelSize = env.fx.pixel
+        backgroundColor = rgb(env.background)
+        lightColor = rgb(env.light.color)
+        lightPad.az = env.light.az
+        lightPad.alt = env.light.alt
+        refresh()
+    }
+
+    /** What the panel currently reads, for the caller to fold back in. */
+    fun readInto(env: DocumentEnv) {
+        env.light.intensity = lightIntensity
+        env.light.ambient = lightAmbient
+        env.fx.fstop = fstop
+        env.fx.grain = grainLevel
+        env.fx.pixel = pixelSize
+    }
+
+    private fun rgb(c: art.plume.core.Rgba): Int = Color.rgb(
+        (c.r * 255).toInt().coerceIn(0, 255),
+        (c.g * 255).toInt().coerceIn(0, 255),
+        (c.b * 255).toInt().coerceIn(0, 255),
+    )
+
+    fun setViewInfo(focalMm: Int, perspective: Boolean, curves: Int, pinned: Boolean) {
+        vFocal.text = focalMm.toString()
+        vProj.text = act.getString(if (perspective) R.string.persp else R.string.ortho)
+        vCount.text = curves.toString()
+        vPivot.text = act.getString(if (pinned) R.string.pivot_pinned_short else R.string.pivot_auto)
+    }
+
+    /** The next brush along, wrapping, so a swipe never dead-ends. */
+    private fun stepBrush(dir: Int) {
+        val order = BRUSH_ORDER
+        val at = order.indexOf(brush).let { if (it < 0) 0 else it }
+        val next = order[((at + dir) % order.size + order.size) % order.size]
+        brush = next
+        onBrush(next)
+        refresh()
+        announce(act.getString(BRUSH_NAMES.getValue(next)).substringBefore(" —"))
+    }
+
+    /**
+     * The next colour along.
+     *
+     * WHICH "along" DEPENDS ON THE PAGE YOU ARE ON, because that is what you
+     * were last thinking in. On the wheel there is no list, so a step turns
+     * the hue — the wheel's own axis, and the thing you reach a wheel for.
+     * On a palette there IS a list, and stepping past its end into a hue
+     * nobody chose would undo the point of having made the list.
+     */
+    private fun stepColor(dir: Int) {
+        val group = if (colorPage == PAGE_PALETTE) activePalette() else null
+        if (group != null && group.isNotEmpty()) {
+            val at = group.indexOf(cardColor())
+            val next = group[(((if (at < 0) 0 else at) + dir) % group.size + group.size) % group.size]
+            applyCardColor(next)
+            return
+        }
+        /*
+         * ON THE WHEEL A SWIPE IS BRIGHTNESS, not hue.
+         *
+         * The wheel already gives hue away — it is the angle, and you set it by
+         * putting a finger on the colour you want. What the wheel does NOT give
+         * you without a second gesture is the same colour lighter or darker,
+         * which is the adjustment you actually make while drawing: shading a
+         * form is one hue at several values. Stepping the hue instead moved you
+         * off the colour you had just chosen, which is the one thing a swipe
+         * should never do.
+         */
+        val c = cardColor()
+        val hsv = FloatArray(3)
+        Color.colorToHSV(c, hsv)
+        /* never all the way to black: a value of zero is a colour with no hue
+           left in it, and no amount of swiping back recovers the one you had */
+        hsv[2] = (hsv[2] + dir * VALUE_STEP).coerceIn(VALUE_FLOOR, 1f)
+        applyCardColor(Color.HSVToColor(Color.alpha(c), hsv))
+    }
+
+    /** `#materialPage` — the colour card's third page. */
+    private val materialPage = LinearLayout(act)
+    private lateinit var materialTab: IcoButton
+    private val materialButtons = LinkedHashMap<String, TextButton>()
+    private val patternButtons = LinkedHashMap<Int, TextButton>()
+    private val patternBars = HashMap<Int, HSlider>()
+    private val patternRows = ArrayList<LinearLayout>()
+    private var material = Material.SHADED
+    private var pattern = Pattern.NONE
+    private var patternIntensity = 0.5
+    private var patternAngle = 0.0
+    private var patternContrast = 0.5
+
+    /** `#stampBar` — shown only while stamping, and only to get out of it. */
+    private val stampBar = LinearLayout(act)
+
+    /** The quick menu: a full-screen catcher with a small card floating in it. */
+    private val quickLayer = FrameLayout(act)
+    private val quickCard = LinearLayout(act)
+
+    /** `#presets` — saved brushes, and which of them are picked for deleting. */
+    private val presetStrip = LinearLayout(act)
+    private lateinit var presetToggle: IcoButton
+    private var presetsOpen = false
+    private var presetRows: List<PresetRow> = emptyList()
+    private val presetPicked = LinkedHashSet<Int>()
+
+    /** One saved brush, as the strip needs to draw it. */
+    class PresetRow(val brush: String, val color: Int, val sizeMM: Double, val opacity: Double)
+
+    /** Keep the current brush as a preset. */
+    var onPresetAdd: () -> Unit = {}
+
+    /** Draw with the preset at this index. */
+    var onPresetLoad: (Int) -> Unit = {}
+
+    /** Throw these away — Feather says a deleted preset does not come back. */
+    var onPresetDelete: (List<Int>) -> Unit = {}
+
+    /** The colour a drag on the dot started from, and how far it has stepped. */
+    private var dragFromColor = 0
+    private var dragSteps = 0
+
+    /**
+     * One event of a drag on the colour dot.
+     *
+     * Saturation across, brightness up — and both from the colour the drag
+     * began on rather than from the last frame, which is what keeps a slow
+     * wander from drifting and lets you undo a drag by dragging back.
+     */
+    private fun dragColorBy(dxPx: Float, dyPx: Float) {
+        val group = if (colorPage == PAGE_PALETTE) activePalette() else null
+        if (group != null && group.isNotEmpty()) {
+            /* a picked group still steps: the list is the point of it */
+            val steps = (-dyPx / t.dpf(SWIPE_STEP_DP)).toInt()
+            if (steps == dragSteps) return
+            repeat(kotlin.math.abs(steps - dragSteps)) {
+                stepColor(if (steps > dragSteps) 1 else -1)
+            }
+            dragSteps = steps
+            return
+        }
+        val hsv = FloatArray(3)
+        Color.colorToHSV(dragFromColor, hsv)
+        hsv[1] = (hsv[1] + dxPx / t.dpf(SV_DRAG_FULL_DP)).coerceIn(0f, 1f)
+        hsv[2] = (hsv[2] - dyPx / t.dpf(SV_DRAG_FULL_DP)).coerceIn(VALUE_FLOOR, 1f)
+        applyCardColor(Color.HSVToColor(Color.alpha(dragFromColor), hsv))
+    }
+
+    /** The group a step walks along: the one you picked, and only that one. */
+    private fun activePalette(): List<Int>? {
+        val name = pickedPalette ?: return null
+        return userPalettes[name] ?: BUILT_IN_PALETTES[name]?.toList()
+    }
+
+    // ======================================================================
+    // home — Feather's Home screen
+    // ======================================================================
+
+    /**
+     * One tile on the home screen: a folder or a note.
+     *
+     * [thumbs] is one picture for a note and FACT: "thumbnails of the four
+     * most recently modified notes" for a folder. [count] is the curve count
+     * on a note and how many things are inside on a folder.
+     */
+    class HomeItem(
+        val id: String,
+        val name: String,
+        val folder: Boolean,
+        val count: Int,
+        val subtitle: String,
+        val thumbs: List<String> = emptyList(),
+    )
+
+    /**
+     * HOME, LAID OUT THE WAY FEATHER LAYS IT OUT.
+     *
+     * FACT, item by item: "1. Refresh… 2. Recents — shows notes sorted by most
+     * recently modified. 3. Folders — displays folders and notes together…
+     * 5. Hide Sidebar… 6. Current Path — displays the current folder path.
+     * When inside a folder, you can go back to the parent folder. 7. Add New
+     * Folder. 8. Sort Options. 9. Settings. 10. Support… 11. Folder…
+     * 12. Note… 13. Create New Note — tap the + button at the bottom right."
+     *
+     * What was here was a list of rows with a New button, which is a perfectly
+     * good file list and not this screen. The differences that matter are not
+     * decoration: a sketchbook you cannot put into folders is one long
+     * scroll after a month, tiles are how you recognise a drawing you cannot
+     * name, and the actions live on a selection rather than on every row —
+     * which is what lets one tap reach five notes at once.
+     */
+    private fun buildGallery() {
+        gallery.orientation = LinearLayout.HORIZONTAL
+        gallery.setBackgroundColor(t.bg)
+        gallery.visibility = View.GONE
+        /* it covers the sketch, so it has to swallow what lands on it */
+        gallery.isClickable = true
+
+        gallery.addView(buildHomeSidebar())
+
+        val right = LinearLayout(act).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+            setPadding(t.dp(16f), t.dp(14f), t.dp(16f), 0)
+        }
+        right.addView(buildHomeBar())
+
+        homeBody = LinearLayout(act).apply { orientation = LinearLayout.VERTICAL }
+        right.addView(
+            android.widget.ScrollView(act).apply {
+                addView(homeBody)
+                clipToPadding = false
+                setPadding(0, 0, 0, t.dp(84f))
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f,
+                )
+            },
+        )
+
+        /* the + and the selection bar share the bottom: you are either making
+           something or doing something to what you picked, never both */
+        val floor = FrameLayout(act).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            )
+        }
+        homeBottom = buildHomeSelectionBar()
+        floor.addView(
+            homeBottom,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { gravity = Gravity.BOTTOM or Gravity.START; setMargins(0, 0, 0, t.dp(12f)) },
+        )
+        /* FACT: "Tap the + button at the bottom right of the screen to create
+           a new note." */
+        homeAdd = TextButton(act, t, small = false).apply {
+            text = "+"
+            textSize = 22f
+            on = true
+            minWidth = t.dp(56f)
+            setOnClickListener { onOpenWork(null) }
+            Tip.attach(this, tipCard, act.getString(R.string.home_new_note))
+        }
+        floor.addView(
+            homeAdd,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { gravity = Gravity.BOTTOM or Gravity.END; setMargins(0, 0, 0, t.dp(12f)) },
+        )
+        right.addView(floor)
+        gallery.addView(right)
+    }
+
+    /** FACT: items 2, 3, 9 and 10 — Recents, Folders, Settings, Support. */
+    private fun buildHomeSidebar(): View {
+        homeSidebar = LinearLayout(act).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(t.panel)
+            setPadding(t.dp(14f), t.dp(18f), t.dp(14f), t.dp(14f))
+            layoutParams = LinearLayout.LayoutParams(
+                t.dp(176f), ViewGroup.LayoutParams.MATCH_PARENT,
+            )
+        }
+        homeSidebar.addView(
+            TextView(act).apply {
+                text = act.getString(R.string.app_name)
+                setTextColor(t.ink)
+                textSize = 19f
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+                setPadding(t.dp(6f), 0, 0, t.dp(14f))
+            },
+        )
+        /* FACT, and the screenshot: an icon and a word, left aligned, with the
+           one you are looking at sitting on a soft rounded fill. The folder is
+           green wherever it appears, which is what makes the two rows tell
+           themselves apart at a glance rather than by reading. */
+        for ((view, pair) in listOf(
+            HOME_RECENTS to ("clock" to R.string.home_recents),
+            HOME_FOLDERS to ("folder" to R.string.home_folders),
+        )) {
+            val (iconName, label) = pair
+            val glyph = ImageView(act).apply {
+                setImageResource(
+                    act.resources.getIdentifier(
+                        "ic_$iconName", "drawable", act.packageName,
+                    ),
+                )
+                imageTintList = android.content.res.ColorStateList.valueOf(
+                    if (view == HOME_FOLDERS) t.green else t.ink,
+                )
+                layoutParams = LinearLayout.LayoutParams(t.dp(18f), t.dp(18f))
+                    .apply { marginEnd = t.dp(10f) }
+            }
+            val text = TextView(act).apply {
+                this.text = act.getString(label)
+                setTextColor(t.ink)
+                textSize = 14f
+                layoutParams = LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f,
+                )
+            }
+            val row = LinearLayout(act).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                isClickable = true
+                setPadding(t.dp(10f), t.dp(9f), t.dp(10f), t.dp(9f))
+                addView(glyph)
+                addView(text)
+                setOnClickListener { onHomeView(view) }
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { bottomMargin = t.dp(2f) }
+            }
+            homeViews[view] = NavRow(row, text)
+            homeSidebar.addView(row)
+        }
+        homeSidebar.addView(
+            View(act).apply {
+                setBackgroundColor(t.line)
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, t.dp(1f), 1f,
+                ).apply { topMargin = t.dp(10f); bottomMargin = t.dp(10f) }
+            },
+        )
+        homeSidebar.addView(
+            TextButton(act, t, small = true).apply {
+                text = act.getString(R.string.home_settings)
+                setOnClickListener { onAction(Action.MENU) }
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { bottomMargin = t.dp(4f) }
+            },
+        )
+        homeSidebar.addView(
+            TextButton(act, t, small = true).apply {
+                text = act.getString(R.string.home_support)
+                setOnClickListener { onAction(Action.HELP) }
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                )
+            },
+        )
+        return homeSidebar
+    }
+
+    /** FACT: items 1, 5, 6, 7 and 8 — refresh, hide, path, new folder, sort. */
+    private fun buildHomeBar(): View {
+        val bar = LinearLayout(act).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { bottomMargin = t.dp(12f) }
+        }
+        /* FACT: "5. Hide Sidebar — hides or expands the sidebar." */
+        bar.addView(
+            IcoButton(act, t, IcoButton.SIZE_SMALL).icon("menu").apply {
+                setOnClickListener {
+                    homeSidebar.visibility =
+                        if (homeSidebar.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+                }
+            },
+        )
+        homePath = LinearLayout(act).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f,
+            ).apply { marginStart = t.dp(6f) }
+        }
+        bar.addView(homePath)
+
+        bar.addView(
+            IcoButton(act, t, IcoButton.SIZE_SMALL).icon("reset").apply {
+                setOnClickListener { onHomeRefresh() }
+                Tip.attach(this, tipCard, act.getString(R.string.home_refresh))
+            },
+        )
+        bar.addView(
+            IcoButton(act, t, IcoButton.SIZE_SMALL).icon("plus").apply {
+                setOnClickListener { onHomeNewFolder() }
+                Tip.attach(this, tipCard, act.getString(R.string.home_new_folder))
+            },
+        )
+        homeSortButton = TextButton(act, t, small = true).apply {
+            text = act.getString(R.string.sort_modified)
+            /* FACT: "The currently supported options are last modified, last
+               created, and Name." Three of them, so the button cycles rather
+               than opening a menu with three lines in it. */
+            setOnClickListener { onHomeSort((homeSort + 1) % 3) }
+            Tip.attach(this, tipCard, act.getString(R.string.home_sort))
+        }
+        bar.addView(homeSortButton)
+        bar.addView(
+            IcoButton(act, t, IcoButton.SIZE_SMALL).icon("close").apply {
+                setOnClickListener { setGallery(false) }
+            },
+        )
+        return bar
+    }
+
+    /**
+     * FACT: "Tap and hold a note to select it. To select multiple notes, tap
+     * additional notes after selecting the first one. To deselect, tap the X
+     * icon at the bottom left of the screen. Rename… Duplicate… Export…
+     * Lighten… Delete."
+     */
+    private fun buildHomeSelectionBar(): LinearLayout {
+        val bar = LinearLayout(act).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = GradientDrawable().apply {
+                setColor(t.panel)
+                cornerRadius = t.dpf(16f)
+                setStroke(t.dp(1f), t.line)
+            }
+            elevation = t.dpf(8f)
+            setPadding(t.dp(6f), t.dp(5f), t.dp(6f), t.dp(5f))
+            visibility = View.GONE
+        }
+        bar.addView(
+            IcoButton(act, t, IcoButton.SIZE_SMALL).icon("close").apply {
+                setOnClickListener { homePicked.clear(); rebuildHome() }
+            },
+        )
+        homeCount = TextView(act).apply {
+            setTextColor(t.dim)
+            textSize = 11.5f
+            setPadding(t.dp(4f), 0, t.dp(8f), 0)
+        }
+        bar.addView(homeCount)
+        for ((icon, tip, go) in listOf(
+            Triple("enter", R.string.home_rename, { onHomeRename(homePicked.toList()) }),
+            Triple("dup", R.string.home_duplicate, { onHomeDuplicate(homePicked.toList()) }),
+            Triple("export", R.string.home_export, { onHomeExport(homePicked.toList()) }),
+            Triple("smooth", R.string.home_lighten, { onHomeLighten(homePicked.toList()) }),
+        )) {
+            bar.addView(
+                IcoButton(act, t, IcoButton.SIZE_SMALL).icon(icon).apply {
+                    setOnClickListener { go() }
+                    Tip.attach(this, tipCard, act.getString(tip))
+                },
+            )
+        }
+        bar.addView(
+            IcoButton(act, t, IcoButton.SIZE_SMALL).icon("trash").apply {
+                danger = true
+                setOnClickListener { onHomeDelete(homePicked.toList()) }
+                Tip.attach(this, tipCard, act.getString(R.string.home_delete))
+            },
+        )
+        return bar
+    }
+
+    fun setGallery(open: Boolean) {
+        gallery.visibility = if (open) View.VISIBLE else View.GONE
+        /*
+         * AND THE CANVAS CONTROLS GO WITH IT. Covering them was not the same
+         * as putting them away: the root is inset by a display cutout, so the
+         * gallery is inset too and the rail and the pill showed around its
+         * edge — and a control that is merely underneath is still a control
+         * that can be hit.
+         */
+        canvasLayer.visibility = if (open) View.GONE else View.VISIBLE
+        if (open) closeTop() else homePicked.clear()
+    }
+
+    fun galleryOpen(): Boolean = gallery.visibility == View.VISIBLE
+
+    /**
+     * Fill the home screen.
+     *
+     * [path] is the folder trail, outermost first, as id-to-name pairs; an
+     * empty one is the top level. [sort] is which of the three orders is on.
+     */
+    fun setHome(
+        items: List<HomeItem>,
+        path: List<Pair<String, String>>,
+        sort: Int,
+        currentId: String?,
+        view: Int,
+    ) {
+        if (!::homeBody.isInitialized) return
+        homeItems = items
+        homePath2 = path
+        homeSort = sort
+        homeCurrent = currentId
+        homeView = view
+        homePicked.retainAll(items.map { it.id }.toSet())
+        rebuildHome()
+    }
+
+    private fun rebuildHome() {
+        if (!::homeBody.isInitialized) return
+        for ((k, nav) in homeViews) {
+            val on = k == homeView
+            nav.row.background = if (!on) null else GradientDrawable().apply {
+                setColor(t.panel2)
+                cornerRadius = t.dpf(10f)
+            }
+            nav.label.setTypeface(
+                nav.label.typeface,
+                if (on) android.graphics.Typeface.BOLD else android.graphics.Typeface.NORMAL,
+            )
+        }
+        homeSortButton.text = act.getString(
+            when (homeSort) {
+                1 -> R.string.sort_created
+                2 -> R.string.sort_name
+                else -> R.string.sort_modified
+            },
+        )
+        rebuildHomePath()
+
+        homeBottom.visibility = if (homePicked.isEmpty()) View.GONE else View.VISIBLE
+        homeAdd.visibility = if (homePicked.isEmpty()) View.VISIBLE else View.GONE
+        homeCount.text = act.getString(R.string.home_picked, homePicked.size)
+
+        val wide = act.resources.displayMetrics.widthPixels -
+            (if (homeSidebar.visibility == View.VISIBLE) t.dp(176f) else 0) - t.dp(32f)
+        val cols = ((wide / t.dp(TILE_DP)).coerceAtLeast(1)).coerceAtMost(6)
+        homeBody.removeAllViews()
+
+        if (homeItems.isEmpty()) {
+            homeBody.addView(
+                TextView(act).apply {
+                    text = act.getString(R.string.gallery_empty)
+                    setTextColor(t.dim)
+                    textSize = 13f
+                    setPadding(t.dp(4f), t.dp(18f), 0, 0)
+                },
+            )
+            return
+        }
+
+        /*
+         * FOLDERS UNDER "FOLDERS", NOTES UNDER "NOTES".
+         *
+         * FACT is only that the Folders tab "displays folders and notes
+         * together", but the screen itself puts a heading over each group,
+         * and it earns its place: without one, a folder and a note are two
+         * tiles of the same size and the only thing telling them apart is
+         * that one has four small pictures on it instead of one big one.
+         * A heading that has nothing under it is not drawn.
+         */
+        section(R.string.home_folders, homeItems.filter { it.folder }, cols)
+        section(R.string.home_notes_heading, homeItems.filter { !it.folder }, cols)
+    }
+
+    private fun section(heading: Int, items: List<HomeItem>, cols: Int) {
+        if (items.isEmpty()) return
+        homeBody.addView(
+            TextView(act).apply {
+                text = act.getString(heading)
+                setTextColor(t.ink)
+                textSize = 17f
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+                setPadding(t.dp(5f), t.dp(6f), 0, t.dp(6f))
+            },
+        )
+        homeBody.addView(
+            GridLayout(act).apply {
+                columnCount = cols
+                for (item in items) addView(homeTile(item, cols))
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { bottomMargin = t.dp(10f) }
+            },
+        )
+    }
+
+    /** FACT: "6. Current Path… When inside a folder, you can go back." */
+    private fun rebuildHomePath() {
+        homePath.removeAllViews()
+        fun crumb(name: String, id: String?, last: Boolean) {
+            homePath.addView(
+                TextView(act).apply {
+                    text = name
+                    setTextColor(if (last) t.ink else t.dim)
+                    textSize = 13.5f
+                    if (last) setTypeface(typeface, android.graphics.Typeface.BOLD)
+                    setPadding(t.dp(4f), t.dp(4f), t.dp(4f), t.dp(4f))
+                    if (!last) setOnClickListener { onHomeEnter(id) }
+                    /* and it takes a drop, which is the only way back OUT of a
+                       folder: there is no tile for the place you already are */
+                    setOnDragListener { v, ev ->
+                        when (ev.action) {
+                            android.view.DragEvent.ACTION_DRAG_ENTERED -> { v.alpha = 0.5f; true }
+                            android.view.DragEvent.ACTION_DRAG_EXITED,
+                            android.view.DragEvent.ACTION_DRAG_ENDED,
+                            -> { v.alpha = 1f; true }
+                            android.view.DragEvent.ACTION_DROP -> {
+                                v.alpha = 1f
+                                val moving = homePicked.toList()
+                                homePicked.clear()
+                                onHomeMove(moving, id)
+                                true
+                            }
+                            else -> true
+                        }
+                    }
+                },
+            )
+            if (!last) {
+                homePath.addView(
+                    TextView(act).apply {
+                        text = "›"
+                        setTextColor(t.dim2)
+                        textSize = 13.5f
+                    },
+                )
+            }
+        }
+        crumb(act.getString(R.string.home_all), null, homePath2.isEmpty())
+        for ((i, p) in homePath2.withIndex()) {
+            crumb(p.second, p.first, i == homePath2.lastIndex)
+        }
+    }
+
+    /**
+     * One tile.
+     *
+     * Tap opens it; tap and hold picks it; once anything is picked a tap picks
+     * too, which is FACT — "to select multiple notes, tap additional notes
+     * after selecting the first one" — and is also the only way a multi-select
+     * is usable with one hand.
+     *
+     * FACT: "Selected resources are highlighted in green", which is the colour
+     * this app answers every selection in.
+     */
+    private fun homeTile(item: HomeItem, cols: Int): View {
+        val picked = item.id in homePicked
+        val current = item.id == homeCurrent
+        val tile = LinearLayout(act).apply {
+            orientation = LinearLayout.VERTICAL
+            background = GradientDrawable().apply {
+                setColor(if (picked) wash(t.green, 0.16f) else t.panel)
+                cornerRadius = t.rCard
+                setStroke(
+                    t.dp(1.5f),
+                    when {
+                        picked -> t.green
+                        current -> t.ink
+                        else -> t.line
+                    },
+                )
+            }
+            setPadding(t.dp(8f), t.dp(8f), t.dp(8f), t.dp(8f))
+            layoutParams = GridLayout.LayoutParams().apply {
+                width = t.dp(TILE_DP) - t.dp(10f)
+                setMargins(t.dp(5f), t.dp(5f), t.dp(5f), t.dp(5f))
+            }
+            setOnClickListener {
+                if (homePicked.isEmpty()) {
+                    if (item.folder) onHomeEnter(item.id) else onOpenWork(item.id)
+                } else {
+                    if (!homePicked.remove(item.id)) homePicked.add(item.id)
+                    rebuildHome()
+                }
+            }
+            /*
+             * FACT: "Tap and hold a note to select it… Tap and hold a selected
+             * note again to float it, then drag it to move. Drop it onto a
+             * folder to place the note inside."
+             *
+             * So the same gesture means two things depending on whether this
+             * tile is already picked, which sounds ambiguous and is not: the
+             * first hold picks, the second lifts, and lifting something you
+             * have not picked up is not a thing hands do either.
+             */
+            setOnLongClickListener {
+                if (item.id in homePicked) {
+                    startDragAndDrop(
+                        null, View.DragShadowBuilder(this), null,
+                        View.DRAG_FLAG_OPAQUE,
+                    )
+                } else {
+                    homePicked.add(item.id)
+                    rebuildHome()
+                }
+                true
+            }
+            /* a folder is a place to drop things; a note is not */
+            if (item.folder) {
+                setOnDragListener { v, ev ->
+                    when (ev.action) {
+                        android.view.DragEvent.ACTION_DRAG_ENTERED -> {
+                            v.alpha = 0.6f; true
+                        }
+                        android.view.DragEvent.ACTION_DRAG_EXITED,
+                        android.view.DragEvent.ACTION_DRAG_ENDED,
+                        -> { v.alpha = 1f; true }
+                        android.view.DragEvent.ACTION_DROP -> {
+                            v.alpha = 1f
+                            val moving = homePicked.toList()
+                            homePicked.clear()
+                            onHomeMove(moving, item.id)
+                            true
+                        }
+                        else -> true
+                    }
+                }
+            }
+        }
+
+        val art = FrameLayout(act).apply {
+            background = GradientDrawable().apply {
+                setColor(t.panel2); cornerRadius = t.dpf(10f)
+            }
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, t.dp(84f),
+            )
+        }
+        if (item.folder) {
+            /* FACT: "Thumbnails of the four most recently modified notes are
+               displayed" — which is what makes a folder recognisable at all,
+               since its name is the only other thing on it. */
+            val quad = GridLayout(act).apply {
+                columnCount = 2
+                setPadding(t.dp(5f), t.dp(5f), t.dp(5f), t.dp(5f))
+            }
+            for (k in 0 until 4) {
+                quad.addView(
+                    ImageView(act).apply {
+                        layoutParams = GridLayout.LayoutParams().apply {
+                            width = t.dp(TILE_DP / 2) - t.dp(20f)
+                            height = t.dp(33f)
+                            setMargins(t.dp(1f), t.dp(1f), t.dp(1f), t.dp(1f))
+                        }
+                        scaleType = ImageView.ScaleType.CENTER_CROP
+                        background = GradientDrawable().apply {
+                            setColor(t.panel3); cornerRadius = t.dpf(5f)
+                        }
+                        item.thumbs.getOrNull(k)?.let { path ->
+                            decodeThumb(path)?.let { setImageBitmap(it) }
+                        }
+                    },
+                )
+            }
+            art.addView(quad)
+        } else {
+            art.addView(
+                ImageView(act).apply {
+                    layoutParams = FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT,
+                    )
+                    scaleType = ImageView.ScaleType.CENTER_CROP
+                    item.thumbs.firstOrNull()?.let { path ->
+                        decodeThumb(path)?.let { setImageBitmap(it) }
+                    }
+                },
+            )
+        }
+        tile.addView(art)
+
+        tile.addView(
+            TextView(act).apply {
+                text = item.name
+                setTextColor(t.ink)
+                textSize = 13f
+                isSingleLine = true
+                ellipsize = android.text.TextUtils.TruncateAt.END
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+                setPadding(t.dp(2f), t.dp(6f), t.dp(2f), 0)
+            },
+        )
+        tile.addView(
+            TextView(act).apply {
+                text = item.subtitle + if (current) "  ·  " + act.getString(R.string.gallery_open_now) else ""
+                setTextColor(t.dim)
+                textSize = 10.5f
+                isSingleLine = true
+                setPadding(t.dp(2f), t.dp(1f), t.dp(2f), 0)
+            },
+        )
+        return tile
+    }
+
+    /** A thumbnail is a convenience: one that will not decode simply is not shown. */
+    private fun decodeThumb(path: String): android.graphics.Bitmap? = try {
+        android.graphics.BitmapFactory.decodeFile(path)
+    } catch (e: Throwable) {
+        null
+    }
+
+
+    // ---- asking for one line of text ---------------------------------------
+
+    /**
+     * A NAME, TYPED, WITHOUT LEAVING THE SCREEN.
+     *
+     * Renaming a note is the one place the app has to take free text, and a
+     * system dialog would be the only piece of another app's furniture in the
+     * whole interface. This is the same card everything else is made of, with
+     * a field in it.
+     */
+    private fun buildAskCard() {
+        askCard.orientation = LinearLayout.VERTICAL
+        askCard.background = GradientDrawable().apply {
+            setColor(t.panel)
+            cornerRadius = t.rSheet
+            setStroke(t.dp(1f), t.line)
+        }
+        askCard.elevation = t.dpf(18f)
+        askCard.setPadding(t.dp(16f), t.dp(14f), t.dp(16f), t.dp(12f))
+        askCard.visibility = View.GONE
+        askCard.isClickable = true
+
+        askTitle = TextView(act).apply {
+            setTextColor(t.dim2)
+            textSize = 10.5f
+            letterSpacing = 0.08f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+        }
+        askCard.addView(askTitle)
+
+        askField = EditText(act).apply {
+            setTextColor(t.ink)
+            textSize = 15f
+            isSingleLine = true
+            background = GradientDrawable().apply {
+                setColor(t.panel2); cornerRadius = t.dpf(10f)
+            }
+            setPadding(t.dp(10f), t.dp(8f), t.dp(10f), t.dp(8f))
+            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_DONE
+            setOnEditorActionListener { _, _, _ -> commitAsk(); true }
+            layoutParams = LinearLayout.LayoutParams(
+                t.dp(240f), ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { topMargin = t.dp(8f) }
+        }
+        askCard.addView(askField)
+
+        val row = LinearLayout(act).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.END
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { topMargin = t.dp(10f) }
+        }
+        row.addView(
+            TextButton(act, t, filled = true, small = true).apply {
+                text = act.getString(R.string.cancel)
+                setOnClickListener { closeAsk() }
+            },
+        )
+        row.addView(
+            TextButton(act, t, small = true).apply {
+                text = act.getString(R.string.done)
+                on = true
+                setOnClickListener { commitAsk() }
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { marginStart = t.dp(6f) }
+            },
+        )
+        askCard.addView(row)
+        popover(askCard)
+    }
+
+    private fun commitAsk() {
+        val go = askDone
+        val text = askField.text.toString()
+        closeAsk()
+        go?.invoke(text)
+    }
+
+    private fun closeAsk() {
+        askDone = null
+        askCard.visibility = View.GONE
+        askField.clearFocus()
+        (act.getSystemService(android.content.Context.INPUT_METHOD_SERVICE)
+            as? android.view.inputmethod.InputMethodManager)
+            ?.hideSoftInputFromWindow(askField.windowToken, 0)
+    }
+
+    /** Ask for one line, with [initial] already in the box and selected. */
+    fun askText(title: String, initial: String, onDone: (String) -> Unit) {
+        askDone = onDone
+        askTitle.text = title
+        askField.setText(initial)
+        askField.setSelection(0, initial.length)
+        askCard.visibility = View.VISIBLE
+        askField.requestFocus()
+        (act.getSystemService(android.content.Context.INPUT_METHOD_SERVICE)
+            as? android.view.inputmethod.InputMethodManager)
+            ?.showSoftInput(askField, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
+    }
+
+    fun toast(msg: String) = toastCard.show(msg)
+
+    /**
+     * Name the action just performed, unless the user has asked not to be
+     * told.
+     *
+     * Re-shown rather than queued: actions arrive faster than anyone reads,
+     * and five taps of undo should leave "Undo" sitting there rather than
+     * spelling it out five times over.
+     */
+    fun announce(text: String) {
+        if (!optActionPill) return
+        actionPill.removeCallbacks(pillHide)
+        actionPill.text = text
+        actionPill.visibility = View.VISIBLE
+        actionPill.animate().cancel()
+        actionPill.translationY = 0f
+        actionPill.alpha = 1f
+        actionPill.postDelayed(pillHide, ACTION_PILL_MS)
+    }
+
+    /** `UI.refresh` — every button re-derives its own state from the model. */
+    fun refresh() {
+        if (!built) return
+        for ((which, b) in toolButtons) b.on = which == tool
+        showLiveHalves()
+        for ((name, tile) in brushTiles) tile.solid = name == brush
+        /*
+         * THE RAIL BUTTON IS THE BRUSH YOU ARE HOLDING.
+         *
+         * It showed a generic bristle, which told you where the brush popover
+         * was and nothing about what the next stroke would look like — and now
+         * that a swipe changes the brush without opening anything, "which one
+         * am I on" is a question the button has to answer by itself. The
+         * lookup is a string, so it only runs when the answer changed.
+         */
+        if (brushIconShown != brush) {
+            icons["brushType"]?.icon("brush_$brush")
+            brushIconShown = brush
+        }
+        (colorDot.background as? GradientDrawable ?: GradientDrawable()).let { d ->
+            d.shape = GradientDrawable.OVAL
+            d.setColor(inkColor)
+            /* box-shadow: 0 0 0 1px --line, inset 0 0 0 3px --panel */
+            d.setStroke(t.dp(3f), t.panel)
+            colorDot.background = d
+        }
+        sizeVal.text = "${sizeMm.toInt()}mm"
+        opacityVal.text = "${(opacity * 100).toInt()}%"
+        sizePopVal.text = "${sizeMm.toInt()}mm"
+        opacityPopVal.text = "${(opacity * 100).toInt()}%"
+        for ((bar, get) in sliders) bar.value = get()
+        val st = staging
+        stageBar.visibility = if (st != null) View.VISIBLE else View.GONE
+        if (st != null) {
+            stageLabel.text = st.label
+            stageSlider.value = st.value
+            stageValue.text = st.readout
+            stageRow2.visibility = if (st.secondLabel != null) View.VISIBLE else View.GONE
+            if (st.secondLabel != null) {
+                stageLabel2.text = st.secondLabel
+                stageSlider2.value = st.value2
+                stageValue2.text = st.readout2
+            }
+            primKinds.visibility = if (st.kind != null) View.VISIBLE else View.GONE
+            for ((k, b) in primButtons) b.on = k == st.kind
+        }
+
+        stampBar.visibility = if (stamping) View.VISIBLE else View.GONE
+        refreshMaterialPage()
+        /* one joystick at a time: the panel is the width of one control, and
+           two stacked would put the lower one off the bottom of a phone */
+        joy2d.visibility = if (joy3d) View.GONE else View.VISIBLE
+        joyPad.visibility = if (joy3d) View.VISIBLE else View.GONE
+        joyStrip.visibility = if (joy3d) View.VISIBLE else View.GONE
+        joyModeRow.visibility = if (joy3d) View.VISIBLE else View.GONE
+        joyLockButton.visibility = if (joy3d) View.GONE else View.VISIBLE
+        joyLockButton.on = joyLocked
+        joy2d.locked = joyLocked
+        joySwitch.text = act.getString(if (joy3d) R.string.joy_2d else R.string.joy_3d)
+        /* the guide bar and the staging bar are mutually exclusive: you are
+           either editing a live guide or building a new one */
+        guideBar.visibility = if (guideActive && st == null && !stamping) View.VISIBLE else View.GONE
+        guideNameLabel.text = guideName
+        guideOpacityBar.value = guideOpacity
+        ctxHint.text = act.getString(
+            if (guideActive) R.string.hint_guide_active else R.string.hint_draw_a_stroke,
+        )
+        ctxHint.visibility =
+            if (guideActive || st != null || stamping) View.GONE else View.VISIBLE
+        selBar.visibility = if (selectionCount > 0 && tool != Tool.LIQUIFY) {
+            View.VISIBLE
+        } else {
+            View.GONE
+        }
+        /* the strip only exists while the tool does, and it always has a
+           selection to work on — that is what it is for */
+        for ((m, b) in joyModes) b.on = m == joyMode
+        joyTarget.text = joyLabel
+        /* the gizmo needs something to transform, and liquify owns the
+           selection while it is running */
+        joyPanel.visibility =
+            if ((selectionCount > 0 || guideSelected) && tool != Tool.LIQUIFY) {
+                View.VISIBLE
+            } else {
+                View.GONE
+            }
+        liquifyPanel.visibility =
+            if (tool == Tool.LIQUIFY && selectionCount > 0) View.VISIBLE else View.GONE
+        /*
+         * The eraser's settings, whenever an eraser is the tool — and never at
+         * the same time as liquify's strip, which is in the same place and
+         * belongs to a tool you cannot be holding at the same time.
+         */
+        val erasing = tool == Tool.ERASE || tool == Tool.VACUUM
+        erasePanel.visibility = if (erasing) View.VISIBLE else View.GONE
+        if (erasing) {
+            for ((k, b) in eraseModes) b.on = k == tool
+            eraseSize.text = eraseMm.toInt().toString()
+            /* dim, not gone: vacuum takes whole curves and has no radius, and
+               a control that vanishes reads as something having broken */
+            val sized = tool == Tool.ERASE
+            eraseSize.alpha = if (sized) 1f else 0.3f
+            eraseSizeIcon.alpha = if (sized) 1f else 0.3f
+            eraseSize.isEnabled = sized
+            eraseSizeIcon.isEnabled = sized
+            eraseGuard.on = optIsolate
+        }
+        for ((k, b) in lqModes) b.on = k == lqMode
+        lqSize.text = lqSizeV.toInt().toString()
+        lqRange.text = lqRangeV.toInt().toString()
+        lqStrength.text = lqStrengthV.toInt().toString()
+        icons["pressure"]?.on = pressureOn
+        for ((k, b) in pressButtons) b.on = k == pressureTarget
+        /* with pressure off there is nothing for the target to target */
+        pressRow.alpha = if (pressureOn) 1f else 0.3f
+        for (b in pressButtons.values) b.isEnabled = pressureOn
+        icons["mirror"]?.on = symmetryOn
+        icons["stage"]?.on =
+            if (compact) isSheetOpen(stagePanel) else stagePanel.visibility == View.VISIBLE
+
+        sceneOptions.setOn("grid", envGrid)
+        sceneOptions.setOn("axis", envAxis)
+        sceneOptions.setOn("fog", envFog)
+        sceneOptions.setOn("shade", envShaded)
+        sceneOptions.setOn("render", envRender)
+        sceneOptions.setOn("shadow", envShadow)
+        /* filled only when the whole rendered look is on: half of it is a
+           state the Scene tab can put you in, not one this button claims */
+        renderMode.on = envShaded && envRender
+        /*
+         * FACT: shadows and effects show accurately only in rendering mode. A
+         * switch you can throw that then does nothing is worse than one that
+         * says it is unavailable, so outside render mode they grey out rather
+         * than lying.
+         */
+        sceneOptions.setUsable("shadow", envRender)
+        fxOptions.setOn("dof", envDof)
+        fxOptions.setOn("grain", envGrain)
+        fxOptions.setOn("pixel", envPixel)
+        for (k in listOf("dof", "grain", "pixel")) fxOptions.setUsable(k, envRender)
+
+        toonButton.on = envToon
+        /* toon bands a SHADED material; with shading off there is nothing to band */
+        toonButton.isEnabled = envShaded
+
+        intensityVal.text = "${(lightIntensity * 100).toInt()}%"
+        ambientVal.text = "${(lightAmbient * 100).toInt()}%"
+        fstopVal.text = "f/" + ((Math.round(fstop * 10.0)) / 10.0).toString()
+        grainVal.text = "${grainLevel.toInt()}%"
+        pixelVal.text = "${pixelSize.toInt()}px"
+        inputGrid.setOn("finger", optFinger)
+        inputGrid.setOn("autoguide", optAutoGuide)
+        inputGrid.setOn("isolate", optIsolate)
+        inputGrid.setOn("clamp", optClamp)
+        inputGrid.setOn("holdshape", optHoldShape)
+        inputGrid.setOn("stable", optStable)
+        viewGrid.setOn("proj", optOrtho)
+        viewGrid.setOn("hideui", optHideUi)
+        viewGrid.setOn("diag", optDiag)
+        viewGrid.setOn("hovernib", optHoverNib)
+        viewGrid.setOn("actionpill", optActionPill)
+        viewGrid.setOn("orbitshow", optOrbitShow)
+        viewGrid.setOn("orbitpin", optOrbitPin)
+        /*
+         * FACT: "Tap and hold on a curve or grid to pin the orbit point… The
+         * orbit point also functions as a focus point for Depth of Field."
+         *
+         * Which is why it is worth being able to SEE: with depth of field on,
+         * the sharp plane of the picture is wherever this is, and an invisible
+         * control that decides what is in focus is a control you tune by
+         * guesswork.
+         */
+        orbitMark.visibility = if (optOrbitShow && !optHideUi) View.VISIBLE else View.GONE
+        orbitMark.pinned = optOrbitPin
+        stableBar.value = stableAmt
+        stableValue.text = (stableAmt * 100).toInt().toString()
+        radialBar.value = radialAmt.toDouble()
+        /* 1 reads "Off": one copy of a stroke is no symmetry at all, and a
+           control that says 1 invites you to wonder what it is doing */
+        radialValue.text =
+            if (radialAmt <= 1) act.getString(R.string.radial_off) else radialAmt.toString()
+        focalBar.value = focalMm
+        focalValue.text = "${focalMm.toInt()}mm"
+        saveState.text = saveText
+        saveDot.background = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(
+                when (saveDotState) {
+                    1 -> t.accent
+                    2 -> t.red
+                    else -> t.green
+                },
+            )
+        }
+
+        if (::guideSwatch.isInitialized) swatch(guideSwatch, guideColor)
+        swatch(bgSwatch, backgroundColor)
+        swatch(lightSwatch, lightColor)
+
+        /* don't fight the keyboard: only rewrite the field when it is not
+           the thing being typed into */
+        val shown = cardColor()
+        val shownRgba = Rgba(
+            Color.red(shown) / 255.0,
+            Color.green(shown) / 255.0,
+            Color.blue(shown) / 255.0,
+        )
+        if (!hexField.hasFocus()) hexField.setText(ColorSpace.toHex(shownRgba))
+        colorWheel.setColor(shownRgba)
+        cardTitle.text = act.getString(
+            when (colorTarget) {
+                ColorTarget.INK -> R.string.colour_ink
+                ColorTarget.BACKGROUND -> R.string.colour_background
+                ColorTarget.LIGHT -> R.string.colour_light
+                ColorTarget.GUIDE -> R.string.colour_guide
+            },
+        )
+        /* the sampler picks ink off the sketch; there is nothing on screen to
+           sample a background or a light from */
+        eyedropButton.visibility =
+            if (colorTarget == ColorTarget.INK) View.VISIBLE else View.GONE
+        icons["brushType"]?.on = brushGrid.visibility == View.VISIBLE
+        icons["fingerpen"]?.on = optFinger
+    }
+
+    /** `input[type=color]` — a circular well with a --dim ring around it. */
+    private fun swatch(v: View, argb: Int) {
+        v.background = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(argb)
+            setStroke(t.dp(2f), t.dim)
+        }
+    }
+
+    init {
+        buildTopLeft()
+        buildViewInfo()
+        buildToolPill()
+        buildBrushRail()
+        buildUndoPill()
+        buildCtxBar()
+        buildSelBar()
+        buildKeypad()
+        buildDiag()
+        buildWalk()
+        buildJoyPanel()
+        buildLiquifyPanel()
+        buildErasePanel()
+        buildStagePanel()
+        buildDock()
+        buildBrushGrid()
+        buildSlidePop()
+        buildColorCard()
+        buildSysMenu()
+        buildMirrorBar()
+        buildQuickMenu()
+        buildAskCard()
+        buildGallery()
+        place()
+        built = true
+        applyMode()
+        refresh()
+    }
+
+    companion object {
+        /** Long enough to read two words, short enough not to sit there. */
+        const val ACTION_PILL_MS = 1100L
+
+        /** How far a swipe travels per step. A thumb's comfortable nudge. */
+        const val SWIPE_STEP_DP = 26f
+
+        /** A step of brightness: twenty from black to white, so a nudge shows. */
+        const val VALUE_STEP = 0.05f
+
+        /**
+         * How far a drag on the dot travels to cross the whole range.
+         *
+         * A thumb's comfortable reach, not the screen: the gesture is for
+         * "a bit lighter than that" while the other hand holds the pen, and
+         * it has to be usable without moving your arm.
+         */
+        const val SV_DRAG_FULL_DP = 150f
+
+        /** Dark, but still a colour. */
+        const val VALUE_FLOOR = 0.06f
+
+        /** The order a swipe walks, which is the order the grid shows. */
+        val BRUSH_ORDER = listOf(
+            "pen", "sketch", "taper", "rectangle", "cube", "flat", "wide", "glow",
+        )
+
+        /**
+         * `data-tip` for the action buttons, in the web build's own words.
+         * Keyed by icon name, which is how [ico] identifies them.
+         */
+        /** The colour card's pages, and which pattern slider a row is. */
+        const val PAGE_WHEEL = 0
+        const val PAGE_PALETTE = 1
+        const val PAGE_MATERIAL = 2
+        const val PAT_INTENSITY = 0
+        const val PAT_ANGLE = 1
+        const val PAT_CONTRAST = 2
+
+        /** Which of the two sidebar views is showing. */
+        const val HOME_RECENTS = 0
+        const val HOME_FOLDERS = 1
+
+        /** How wide one tile is, including its margins. */
+        const val TILE_DP = 168f
+
+        private val TIPS = mapOf(
+            "grid" to R.string.tip_home,
+            "export" to R.string.tip_export,
+            "menu" to R.string.tip_menu,
+            "help" to R.string.tip_help,
+            "undo" to R.string.tip_undo,
+            "redo" to R.string.tip_redo,
+            "mirror" to R.string.tip_mirror,
+            "stage" to R.string.tip_stage,
+            "dup" to R.string.tip_dup,
+            "dupmir" to R.string.tip_dupmir,
+            "trash" to R.string.tip_delete,
+            "eye" to R.string.tip_guide_save,
+            "close" to R.string.tip_guide_close,
+            "brush" to R.string.tip_pressure,
+        )
+
+        private val TOOL_TIPS = mapOf(
+            Tool.DRAW to R.string.tip_draw,
+            Tool.SHAPE to R.string.tip_shape,
+            Tool.SELECT to R.string.tip_select,
+            Tool.LASSO to R.string.tip_lasso,
+            Tool.SMOOTH to R.string.tip_smooth,
+            Tool.FILL to R.string.tip_fill,
+            Tool.ERASE to R.string.tip_erase,
+            Tool.VACUUM to R.string.tip_vacuum,
+            Tool.GUIDE to R.string.tip_guide,
+            Tool.FLATGUIDE to R.string.tip_flatguide,
+            Tool.BEND to R.string.tip_bend,
+            Tool.LOFT to R.string.tip_loft,
+            Tool.PRIM to R.string.tip_prim,
+            Tool.LIQUIFY to R.string.tip_liquify,
+            Tool.INJECT to R.string.tip_inject,
+        )
+
+        /**
+         * How many colours a group of your own holds — one row at the same
+         * 19dp as the built-in palettes, so every group lines up and the card
+         * does not grow sideways.
+         */
+        const val FAVOURITE_SLOTS = 8
+
+        /** What each cross-section is called, and what it is for. */
+        val BRUSH_NAMES = mapOf(
+            "pen" to R.string.brush_pen,
+            "sketch" to R.string.brush_sketch,
+            "taper" to R.string.brush_taper,
+            "rectangle" to R.string.brush_rectangle,
+            "cube" to R.string.brush_cube,
+            "flat" to R.string.brush_flat,
+            "wide" to R.string.brush_wide,
+            "glow" to R.string.brush_glow,
+        )
+
+        /** The rail's swatches. Index 0 is the default near-black ink. */
+        val PALETTE = intArrayOf(
+            0xFF1B1C21.toInt(), 0xFFFAFAFA.toInt(), 0xFF8C8C96.toInt(), 0xFFF2545B.toInt(),
+            0xFFFF8A3D.toInt(), 0xFFF2C94C.toInt(), 0xFF4CC38A.toInt(), 0xFF2D8F6F.toInt(),
+            0xFF5B9DFF.toInt(), 0xFF3B5BDB.toInt(), 0xFF8B5CF6.toInt(), 0xFFD6409F.toInt(),
+            0xFF8B5E34.toInt(), 0xFFC9A227.toInt(), 0xFF4A5568.toInt(),
+        )
+
+        /**
+         * The palettes that ship with the app, grouped because a palette is a
+         * set that goes together — the greys belong with the greys, and a flat
+         * strip of forty swatches is a strip you have to hunt through.
+         */
+        val BUILT_IN_PALETTES: Map<String, IntArray> = linkedMapOf(
+            "INK" to PALETTE,
+            "GREYS" to intArrayOf(
+                0xFF1B1C21.toInt(), 0xFF3A3C45.toInt(), 0xFF5F606C.toInt(),
+                0xFF8A8B96.toInt(), 0xFFB6B7C0.toInt(), 0xFFD8D9E0.toInt(),
+                0xFFEFEFF4.toInt(), 0xFFFFFFFF.toInt(),
+            ),
+            "WARM" to intArrayOf(
+                0xFF7C2D12.toInt(), 0xFFB45309.toInt(), 0xFFE87326.toInt(),
+                0xFFF59E0B.toInt(), 0xFFFCD34D.toInt(), 0xFFC2410C.toInt(),
+                0xFF9A3412.toInt(), 0xFFFFE8B0.toInt(),
+            ),
+            "COOL" to intArrayOf(
+                0xFF0C2A4D.toInt(), 0xFF1D4ED8.toInt(), 0xFF5B9DFF.toInt(),
+                0xFF0E7490.toInt(), 0xFF14B8A6.toInt(), 0xFF2F8F66.toInt(),
+                0xFF4CC38A.toInt(), 0xFFBFE3FF.toInt(),
+            ),
+        )
+    }
+}

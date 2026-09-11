@@ -1,7 +1,27 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- No ActionBar: the surface is the whole app. -->
-    <style name="Theme.Anvil" parent="android:Theme.Material.NoActionBar">
-        <item name="android:windowBackground">@android:color/black</item>
+    <!--
+      No ActionBar: the surface is the whole app.
+
+      The window background is Plume's page colour rather than black, so the split
+      second before the first GL frame lands is the same paper the sketch will
+      be drawn on. values-night/ carries the dark half, which is `body.dark`.
+    -->
+    <style name="Theme.Anvil" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/bg</item>
+        <item name="android:colorForeground">@color/ink</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <!--
+          DRAW INTO THE CUTOUT. Without this the system letterboxes the window
+          away from a notch or a punch-hole on every edge it touches, which on
+          a tablet held in landscape is a black strip down one side and on a
+          phone a black band across the top - the whole screen is the sketch,
+          so the window has to be the whole screen.
+          The chrome keeps clear of the cutout itself, by inset, so nothing
+          lands underneath it.
+        -->
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
     </style>
 </resources>

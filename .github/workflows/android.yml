@@ -6,7 +6,11 @@ name: Build
 # reason the web build deploys itself to Pages on every push.
 on:
   push:
-    branches: [main]
+    # Work branches build too. There is no Android SDK on a development
+    # machine here, so CI is the ONLY place :app is compiled at all — limiting
+    # the APK job to main meant every change to the Android half went unbuilt
+    # until it merged, which is exactly backwards.
+    branches: [main, 'claude/**']
   pull_request:
   workflow_dispatch:
 
@@ -25,6 +29,11 @@ jobs:
       # whether or not you want it, so without this the job that is meant to
       # prove core needs no SDK quietly configures the Android module too.
       - run: ./gradlew :core:test -PcoreOnly --no-daemon
+      # The APK job proves :app compiles, which is not the same as
+      # proving it launches: a control read before its builder has made
+      # it is a runtime fault, and it kept the app from opening at all
+      # for four commits. This is the check that sees it.
+      - run: python3 tools/initorder.py
 
   apk:
     name: Debug APK
@@ -37,9 +46,123 @@ jobs:
           java-version: '17'
       - uses: android-actions/setup-android@v3
       - uses: gradle/actions/setup-gradle@v4
+      # THE CHECK THAT ACTUALLY STARTS THE APP.
+      #
+      # "CI proves the code compiles. It never launches the app" was true of
+      # every job here, and it is how a null field and a staging bar that
+      # never appeared both shipped. Robolectric runs the real framework and
+      # the real merged resources on the JVM, so the activity is constructed
+      # for real and its view tree can be asked whether the app came up on
+      # Home with the canvas put away. No emulator, no device, no KVM.
+      - run: ./gradlew :app:testDebugUnitTest --no-daemon
       - run: ./gradlew :app:assembleDebug --no-daemon
       - uses: actions/upload-artifact@v4
         with:
           name: anvil-debug-apk
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # THE JOB THAT LOOKS AT THE APP.
+  #
+  # Everything else stops at the edge of the GPU: core is pure maths and
+  # Robolectric never draws a frame, so anything only true on screen — a guide
+  # veiling the ink painted on it, an orange line that may not be orange — has
+  # been checked by a person installing the APK and looking, and by nothing
+  # else. This runs a real emulator with a software GL driver, drives the app
+  # to a few states and photographs each one.
+  #
+  # The pictures go up as an artifact, which is the point: they can be fetched
+  # and looked at afterwards, so a claim about rendering is answered with the
+  # frame rather than with an argument about the code.
+  #
+  # It needs KVM, which a GitHub runner has and a development container here
+  # does not — which is the whole reason this lives in CI and not in a script.
+  # ---------------------------------------------------------------------------
+  screenshots:
+    name: Screenshots (emulator)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+      # the runner ships KVM but not permission to use it
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Run the app and photograph it
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          target: aosp_atd
+          arch: x86_64
+          profile: pixel_c
+          # swiftshader gives GL ES 3, which the manifest requires
+          emulator-options: >-
+            -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+            -camera-back none -no-snapshot
+          disable-animations: true
+          script: |
+            adb logcat -c
+            # A REAL LAUNCH, THE WAY A PERSON DOES IT.
+            # The instrumented test starts the activity itself, which proves
+            # the activity works and not that the app opens: a launcher start
+            # goes through the manifest, the theme and the splash, and
+            # `screencap` captures the composited screen — views included,
+            # which UiAutomator's own screenshot does not manage here.
+            ./gradlew :app:installDebug --no-daemon
+            adb shell am start -W -n art.plume.anvil/.MainActivity
+            adb shell sleep 8
+            mkdir -p shots
+            adb exec-out screencap -p > shots/00-launched-from-launcher.png
+            adb shell dumpsys activity activities | grep -E "mResumedActivity|topResumedActivity" > shots/resumed.txt || true
+            # THE VIEW TREE, to tell a black app from a black photograph.
+            # Two capture APIs have both come back with only the GL layer on
+            # this emulator, so a picture without the chrome in it does not
+            # prove the chrome is not there. The dump does.
+            adb exec-out uiautomator dump /sdcard/win.xml > /dev/null 2>&1 || true
+            adb pull /sdcard/win.xml shots/window-launched.xml || true
+            adb shell input tap 1280 900
+            adb shell sleep 3
+            adb exec-out screencap -p > shots/00b-after-tap.png
+            adb exec-out uiautomator dump /sdcard/win2.xml > /dev/null 2>&1 || true
+            adb pull /sdcard/win2.xml shots/window-after-tap.xml || true
+            adb logcat -d > shots/launch-logcat.txt
+            adb logcat -c
+            # KEEP THE APK INSTALLED. Gradle uninstalls it when the tests
+            # finish, and the uninstall deletes the pictures before anything
+            # can fetch them — which reads as adb failing to find a path
+            # rather than as a package that is no longer there
+            ./gradlew :app:connectedDebugAndroidTest --no-daemon -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true
+            mkdir -p shots
+            # run-as, because the files are in the app's own data directory
+            # ONE LINE: this action feeds the script to `sh -c` a line at a
+            # time, so a loop written over four of them is four broken commands
+            for f in $(adb shell run-as art.plume.anvil ls files/shots | tr -d '\r'); do adb exec-out run-as art.plume.anvil cat "files/shots/$f" > "shots/$f"; done
+            ls -la shots
+            # AND AGAIN, WITH WORK ALREADY SAVED.
+            # The first launch is a fresh install with an empty shelf. The
+            # report is from a device that has been drawn on, and the app
+            # restores an autosave and a library before it shows anything —
+            # so the second launch is the one that walks that path.
+            adb shell am force-stop art.plume.anvil
+            adb shell am start -W -n art.plume.anvil/.MainActivity
+            adb shell sleep 8
+            adb exec-out screencap -p > shots/07-relaunch-with-work.png
+            adb exec-out uiautomator dump /sdcard/win3.xml > /dev/null 2>&1 || true
+            adb pull /sdcard/win3.xml shots/window-relaunch.xml || true
+            adb shell dumpsys activity activities | grep -E "mResumedActivity" > shots/resumed-relaunch.txt || true
+            adb logcat -d > shots/logcat.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: anvil-screenshots
+          path: shots/**
+          if-no-files-found: warn

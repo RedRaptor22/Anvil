@@ -1,0 +1,13 @@
+<!-- The eight brush-type glyphs from #brushGrid in plume.html. They are
+     drawn in a 28x20 box rather than the 24-square the rail icons use,
+     and each carries its own stroke width and opacity. -->
+<svg>
+  <symbol id="b-pen" viewBox="0 0 28 20"><path d="M3 10h22" stroke-width="6" stroke-linecap="round"/></symbol>
+  <symbol id="b-sketch" viewBox="0 0 28 20"><path d="M3 13.5c5-1.5 8 1 12-1s7-4.5 10-5.5" stroke-width="4.5" stroke-linecap="round" opacity=".5"/><path d="M4 15.5c5-1.5 8 1 12-1s6-4 9-5" stroke-width="1.6" stroke-linecap="round"/></symbol>
+  <symbol id="b-taper" viewBox="0 0 28 20"><path d="M2 10c7-5 17-5 24 0-7 5-17 5-24 0z" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="b-rectangle" viewBox="0 0 28 20"><path d="M3 5.5h22v9H3z"/></symbol>
+  <symbol id="b-cube" viewBox="0 0 28 20"><path d="M9 7.5 14 5l5 2.5v5L14 15l-5-2.5z"/><path d="M9 7.5 14 10l5-2.5M14 10v5"/></symbol>
+  <symbol id="b-flat" viewBox="0 0 28 20"><path d="M2 7.5h24v5H2z" fill="currentColor" stroke="none" opacity=".75"/></symbol>
+  <symbol id="b-wide" viewBox="0 0 28 20"><path d="M3 4h22v12H3z" fill="currentColor" stroke="none" opacity=".9"/></symbol>
+  <symbol id="b-glow" viewBox="0 0 28 20"><path d="M3 10h22" stroke-width="5" stroke-linecap="round" opacity=".35"/><path d="M3 10h22" stroke-width="1.5" stroke-linecap="round"/></symbol>
+</svg>

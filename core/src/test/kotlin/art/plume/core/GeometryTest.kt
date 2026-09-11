@@ -123,12 +123,12 @@ class GeometryTest {
     }
 
     @Test
-    fun `the wide brush holds its 2mm thickness at any size`() {
+    fun `the wide brush holds its 3mm thickness at any size`() {
         for (mm in listOf(20.0, 90.0, 300.0)) {
             val s = Stroke(brush = "wide", baseRadius = mm * MM * 0.5)
             assertTrue(
-                abs(StrokeGeometry.halfThick(s, s.baseRadius) - 1.0 * MM) < 1e-12,
-                "wide should stay 2mm thick at ${mm}mm, got ${StrokeGeometry.halfThick(s, s.baseRadius) / MM * 2}mm"
+                abs(StrokeGeometry.halfThick(s, s.baseRadius) - 1.5 * MM) < 1e-12,
+                "wide should stay 3mm thick at ${mm}mm, got ${StrokeGeometry.halfThick(s, s.baseRadius) / MM * 2}mm"
             )
         }
     }
